@@ -1,0 +1,8 @@
+chromadb>=1.5,<2
+FlashRank>=0.2,<1
+pypdf>=6,<7
+python-dotenv>=1,<2
+PyYAML>=6,<7
+rank-bm25>=0.2,<1
+requests>=2.32,<3
+

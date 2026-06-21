@@ -1,0 +1,18 @@
+llm:
+  model: gemma4:12b
+  temperature: 0.2
+  think: false
+
+embedding:
+  model: embeddinggemma:latest
+  similarity: cosine
+  normalize: true
+
+chunking:
+  chunk_size: 512
+  chunk_overlap: 80
+
+retrieval:
+  vector_top_k: 15
+  bm25_top_k: 15
+  final_top_k: 6
