@@ -120,11 +120,38 @@ class ProductSearchEngine:
         self.ranker = load_reranker()
         return time.perf_counter() - started
 
-    def rank(self, query: str, candidates: list[dict]) -> dict:
+    def rank(
+        self,
+        query: str,
+        candidates: list[dict],
+        query_plan: dict | None = None,
+    ) -> dict:
         load_seconds = self.ensure_reranker()
+        ranking_query = query
+        if query_plan is not None:
+            context = []
+            keyword_query = query_plan.get("keyword_query")
+            if keyword_query and keyword_query.casefold() != query.casefold():
+                context.append(f"Search concepts: {keyword_query}")
+            inferred = query_plan.get("inferred_categories") or {}
+            category_hints = [
+                value
+                for value in (
+                    inferred.get("main_category"),
+                    inferred.get("subcategory"),
+                )
+                if value
+            ]
+            if category_hints:
+                context.append(
+                    "Possible catalog categories: "
+                    + ", ".join(dict.fromkeys(category_hints))
+                )
+            if context:
+                ranking_query = query + "\n" + "\n".join(context)
         started = time.perf_counter()
         results = rerank(
-            query,
+            ranking_query,
             candidates,
             self.ranker,
             RERANK_TOP_K,
@@ -143,7 +170,7 @@ class ProductSearchEngine:
         )
         candidates = retrieved["candidates"]
         ranked = (
-            self.rank(query, candidates)
+            self.rank(query, candidates, planned["query_plan"])
             if candidates
             else {"results": [], "load_seconds": 0.0, "seconds": 0.0}
         )

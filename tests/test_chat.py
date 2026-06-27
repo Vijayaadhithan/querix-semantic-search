@@ -139,6 +139,97 @@ def test_parse_query_plan_keeps_guessed_category_soft():
     }
 
 
+def test_functional_category_word_does_not_become_hard_filter():
+    plan = parse_query_plan(
+        """
+        {
+          "semantic_query": "vehicle for recreational driving on rough terrain",
+          "keyword_query": "off-road vehicle ATV",
+          "target_ad_type": "offer",
+          "filters": {
+            "main_category": "Personal & Home Services",
+            "subcategory": "Driving"
+          }
+        }
+        """,
+        "A vehicle for recreational driving on rough terrain.",
+    )
+    value_index = {
+        "main_category": {
+            "personal & home services": "Personal & Home Services"
+        },
+        "subcategory": {"driving": "Driving"},
+        "state": {},
+        "city": {},
+        "locality": {},
+        "rental_duration": {},
+        "_subcategory_main_category": {
+            "driving": "Personal & Home Services"
+        },
+        "_city_state": {},
+        "_locality_location": {},
+    }
+
+    enriched = enrich_query_plan(
+        "A vehicle for recreational driving on rough terrain.",
+        plan,
+        value_index,
+    )
+
+    assert enriched["filters"]["main_category"] is None
+    assert enriched["filters"]["subcategory"] is None
+    assert enriched["inferred_categories"]["main_category"] is None
+    assert enriched["inferred_categories"]["subcategory"] is None
+
+
+def test_unique_keyword_concept_becomes_soft_subcategory_hint():
+    plan = {
+        "semantic_query": "vehicle for rough terrain",
+        "keyword_query": "off-road vehicle, 4x4, SUV, ATV",
+        "target_ad_type": "offer",
+        "filters": {
+            "main_category": None,
+            "subcategory": None,
+            "state": None,
+            "city": None,
+            "locality": None,
+            "rental_duration": None,
+            "min_rental_fee": None,
+            "max_rental_fee": None,
+        },
+        "inferred_categories": {
+            "main_category": None,
+            "subcategory": None,
+        },
+        "fallback_reason": None,
+    }
+    value_index = {
+        "main_category": {"sports & toys": "Sports & Toys"},
+        "subcategory": {
+            "atv bike": "ATV Bike",
+            "quad bike": "Quad Bike",
+            "mountain bike": "Mountain Bike",
+        },
+        "state": {},
+        "city": {},
+        "locality": {},
+        "rental_duration": {},
+        "_subcategory_main_category": {"atv bike": "Sports & Toys"},
+        "_city_state": {},
+        "_locality_location": {},
+    }
+
+    enriched = enrich_query_plan(
+        "A vehicle for recreational driving on rough terrain.",
+        plan,
+        value_index,
+    )
+
+    assert enriched["filters"]["subcategory"] is None
+    assert enriched["inferred_categories"]["subcategory"] == "ATV Bike"
+    assert enriched["inferred_categories"]["main_category"] == "Sports & Toys"
+
+
 def test_enrich_query_plan_restores_exact_filters_and_keyword_intent():
     plan = {
         "semantic_query": "bachelor mansion",

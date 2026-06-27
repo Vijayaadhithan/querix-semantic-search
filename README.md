@@ -284,6 +284,7 @@ Example queries:
 
 ```text
 something portable that can record a wedding clearly from far away in Chennai for a day
+A vehicle for recreational driving on rough terrain.
 Quad Bike for Hourly Rent in Bangalore
 someone looking for bikes in 1000 range per hour
 need a bike for a week within 800
@@ -319,10 +320,10 @@ cases and Mean Reciprocal Rank.
 Latest verified results:
 
 ```text
-47 unit tests passed
-8/8 query-plan cases passed
-4/4 end-to-end retrieval cases passed
-MRR = 0.750
+49 unit tests passed
+9/9 query-plan cases passed
+5/5 end-to-end retrieval cases passed
+MRR = 1.000
 ```
 
 Compile-check:

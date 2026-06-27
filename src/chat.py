@@ -123,7 +123,7 @@ def main():
                     end="",
                     flush=True,
                 )
-            ranked = engine.rank(question, merged)
+            ranked = engine.rank(question, merged, query_plan)
             reranked = ranked["results"]
             print(
                 " done "

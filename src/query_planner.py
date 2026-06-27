@@ -59,6 +59,18 @@ LOCATION_STOP_WORDS = {
     "weekly",
     "monthly",
 }
+GENERIC_CATEGORY_HINT_TOKENS = {
+    "equipment",
+    "hire",
+    "item",
+    "off",
+    "product",
+    "rent",
+    "rental",
+    "service",
+    "thing",
+    "vehicle",
+}
 OFFER_AD_TYPE = "1"
 WANTED_AD_TYPE = "2"
 DURATION_PATTERNS = (
@@ -194,6 +206,38 @@ def text_mentions_filter(text: str, value: str) -> bool:
     return bool(compact_value and compact_value in compact_text)
 
 
+def category_term_pattern(value: str) -> str:
+    normalized = normalize_filter_value(value)
+    escaped = re.escape(normalized)
+    if re.fullmatch(r"[a-z0-9_-]+", normalized):
+        if re.search(r"[^aeiou]y$", normalized):
+            return rf"{re.escape(normalized[:-1])}(?:y|ies)"
+        if normalized.endswith(("s", "x", "z", "ch", "sh")):
+            return rf"{escaped}(?:es)?"
+        return rf"{escaped}s?"
+    return escaped
+
+
+def is_explicit_category_request(query: str, value: str) -> bool:
+    normalized_query = normalize_filter_value(query)
+    term = category_term_pattern(value)
+    article = r"(?:a|an|the|some)?\s*"
+    request = (
+        r"(?:need|want|require|rent|hire|find|show\s+me|"
+        r"looking\s+for|searching\s+for)"
+    )
+    patterns = (
+        rf"^{article}{term}(?!\w)",
+        rf"\b{request}\s+{article}{term}(?!\w)",
+        rf"\b(?:wanted|request)\s+ads?\s+for\s+{article}{term}(?!\w)",
+        rf"\b(?:rental|hire)\s+{term}(?!\w)",
+        rf"(?<!\w){term}\s+(?:for\s+(?:rent|hire)|rental|"
+        rf"in|near|at|under|below|within|between|per\s+hour|"
+        rf"per\s+day|per\s+week|per\s+month)\b",
+    )
+    return any(re.search(pattern, normalized_query) for pattern in patterns)
+
+
 def parse_query_plan(content: str, original_query: str) -> dict:
     parsed = json.loads(content)
     if not isinstance(parsed, dict):
@@ -218,7 +262,10 @@ def parse_query_plan(content: str, original_query: str) -> dict:
     }
     for category_key in inferred_categories:
         value = filters[category_key]
-        if value is not None and not text_mentions_filter(original_query, value):
+        if value is not None and not is_explicit_category_request(
+            original_query,
+            value,
+        ):
             inferred_categories[category_key] = value
             filters[category_key] = None
     for parent_key in ("main_category", "state"):
@@ -364,6 +411,42 @@ def find_fuzzy_location(query: str, value_index: dict) -> tuple[str, str] | None
     return key, actual
 
 
+def infer_keyword_subcategory(keyword_query: str, values: dict) -> str | None:
+    query_tokens = {
+        token
+        for token in re.findall(r"[^\W_]+", normalize_filter_value(keyword_query))
+        if len(token) >= 3 and token not in GENERIC_CATEGORY_HINT_TOKENS
+    }
+    if not query_tokens:
+        return None
+
+    token_categories: dict[str, set[str]] = {}
+    for actual_value in values.values():
+        category_tokens = set(
+            re.findall(r"[^\W_]+", normalize_filter_value(actual_value))
+        )
+        for token in query_tokens.intersection(category_tokens):
+            token_categories.setdefault(token, set()).add(actual_value)
+
+    scores: dict[str, int] = {}
+    for categories in token_categories.values():
+        if len(categories) != 1:
+            continue
+        category = next(iter(categories))
+        scores[category] = scores.get(category, 0) + 1
+    if not scores:
+        return None
+
+    ranked = sorted(
+        scores.items(),
+        key=lambda item: (item[1], len(item[0])),
+        reverse=True,
+    )
+    if len(ranked) > 1 and ranked[0][1] == ranked[1][1]:
+        return None
+    return ranked[0][0]
+
+
 def find_catalog_alias(query: str, query_key: str, values: dict) -> str | None:
     normalized_query = normalize_filter_value(query)
     for alias, canonical in QUERY_FILTER_ALIASES.get(query_key, {}).items():
@@ -458,6 +541,19 @@ def enrich_query_plan(query: str, plan: dict, value_index: dict) -> dict:
         )
         if exact_value is None:
             exact_value = find_catalog_alias(query, key, value_index[key])
+        category_is_explicit = (
+            key not in inferred_categories
+            or exact_value is None
+            or is_explicit_category_request(query, exact_value)
+        )
+        if exact_value is not None and not category_is_explicit:
+            filters[key] = None
+            if len(normalize_filter_value(exact_value).split()) == 1:
+                inferred_categories["main_category"] = None
+                inferred_categories["subcategory"] = None
+            else:
+                inferred_categories[key] = exact_value
+            continue
         if exact_value is not None:
             filters[key] = exact_value
             if key in inferred_categories:
@@ -489,6 +585,15 @@ def enrich_query_plan(query: str, plan: dict, value_index: dict) -> dict:
         inferred_categories[key] = (
             canonical_catalog_value(key, requested, value_index[key])
             or requested
+        )
+
+    if (
+        filters.get("subcategory") is None
+        and inferred_categories.get("subcategory") is None
+    ):
+        inferred_categories["subcategory"] = infer_keyword_subcategory(
+            plan["keyword_query"],
+            value_index["subcategory"],
         )
 
     filters["rental_duration"] = extract_duration_filter(

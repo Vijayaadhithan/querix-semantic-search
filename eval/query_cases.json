@@ -30,6 +30,17 @@
     }
   },
   {
+    "name": "functional_off_road_vehicle",
+    "query": "A vehicle for recreational driving on rough terrain.",
+    "expected": {
+      "target_ad_type": "offer",
+      "filters.main_category": null,
+      "filters.subcategory": null,
+      "inferred_categories.main_category": "Sports & Toys",
+      "inferred_categories.subcategory": "ATV Bike"
+    }
+  },
+  {
     "name": "functional_service_location_typo",
     "query": "need a person to photograph a wedding in Coimbtore for a day",
     "expected": {
