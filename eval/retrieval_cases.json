@@ -1,0 +1,22 @@
+[
+  {
+    "name": "quad_bike_bangalore",
+    "query": "Quad Bike for Hourly Rent in Bangalore",
+    "relevant_ids": ["3507", "3508", "3375"]
+  },
+  {
+    "name": "functional_wedding_recording",
+    "query": "something portable that can record a wedding clearly from far away in Chennai for a day",
+    "relevant_ids": ["183462", "209355", "34309", "165161"]
+  },
+  {
+    "name": "wanted_hourly_bike",
+    "query": "someone looking for bikes in 1000 range per hour",
+    "relevant_ids": ["203895", "241835"]
+  },
+  {
+    "name": "weekly_bike_offer_has_no_match",
+    "query": "need a bike for a week within 800",
+    "expected_empty": true
+  }
+]

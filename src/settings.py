@@ -46,6 +46,15 @@ VECTOR_CANDIDATE_K = int(
 )
 VECTOR_TOP_K = int(CONFIG.get("retrieval", {}).get("vector_top_k", 15))
 BM25_TOP_K = int(CONFIG.get("retrieval", {}).get("bm25_top_k", 15))
+HYBRID_CANDIDATE_K = int(
+    CONFIG.get("retrieval", {}).get("hybrid_candidate_k", 60)
+)
+RRF_CONSTANT = int(CONFIG.get("retrieval", {}).get("rrf_constant", 60))
+VECTOR_WEIGHT = float(CONFIG.get("retrieval", {}).get("vector_weight", 1.0))
+BM25_WEIGHT = float(CONFIG.get("retrieval", {}).get("bm25_weight", 1.0))
+SOFT_CATEGORY_BOOST = float(
+    CONFIG.get("retrieval", {}).get("soft_category_boost", 0.005)
+)
 RERANK_TOP_K = int(CONFIG.get("retrieval", {}).get("final_top_k", 6))
 RERANK_MODEL = CONFIG.get("retrieval", {}).get(
     "reranker_model", "BAAI/bge-reranker-large"

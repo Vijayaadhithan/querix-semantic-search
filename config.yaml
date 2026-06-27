@@ -23,6 +23,11 @@ retrieval:
   vector_candidate_k: 100
   vector_top_k: 30
   bm25_top_k: 30
+  hybrid_candidate_k: 60
+  rrf_constant: 60
+  vector_weight: 1.0
+  bm25_weight: 1.0
+  soft_category_boost: 0.005
   final_top_k: 10
   reranker_model: BAAI/bge-reranker-large
   reranker_batch_size: 4

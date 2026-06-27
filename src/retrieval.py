@@ -4,10 +4,14 @@ from ollama_client import embed_text
 from mysql_store import fetch_product_types_by_ids
 from query_planner import OFFER_AD_TYPE, WANTED_AD_TYPE
 from settings import (
+    BM25_WEIGHT,
     CHROMA_DIR,
     COLLECTION_NAME,
     MYSQL_SEARCH_ID_COLUMN,
     MYSQL_TABLE,
+    RRF_CONSTANT,
+    SOFT_CATEGORY_BOOST,
+    VECTOR_WEIGHT,
 )
 
 
@@ -50,11 +54,16 @@ def vector_search(
     candidate_k=100,
     source_name=None,
     resolved_filters=None,
+    embedding_provider=None,
 ):
     if collection.count() <= 0:
         return []
 
-    query_embedding = embed_text(query)
+    query_embedding = (
+        embedding_provider.embed_text(query)
+        if embedding_provider is not None
+        else embed_text(query)
+    )
     results = collection.query(
         query_embeddings=[query_embedding],
         n_results=min(max(candidate_k, top_k), collection.count()),
@@ -121,14 +130,51 @@ def bm25_search(query, index, collection, resolved_filters, top_k=15):
     ]
 
 
-def merge_results(vector_results, bm25_results):
+def merge_results(
+    vector_results,
+    bm25_results,
+    inferred_categories=None,
+    rrf_constant=RRF_CONSTANT,
+    vector_weight=VECTOR_WEIGHT,
+    bm25_weight=BM25_WEIGHT,
+    soft_category_boost=SOFT_CATEGORY_BOOST,
+):
     merged = {}
-    for item in vector_results + bm25_results:
-        if item["id"] not in merged:
-            merged[item["id"]] = item
-        else:
-            merged[item["id"]]["source"] += "+" + item["source"]
-    return list(merged.values())
+    ranked_sources = (
+        ("vector", vector_results, vector_weight),
+        ("bm25", bm25_results, bm25_weight),
+    )
+    for source, results, weight in ranked_sources:
+        for rank, item in enumerate(results, start=1):
+            if item["id"] not in merged:
+                merged[item["id"]] = {
+                    **item,
+                    "source": source,
+                    "fusion_score": 0.0,
+                }
+            elif source not in merged[item["id"]]["source"].split("+"):
+                merged[item["id"]]["source"] += f"+{source}"
+            merged[item["id"]]["fusion_score"] += weight / (
+                rrf_constant + rank
+            )
+
+    inferred_categories = inferred_categories or {}
+    metadata_keys = {
+        "main_category": "main_category_name",
+        "subcategory": "subcategory_name",
+    }
+    for item in merged.values():
+        metadata = item.get("metadata") or {}
+        for category_key, metadata_key in metadata_keys.items():
+            expected = inferred_categories.get(category_key)
+            if expected is not None and metadata.get(metadata_key) == expected:
+                item["fusion_score"] += soft_category_boost
+
+    return sorted(
+        merged.values(),
+        key=lambda item: item["fusion_score"],
+        reverse=True,
+    )
 
 
 def extract_product_ids(candidates):

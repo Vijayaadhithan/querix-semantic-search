@@ -1,5 +1,6 @@
 import json
 import re
+from difflib import SequenceMatcher, get_close_matches
 
 from bm25_index import PersistentBM25Index
 from ollama_client import structured_chat
@@ -14,6 +15,50 @@ QUERY_FILTER_FIELDS = {
     "rental_duration": "rental_duration",
 }
 QUERY_FILTER_KEYS = (*QUERY_FILTER_FIELDS, "min_rental_fee", "max_rental_fee")
+QUERY_FILTER_ALIASES = {
+    "state": {
+        "orissa": "odisha",
+    },
+    "city": {
+        "bangalore": "bengaluru",
+        "bangaluru": "bengaluru",
+        "bombay": "mumbai",
+        "calcutta": "kolkata",
+        "cochin": "kochi",
+        "madras": "chennai",
+        "mysore": "mysuru",
+        "poona": "pune",
+        "trivandrum": "thiruvananthapuram",
+        "baroda": "vadodara",
+        "prayagraj": "allahabad",
+        "mangaluru": "mangalore",
+        "gurugram": "gurgaon",
+    },
+}
+FUZZY_MATCH_THRESHOLDS = {
+    "main_category": 0.90,
+    "subcategory": 0.90,
+    "state": 0.90,
+    "city": 0.88,
+    "locality": 0.92,
+}
+LOCATION_PREPOSITIONS = {"in", "near", "at", "around"}
+LOCATION_STOP_WORDS = {
+    "for",
+    "per",
+    "under",
+    "below",
+    "above",
+    "over",
+    "within",
+    "between",
+    "with",
+    "by",
+    "hourly",
+    "daily",
+    "weekly",
+    "monthly",
+}
 OFFER_AD_TYPE = "1"
 WANTED_AD_TYPE = "2"
 DURATION_PATTERNS = (
@@ -114,6 +159,10 @@ def default_query_plan(query: str, fallback_reason: str | None = None) -> dict:
         "keyword_query": query,
         "target_ad_type": "offer",
         "filters": {key: None for key in QUERY_FILTER_KEYS},
+        "inferred_categories": {
+            "main_category": None,
+            "subcategory": None,
+        },
         "fallback_reason": fallback_reason,
     }
 
@@ -163,6 +212,15 @@ def parse_query_plan(content: str, original_query: str) -> dict:
         key: optional_text(raw_filters.get(key))
         for key in QUERY_FILTER_FIELDS
     }
+    inferred_categories = {
+        "main_category": None,
+        "subcategory": None,
+    }
+    for category_key in inferred_categories:
+        value = filters[category_key]
+        if value is not None and not text_mentions_filter(original_query, value):
+            inferred_categories[category_key] = value
+            filters[category_key] = None
     for parent_key in ("main_category", "state"):
         value = filters[parent_key]
         if value is not None and not text_mentions_filter(original_query, value):
@@ -183,6 +241,7 @@ def parse_query_plan(content: str, original_query: str) -> dict:
         "keyword_query": keyword_query,
         "target_ad_type": target_ad_type,
         "filters": filters,
+        "inferred_categories": inferred_categories,
         "fallback_reason": None,
     }
 
@@ -209,6 +268,108 @@ def find_catalog_value(
         pattern = rf"(?<!\w){escaped_value}(?!\w)"
         if re.search(pattern, normalized_query):
             return actual_value
+    return None
+
+
+def canonical_catalog_value(
+    query_key: str,
+    requested_value: str,
+    values: dict,
+    allow_fuzzy: bool = True,
+) -> str | None:
+    normalized = normalize_filter_value(requested_value)
+    normalized = QUERY_FILTER_ALIASES.get(query_key, {}).get(
+        normalized,
+        normalized,
+    )
+    exact = values.get(normalized)
+    if exact is not None or not allow_fuzzy:
+        return exact
+
+    threshold = FUZZY_MATCH_THRESHOLDS.get(query_key)
+    if threshold is None or len(normalized) < 4:
+        return None
+    match = fuzzy_catalog_match(normalized, values, threshold)
+    return match[0] if match is not None else None
+
+
+def fuzzy_catalog_match(
+    normalized: str,
+    values: dict,
+    threshold: float,
+) -> tuple[str, float] | None:
+    matches = get_close_matches(
+        normalized,
+        values.keys(),
+        n=2,
+        cutoff=threshold,
+    )
+    if not matches:
+        return None
+    first_score = SequenceMatcher(None, normalized, matches[0]).ratio()
+    if len(matches) > 1:
+        second_score = SequenceMatcher(None, normalized, matches[1]).ratio()
+        if first_score - second_score < 0.04:
+            return None
+    return values[matches[0]], first_score
+
+
+def location_phrases(query: str) -> list[str]:
+    tokens = re.findall(r"[^\W_]+", normalize_filter_value(query))
+    phrases = []
+    for index, token in enumerate(tokens):
+        if token not in LOCATION_PREPOSITIONS:
+            continue
+        location_tokens = []
+        for candidate in tokens[index + 1 : index + 5]:
+            if candidate in LOCATION_STOP_WORDS:
+                break
+            location_tokens.append(candidate)
+        if not location_tokens or location_tokens[0].isdigit():
+            continue
+        phrases.extend(
+            " ".join(location_tokens[:length])
+            for length in range(len(location_tokens), 0, -1)
+        )
+    return list(dict.fromkeys(phrases))
+
+
+def find_fuzzy_location(query: str, value_index: dict) -> tuple[str, str] | None:
+    candidates = []
+    key_priority = {"city": 3, "state": 2, "locality": 1}
+    for phrase in location_phrases(query):
+        for key in ("city", "state", "locality"):
+            threshold = FUZZY_MATCH_THRESHOLDS[key]
+            match = fuzzy_catalog_match(
+                phrase,
+                value_index[key],
+                threshold,
+            )
+            if match is not None:
+                actual, score = match
+                candidates.append((score, key_priority[key], key, actual))
+    if not candidates:
+        return None
+
+    unique_candidates = {}
+    for candidate in candidates:
+        identity = normalize_filter_value(candidate[3])
+        if candidate > unique_candidates.get(identity, (-1, -1, "", "")):
+            unique_candidates[identity] = candidate
+    candidates = list(unique_candidates.values())
+    candidates.sort(reverse=True)
+    if len(candidates) > 1 and candidates[0][0] - candidates[1][0] < 0.03:
+        return None
+    _, _, key, actual = candidates[0]
+    return key, actual
+
+
+def find_catalog_alias(query: str, query_key: str, values: dict) -> str | None:
+    normalized_query = normalize_filter_value(query)
+    for alias, canonical in QUERY_FILTER_ALIASES.get(query_key, {}).items():
+        pattern = rf"(?<!\w){re.escape(alias)}(?!\w)"
+        if re.search(pattern, normalized_query):
+            return values.get(canonical)
     return None
 
 
@@ -281,6 +442,12 @@ def infer_target_ad_type(query: str) -> str:
 
 def enrich_query_plan(query: str, plan: dict, value_index: dict) -> dict:
     filters = dict(plan["filters"])
+    inferred_categories = dict(
+        plan.get(
+            "inferred_categories",
+            {"main_category": None, "subcategory": None},
+        )
+    )
     for key in QUERY_FILTER_FIELDS:
         if key == "rental_duration":
             continue
@@ -289,20 +456,87 @@ def enrich_query_plan(query: str, plan: dict, value_index: dict) -> dict:
             value_index[key],
             allow_plural=key in {"main_category", "subcategory"},
         )
+        if exact_value is None:
+            exact_value = find_catalog_alias(query, key, value_index[key])
         if exact_value is not None:
             filters[key] = exact_value
+            if key in inferred_categories:
+                inferred_categories[key] = None
+        elif filters.get(key) is not None:
+            canonical_value = canonical_catalog_value(
+                key,
+                filters[key],
+                value_index[key],
+            )
+            value_was_stated = text_mentions_filter(query, filters[key])
+            if key in inferred_categories:
+                inferred_categories[key] = canonical_value or filters[key]
+                filters[key] = None
+            elif canonical_value is not None and value_was_stated:
+                filters[key] = canonical_value
+            else:
+                filters[key] = None
+
+    if not any(filters.get(key) for key in ("state", "city", "locality")):
+        fuzzy_location = find_fuzzy_location(query, value_index)
+        if fuzzy_location is not None:
+            key, actual = fuzzy_location
+            filters[key] = actual
+
+    for key, requested in tuple(inferred_categories.items()):
+        if requested is None:
+            continue
+        inferred_categories[key] = (
+            canonical_catalog_value(key, requested, value_index[key])
+            or requested
+        )
 
     filters["rental_duration"] = extract_duration_filter(
         query,
         value_index["rental_duration"],
     )
+    if filters.get("subcategory") is not None:
+        parent = value_index.get("_subcategory_main_category", {}).get(
+            normalize_filter_value(filters["subcategory"])
+        )
+        if parent is not None:
+            filters["main_category"] = parent
+            inferred_categories["main_category"] = None
+    elif inferred_categories.get("subcategory") is not None:
+        parent = value_index.get("_subcategory_main_category", {}).get(
+            normalize_filter_value(inferred_categories["subcategory"])
+        )
+        if parent is not None:
+            inferred_categories["main_category"] = parent
     if (
         filters.get("city") is not None
         and filters.get("locality") is not None
-        and normalize_filter_value(filters["city"])
-        == normalize_filter_value(filters["locality"])
     ):
-        filters["locality"] = None
+        normalized_city = normalize_filter_value(filters["city"])
+        normalized_locality = normalize_filter_value(filters["locality"])
+        locality_as_city = QUERY_FILTER_ALIASES.get("city", {}).get(
+            normalized_locality,
+            normalized_locality,
+        )
+        if normalized_city == locality_as_city:
+            filters["locality"] = None
+
+    locality = filters.get("locality")
+    if locality is not None:
+        location = value_index.get("_locality_location", {}).get(
+            normalize_filter_value(locality)
+        )
+        if location is not None:
+            filters["city"] = filters.get("city") or location["city"]
+            filters["state"] = filters.get("state") or location["state"]
+
+    city = filters.get("city")
+    if city is not None and filters.get("state") is None:
+        state = value_index.get("_city_state", {}).get(
+            normalize_filter_value(city)
+        )
+        if state is not None:
+            filters["state"] = state
 
     minimum, maximum = extract_price_constraints(query)
     if filters.get("min_rental_fee") is None:
@@ -316,18 +550,25 @@ def enrich_query_plan(query: str, plan: dict, value_index: dict) -> dict:
         plan["keyword_query"] = plan["semantic_query"]
 
     plan["filters"] = filters
+    plan["inferred_categories"] = inferred_categories
     plan["target_ad_type"] = infer_target_ad_type(query)
     return plan
 
 
-def extract_query_plan(query: str, filter_catalog: dict | None = None) -> dict:
+def extract_query_plan(
+    query: str,
+    filter_catalog: dict | None = None,
+    query_provider=None,
+) -> dict:
     system_prompt = (
         "You convert product-search requests into a retrieval plan. "
         "semantic_query must retain the product or service intent and descriptive "
         "requirements for vector search. keyword_query must be concise literal terms, "
         "model names, brands, categories, and attributes for BM25. Extract filters only "
         "when explicitly stated by the user. Never invent a category, location, rental "
-        "duration, or price. A main category is a broad department; a subcategory is a "
+        "duration, or price. Do not convert a functional description into a guessed "
+        "category filter; retain the functionality in semantic_query. A main category "
+        "is a broad department; a subcategory is a "
         "specific listing type. Map hourly/per hour to Per Hour, daily/for a day to "
         "Per Day, weekly/for a week to Per Week, monthly/for a month to Per Month, "
         "and per ride to Per Ride. Convert under/below/within into max_rental_fee and "
@@ -358,13 +599,22 @@ def extract_query_plan(query: str, filter_catalog: dict | None = None) -> dict:
         f"{json.dumps(QUERY_PLAN_SCHEMA, separators=(',', ':'))}"
     )
     try:
-        content = structured_chat(
-            QUERY_EXTRACT_MODEL,
-            system_prompt,
-            user_prompt,
-            QUERY_PLAN_SCHEMA,
-            QUERY_EXTRACT_TEMPERATURE,
-        )
+        if query_provider is None:
+            content = structured_chat(
+                QUERY_EXTRACT_MODEL,
+                system_prompt,
+                user_prompt,
+                QUERY_PLAN_SCHEMA,
+                QUERY_EXTRACT_TEMPERATURE,
+            )
+        else:
+            content = query_provider.structured_chat(
+                QUERY_EXTRACT_MODEL,
+                system_prompt,
+                user_prompt,
+                QUERY_PLAN_SCHEMA,
+                QUERY_EXTRACT_TEMPERATURE,
+            )
         return parse_query_plan(content, query)
     except (RuntimeError, json.JSONDecodeError, TypeError, ValueError) as exc:
         return default_query_plan(query, str(exc))
@@ -372,10 +622,16 @@ def extract_query_plan(query: str, filter_catalog: dict | None = None) -> dict:
 
 def query_filter_value_index(bm25_index: PersistentBM25Index) -> dict:
     stored_values = bm25_index.filter_value_index()
-    return {
+    value_index = {
         query_key: stored_values[metadata_key]
         for query_key, metadata_key in QUERY_FILTER_FIELDS.items()
     }
+    value_index["_subcategory_main_category"] = (
+        bm25_index.subcategory_parent_index()
+    )
+    value_index["_city_state"] = bm25_index.city_state_index()
+    value_index["_locality_location"] = bm25_index.locality_location_index()
+    return value_index
 
 
 def build_query_filter_catalog(value_index: dict, max_values: int = 100) -> dict:
@@ -398,7 +654,11 @@ def resolve_query_filters(filters: dict, value_index: dict) -> tuple[dict, dict]
         requested = filters.get(query_key)
         if requested is None:
             continue
-        actual = value_index[query_key].get(normalize_filter_value(requested))
+        actual = canonical_catalog_value(
+            query_key,
+            requested,
+            value_index[query_key],
+        )
         if actual is None:
             unresolved[query_key] = requested
             continue

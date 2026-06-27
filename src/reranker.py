@@ -107,12 +107,24 @@ def rerank(query, candidates, ranker, top_k=6):
         key=lambda item: float(item[1]),
         reverse=True,
     )
-    return [
-        {
+    results = []
+    seen_titles = set()
+    for candidate, score in ranked:
+        metadata = candidate.get("metadata") or {}
+        title = metadata.get("content_title") or metadata.get("title")
+        normalized_title = " ".join(str(title).casefold().split()) if title else None
+        if normalized_title and normalized_title in seen_titles:
+            continue
+        if normalized_title:
+            seen_titles.add(normalized_title)
+        results.append(
+            {
             "id": candidate["id"],
             "text": candidate["text"],
             "metadata": candidate["metadata"],
             "score": float(score),
-        }
-        for candidate, score in ranked[:top_k]
-    ]
+            }
+        )
+        if len(results) >= top_k:
+            break
+    return results

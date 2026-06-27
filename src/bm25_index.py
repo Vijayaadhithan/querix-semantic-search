@@ -165,6 +165,68 @@ class PersistentBM25Index:
             }
         return value_index
 
+    def _unique_relationship_index(
+        self,
+        child_column: str,
+        parent_columns: tuple[str, ...],
+    ) -> dict[str, tuple[str, ...]]:
+        allowed_columns = set(FILTER_COLUMNS)
+        if child_column not in allowed_columns or not set(parent_columns) <= allowed_columns:
+            raise ValueError("Unsupported BM25 relationship column")
+
+        selected_columns = ", ".join((child_column, *parent_columns))
+        required_values = " AND ".join(
+            f"{column} IS NOT NULL AND TRIM({column}) <> ''"
+            for column in (child_column, *parent_columns)
+        )
+        rows = self.connection.execute(
+            f"SELECT DISTINCT {selected_columns} FROM products "
+            f"WHERE {required_values}"
+        ).fetchall()
+        relationships: dict[str, set[tuple[str, ...]]] = {}
+        for row in rows:
+            normalized_child = " ".join(
+                str(row[child_column]).casefold().split()
+            )
+            relationships.setdefault(normalized_child, set()).add(
+                tuple(row[column] for column in parent_columns)
+            )
+        return {
+            child: next(iter(parents))
+            for child, parents in relationships.items()
+            if len(parents) == 1
+        }
+
+    def subcategory_parent_index(self) -> dict[str, str]:
+        relationships = self._unique_relationship_index(
+            "subcategory_name",
+            ("main_category_name",),
+        )
+        return {
+            subcategory: parent[0]
+            for subcategory, parent in relationships.items()
+        }
+
+    def city_state_index(self) -> dict[str, str]:
+        relationships = self._unique_relationship_index(
+            "city_name",
+            ("state_name",),
+        )
+        return {
+            city: state[0]
+            for city, state in relationships.items()
+        }
+
+    def locality_location_index(self) -> dict[str, dict[str, str]]:
+        relationships = self._unique_relationship_index(
+            "locality_name",
+            ("city_name", "state_name"),
+        )
+        return {
+            locality: {"city": location[0], "state": location[1]}
+            for locality, location in relationships.items()
+        }
+
     def search(self, query: str, resolved_filters: dict, top_k: int) -> list[dict]:
         tokens = tokenize_query(query)
         if not tokens or top_k <= 0:

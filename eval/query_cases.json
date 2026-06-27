@@ -1,0 +1,78 @@
+[
+  {
+    "name": "explicit_product_city_alias_duration",
+    "query": "Quad Bike for Hourly Rent in Bangalore",
+    "expected": {
+      "target_ad_type": "offer",
+      "filters.main_category": "Sports & Toys",
+      "filters.subcategory": "Quad Bike",
+      "filters.city": "Bengaluru",
+      "filters.rental_duration": "Per Hour"
+    }
+  },
+  {
+    "name": "wanted_product_budget_duration",
+    "query": "someone looking for bikes in 1000 range per hour",
+    "expected": {
+      "target_ad_type": "wanted",
+      "filters.subcategory": "Bike",
+      "filters.rental_duration": "Per Hour",
+      "filters.max_rental_fee": 1000.0
+    }
+  },
+  {
+    "name": "functional_need_without_hard_category",
+    "query": "something portable that can record a wedding clearly from far away",
+    "expected": {
+      "target_ad_type": "offer",
+      "filters.main_category": null,
+      "filters.subcategory": null
+    }
+  },
+  {
+    "name": "functional_service_location_typo",
+    "query": "need a person to photograph a wedding in Coimbtore for a day",
+    "expected": {
+      "target_ad_type": "offer",
+      "filters.city": "Coimbatore",
+      "filters.rental_duration": "Per Day"
+    }
+  },
+  {
+    "name": "wanted_old_city_name",
+    "query": "show people who need a laptop monthly in Bombay",
+    "expected": {
+      "target_ad_type": "wanted",
+      "filters.city": "Mumbai",
+      "filters.rental_duration": "Per Month"
+    }
+  },
+  {
+    "name": "price_range",
+    "query": "camera between Rs 1000 and Rs 2500 per day",
+    "expected": {
+      "target_ad_type": "offer",
+      "filters.rental_duration": "Per Day",
+      "filters.min_rental_fee": 1000.0,
+      "filters.max_rental_fee": 2500.0
+    }
+  },
+  {
+    "name": "searcher_wants_offer",
+    "query": "I am looking for a bike for one week",
+    "expected": {
+      "target_ad_type": "offer",
+      "filters.subcategory": "Bike",
+      "filters.rental_duration": "Per Week"
+    }
+  },
+  {
+    "name": "explicit_wanted_ads",
+    "query": "show wanted ads for cars in Madras",
+    "expected": {
+      "target_ad_type": "wanted",
+      "filters.subcategory": "Car",
+      "filters.city": "Chennai"
+    }
+  }
+]

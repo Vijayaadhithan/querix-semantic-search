@@ -18,6 +18,7 @@ from chat import (
     fetch_products_by_ids,
     filter_candidates_by_ad_type,
     infer_target_ad_type,
+    merge_results,
     metadata_matches_filters,
     parse_query_plan,
     query_filter_value_index,
@@ -112,6 +113,30 @@ def test_parse_query_plan_drops_inferred_parent_filters():
     assert plan["filters"]["state"] is None
     assert plan["filters"]["subcategory"] == "Mansion"
     assert plan["filters"]["city"] == "Coimbatore"
+
+
+def test_parse_query_plan_keeps_guessed_category_soft():
+    plan = parse_query_plan(
+        """
+        {
+          "semantic_query": "portable device that records distant subjects",
+          "keyword_query": "portable recording distant subjects",
+          "target_ad_type": "offer",
+          "filters": {
+            "main_category": "Audio & Video Equipments",
+            "subcategory": "Camera"
+          }
+        }
+        """,
+        "something portable that records a wedding clearly from far away",
+    )
+
+    assert plan["filters"]["main_category"] is None
+    assert plan["filters"]["subcategory"] is None
+    assert plan["inferred_categories"] == {
+        "main_category": "Audio & Video Equipments",
+        "subcategory": "Camera",
+    }
 
 
 def test_enrich_query_plan_restores_exact_filters_and_keyword_intent():
@@ -340,6 +365,180 @@ def test_filters_resolve_case_insensitively_and_apply_to_both_searches(tmp_path)
     index.close()
 
 
+def test_city_alias_and_subcategory_parent_are_resolved_from_index(tmp_path):
+    index = PersistentBM25Index(tmp_path / "taxonomy.sqlite3")
+    index.upsert(
+        [
+            product_index_row(
+                "1",
+                "quad bike",
+                main_category_name="Sports & Toys",
+                subcategory_name="Quad Bike",
+                city_name="Bengaluru",
+                rental_duration="Per Hour",
+            )
+        ]
+    )
+    value_index = query_filter_value_index(index)
+    plan = {
+        "semantic_query": "Quad Bike",
+        "keyword_query": "Quad Bike",
+        "target_ad_type": "offer",
+        "filters": {
+            "main_category": None,
+            "subcategory": "Quad Bike",
+            "state": None,
+            "city": "bangalore",
+            "locality": "Bangalore",
+            "rental_duration": "Per Hour",
+            "min_rental_fee": None,
+            "max_rental_fee": None,
+        },
+        "fallback_reason": None,
+    }
+
+    enriched = enrich_query_plan(
+        "Quad Bike for Hourly Rent in bangalore",
+        plan,
+        value_index,
+    )
+    resolved, unresolved = resolve_query_filters(
+        enriched["filters"],
+        value_index,
+    )
+
+    assert enriched["filters"]["main_category"] == "Sports & Toys"
+    assert enriched["filters"]["subcategory"] == "Quad Bike"
+    assert enriched["filters"]["city"] == "Bengaluru"
+    assert enriched["filters"]["locality"] is None
+    assert unresolved == {}
+    assert resolved["categorical"] == {
+        "main_category_name": "Sports & Toys",
+        "subcategory_name": "Quad Bike",
+        "city_name": "Bengaluru",
+        "rental_duration": "Per Hour",
+    }
+    index.close()
+
+
+def test_ambiguous_subcategory_does_not_force_parent_category(tmp_path):
+    index = PersistentBM25Index(tmp_path / "ambiguous-taxonomy.sqlite3")
+    index.upsert(
+        [
+            product_index_row(
+                "1",
+                "computer technician",
+                main_category_name="IT & ITES Services",
+                subcategory_name="Technician",
+            ),
+            product_index_row(
+                "2",
+                "home technician",
+                main_category_name="Personal & Home Services",
+                subcategory_name="Technician",
+            ),
+        ]
+    )
+
+    value_index = query_filter_value_index(index)
+
+    assert "technician" not in value_index["_subcategory_main_category"]
+    index.close()
+
+
+def test_unique_locality_derives_city_and_state(tmp_path):
+    index = PersistentBM25Index(tmp_path / "location-hierarchy.sqlite3")
+    index.upsert(
+        [
+            product_index_row(
+                "1",
+                "camera",
+                state_name="Tamil Nadu",
+                city_name="Chennai",
+                locality_name="Tambaram",
+            )
+        ]
+    )
+    value_index = query_filter_value_index(index)
+    plan = {
+        "semantic_query": "camera",
+        "keyword_query": "camera",
+        "target_ad_type": "offer",
+        "filters": {
+            "main_category": None,
+            "subcategory": None,
+            "state": None,
+            "city": None,
+            "locality": "Tambaram",
+            "rental_duration": None,
+            "min_rental_fee": None,
+            "max_rental_fee": None,
+        },
+        "fallback_reason": None,
+    }
+
+    enriched = enrich_query_plan("camera in Tambaram", plan, value_index)
+
+    assert enriched["filters"]["locality"] == "Tambaram"
+    assert enriched["filters"]["city"] == "Chennai"
+    assert enriched["filters"]["state"] == "Tamil Nadu"
+    index.close()
+
+
+def test_query_fallback_recovers_misspelled_city(tmp_path):
+    index = PersistentBM25Index(tmp_path / "fuzzy-location.sqlite3")
+    index.upsert(
+        [
+            product_index_row(
+                "1",
+                "wedding photographer",
+                state_name="Tamil Nadu",
+                city_name="Coimbatore",
+                locality_name="RS Puram",
+            ),
+            product_index_row(
+                "2",
+                "camera",
+                state_name="Tamil Nadu",
+                city_name="Chennai",
+                locality_name="Tambaram",
+            ),
+        ]
+    )
+    value_index = query_filter_value_index(index)
+    plan = {
+        "semantic_query": "wedding photographer",
+        "keyword_query": "wedding photographer",
+        "target_ad_type": "offer",
+        "filters": {
+            "main_category": None,
+            "subcategory": None,
+            "state": None,
+            "city": None,
+            "locality": None,
+            "rental_duration": None,
+            "min_rental_fee": None,
+            "max_rental_fee": None,
+        },
+        "inferred_categories": {
+            "main_category": None,
+            "subcategory": None,
+        },
+        "fallback_reason": "query provider unavailable",
+    }
+
+    enriched = enrich_query_plan(
+        "need a wedding photographer in Coimbtore for a day",
+        plan,
+        value_index,
+    )
+
+    assert enriched["filters"]["city"] == "Coimbatore"
+    assert enriched["filters"]["state"] == "Tamil Nadu"
+    assert enriched["filters"]["rental_duration"] == "Per Day"
+    index.close()
+
+
 def test_bge_rerank_adapter_orders_by_cross_encoder_score():
     candidates = [
         {"id": "1", "text": "first passage", "metadata": {"id": 1}},
@@ -350,6 +549,84 @@ def test_bge_rerank_adapter_orders_by_cross_encoder_score():
 
     assert [result["id"] for result in results] == ["2", "1"]
     assert [result["score"] for result in results] == [0.9, 0.1]
+
+
+def test_hybrid_merge_uses_rrf_and_soft_category_boost():
+    vector_results = [
+        {
+            "id": "vector-only",
+            "text": "portable recorder",
+            "metadata": {"subcategory_name": "Camera"},
+            "score": 0.1,
+            "source": "vector",
+        },
+        {
+            "id": "both",
+            "text": "camera",
+            "metadata": {"subcategory_name": "Camera"},
+            "score": 0.2,
+            "source": "vector",
+        },
+    ]
+    bm25_results = [
+        {
+            "id": "both",
+            "text": "camera",
+            "metadata": {"subcategory_name": "Camera"},
+            "score": 2.0,
+            "source": "bm25",
+        },
+        {
+            "id": "bm25-only",
+            "text": "recording equipment",
+            "metadata": {"subcategory_name": "Other"},
+            "score": 1.0,
+            "source": "bm25",
+        },
+    ]
+
+    merged = merge_results(
+        vector_results,
+        bm25_results,
+        {"subcategory": "Camera"},
+        rrf_constant=60,
+        soft_category_boost=0.005,
+    )
+
+    assert [item["id"] for item in merged] == [
+        "both",
+        "vector-only",
+        "bm25-only",
+    ]
+    assert merged[0]["source"] == "vector+bm25"
+
+
+def test_rerank_keeps_only_highest_scoring_duplicate_title():
+    class OrderedReranker:
+        def compute_score(self, _pairs, **_kwargs):
+            return [0.9, 0.8, 0.7]
+
+    candidates = [
+        {
+            "id": "1",
+            "text": "first duplicate",
+            "metadata": {"title": "Polaris Quad Bike"},
+        },
+        {
+            "id": "2",
+            "text": "second duplicate",
+            "metadata": {"title": " polaris   quad bike "},
+        },
+        {
+            "id": "3",
+            "text": "different listing",
+            "metadata": {"title": "RZR Quad Bike"},
+        },
+    ]
+
+    results = rerank("quad bike", candidates, OrderedReranker(), top_k=3)
+
+    assert [result["id"] for result in results] == ["1", "3"]
 
 
 def test_extract_product_ids_uses_rank_order_and_deduplicates():
