@@ -67,15 +67,21 @@ BM25_TOP_K = int(CONFIG.get("retrieval", {}).get("bm25_top_k", 15))
 HYBRID_CANDIDATE_K = int(
     CONFIG.get("retrieval", {}).get("hybrid_candidate_k", 60)
 )
+RERANK_CANDIDATE_K = int(
+    CONFIG.get("retrieval", {}).get("rerank_candidate_k", 60)
+)
+PRIMARY_RANKED_K = int(
+    CONFIG.get("retrieval", {}).get("primary_ranked_k", 60)
+)
+RELATED_TAIL_ENABLED = bool(
+    CONFIG.get("retrieval", {}).get("related_tail_enabled", True)
+)
 RETRIEVAL_OVERFETCH_FACTOR = int(
     CONFIG.get("retrieval", {}).get("overfetch_factor", 2)
 )
 RRF_CONSTANT = int(CONFIG.get("retrieval", {}).get("rrf_constant", 60))
 VECTOR_WEIGHT = float(CONFIG.get("retrieval", {}).get("vector_weight", 1.0))
 BM25_WEIGHT = float(CONFIG.get("retrieval", {}).get("bm25_weight", 1.0))
-CATEGORY_FALLBACK_WEIGHT = float(
-    CONFIG.get("retrieval", {}).get("category_fallback_weight", 0.25)
-)
 SOFT_CATEGORY_BOOST = float(
     CONFIG.get("retrieval", {}).get("soft_category_boost", 0.005)
 )
@@ -117,7 +123,7 @@ API_PRELOAD_EMBEDDING = bool(
     CONFIG.get("api", {}).get("preload_embedding", True)
 )
 API_MAX_PAGE_SIZE = int(CONFIG.get("api", {}).get("max_page_size", 20))
-API_MAX_RESULTS = int(CONFIG.get("api", {}).get("max_results", 60))
+API_MAX_RESULTS = int(CONFIG.get("api", {}).get("max_results", 200))
 API_SESSION_TTL_SECONDS = int(
     CONFIG.get("api", {}).get("session_ttl_seconds", 600)
 )

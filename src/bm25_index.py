@@ -278,9 +278,10 @@ class PersistentBM25Index:
         top_k: int,
         category_filters: dict[str, str] | None = None,
         exclude_doc_ids: set[str] | None = None,
+        offset: int = 0,
     ) -> list[dict]:
         """Return filtered category rows without requiring a keyword match."""
-        if top_k <= 0:
+        if top_k <= 0 or offset < 0:
             return []
 
         conditions = []
@@ -317,14 +318,14 @@ class PersistentBM25Index:
             if conditions
             else ""
         )
-        params.append(top_k)
+        params.extend((top_k, offset))
         rows = self.connection.execute(
             f"""
             SELECT doc_id, product_id
             FROM products
             {where_clause}
             ORDER BY rowid DESC
-            LIMIT ?
+            LIMIT ? OFFSET ?
             """,
             params,
         ).fetchall()

@@ -36,8 +36,11 @@ Defaults are configured in `config.yaml`:
 - Reranker: `Alibaba-NLP/gte-reranker-modernbert-base`
 - Vector candidates: 30
 - BM25 candidates: 30
-- Hybrid candidates: 60
-- Final results: 10
+- API reranker candidates: 60
+- API primary ranked results: 60
+- API related tail: up to 140
+- API combined result window: 200
+- CLI final results: 10
 
 ## Search Design
 
@@ -126,18 +129,20 @@ The planner also handles:
    attributes using BM25.
 6. Reciprocal Rank Fusion combines vector and BM25 ranks without comparing
    their incompatible raw scores.
-7. Scroll searches over-fetch beyond the visible page size. When a safe
-   category is known, filtered category rows form a low-priority fallback pool
-   so later pages do not stop at the initial retriever K.
+7. API searches over-fetch and fuse a 60-document primary reranker pool.
 8. The canonical `ads.type` value removes offer/wanted mismatches before the
    final candidate K is applied.
 9. `Alibaba-NLP/gte-reranker-modernbert-base` scores the original user request
-   against each complete advertisement document.
+   against all primary candidates and retains the strongest 60.
 10. Repeated exact titles are diversified in the first result window. Lower
-    scoring duplicates remain available on later scroll pages.
-11. Only ranked advertisement IDs are retained.
-12. Full records are fetched from the canonical `ads` table while preserving
-    reranker order.
+    scoring duplicates remain available later in the primary tier.
+11. A stable related tail is selected using whichever validated category,
+    location, duration, or price filters are available. It is not necessary
+    for every filter field to be present.
+12. Primary IDs are excluded from the related tail, and offer/wanted intent is
+    enforced in both tiers.
+13. Full records are fetched from the canonical `ads` table in this order:
+    60 reranked advertisements, then up to 140 related advertisements.
 
 The extraction model never generates product records. Returned data always
 comes from MySQL.
@@ -147,7 +152,7 @@ comes from MySQL.
 `ProductSearchEngine` in `src/search_engine.py` exposes the complete:
 
 ```text
-plan -> retrieve -> filter -> rerank -> map IDs -> fetch ads
+plan -> retrieve -> filter -> rerank primary -> append filtered tail -> fetch ads
 ```
 
 flow. The CLI and evaluation tools use this same implementation.
@@ -342,10 +347,11 @@ INFO: [search:a1b2c3d4] step=plan status=start query_chars=39 models=gemma-4-26b
 INFO: step=query_model status=attempt model=gemma-4-26b-a4b-it position=1/3
 INFO: step=query_model status=success model=gemma-4-26b-a4b-it duration_ms=1120
 INFO: [search:a1b2c3d4] step=plan status=complete model=gemma-4-26b-a4b-it ...
-INFO: [search:a1b2c3d4] step=retrieve status=complete vector=30 bm25=30 ...
+INFO: [search:a1b2c3d4] step=retrieve status=complete vector=120 bm25=120 candidates=60 ...
 INFO: [search:a1b2c3d4] step=rerank status=complete results=60 ...
-INFO: [search:a1b2c3d4] step=mysql_map status=complete rows=60
-INFO: [search:a1b2c3d4] step=search status=complete products=60 duration_ms=2840
+INFO: [search:a1b2c3d4] step=related_tail status=complete primary=60 related=140 ...
+INFO: [search:a1b2c3d4] step=mysql_map status=complete rows=200
+INFO: [search:a1b2c3d4] step=search status=complete products=200 duration_ms=2840
 ```
 
 When a model is exhausted or temporarily unavailable, a warning shows the HTTP
@@ -378,7 +384,7 @@ Example health output:
   "status": "ok",
   "app": "Local Data Assistant",
   "indexed_products": 250117,
-  "max_result_window": 60,
+  "max_result_window": 200,
   "session_ttl_seconds": 600,
   "reranker_model": "Alibaba-NLP/gte-reranker-modernbert-base",
   "reranker_loaded": true,
@@ -415,6 +421,7 @@ The response shape is:
   "cached": false,
   "items": [
     {
+      "result_tier": "ranked",
       "id": "231049",
       "title": "Bajaj Pulsar 220 Bike for Daily Rent",
       "rental_duration": "Per Day",
@@ -441,7 +448,7 @@ The response shape is:
     "planning": 10007,
     "vector_search": 1457,
     "bm25_search": 245,
-    "category_fallback": 75,
+    "related_tail": 75,
     "reranker_load": 0,
     "reranking": 5162,
     "total": 17334,
@@ -454,7 +461,7 @@ The response shape is:
     "page_size": 20,
     "returned": 20,
     "offset": 0,
-    "total_results": 28,
+    "total_results": 200,
     "has_more": true,
     "next_cursor": "NEXT_CURSOR"
   }
@@ -466,6 +473,11 @@ returns an explicit field allowlist. Internal user IDs, phone numbers, hidden
 contact data, keywords, and administrative fields are not serialized. Rows
 with a non-null `deleted_at` are excluded. The API does not guess visibility
 from `ads.status`, because wanted rows use a different status lifecycle.
+`result_tier` is the only synthetic result field: `ranked` identifies the
+primary cross-encoder results and `related` identifies the filtered tail.
+With the default page size, pages 1–3 contain the 60 primary ranked results;
+page 4 onward contains the related tail. If fewer than 60 primary results are
+available, the related tier begins immediately after the last primary result.
 
 ### Infinite scroll / next batch
 
@@ -485,6 +497,7 @@ Abbreviated page-2 output:
   "cached": true,
   "items": [
     {
+      "result_tier": "ranked",
       "id": "10094",
       "title": "Honda Dream Yuga Bike for Daily Rent",
       "rental_fee": "600.00"
@@ -492,11 +505,11 @@ Abbreviated page-2 output:
   ],
   "pagination": {
     "page_size": 20,
-    "returned": 8,
+    "returned": 20,
     "offset": 20,
-    "total_results": 28,
-    "has_more": false,
-    "next_cursor": null
+    "total_results": 200,
+    "has_more": true,
+    "next_cursor": "NEXT_CURSOR"
   }
 }
 ```
@@ -504,27 +517,27 @@ Abbreviated page-2 output:
 The measured page-2 response time was 1.1 ms because it used the cached ranked
 window.
 
-The server ranks the configured result window once and keeps it in memory for
-10 minutes by default. Cursor requests return stable slices from that window,
-so scrolling does not repeat query extraction, embeddings, retrieval, or
-reranking. Cursor responses have `"cached": true`. A cursor is intentionally
-opaque; the frontend should store and return it unchanged. An expired cursor
-returns HTTP `410`, and the frontend must start a new search using `query`.
+The server constructs the configured combined result window once and keeps it
+in memory for 10 minutes by default. Cursor requests return stable slices from
+that window, so scrolling does not repeat query extraction, embeddings,
+retrieval, reranking, or related-tail selection. Cursor responses have
+`"cached": true`. A cursor is intentionally opaque; the frontend should store
+and return it unchanged. An expired cursor returns HTTP `410`, and the frontend
+must start a new search using `query`.
 
-`K` controls candidate-pool depth; it is not treated as the end of the catalog.
-For an API window of 60 results and `overfetch_factor: 2`, vector and BM25 can
-each contribute up to 120 candidates before fusion. Offer/wanted filtering is
-then applied before the 60-candidate reranking window is selected. Explicit
-categories remain hard constraints. Categories inferred from functional
-language remain soft: they add low-priority fallback candidates but do not
-remove otherwise relevant results. The response array is already in final
-rank order, from stronger to weaker matches.
+`K` controls primary candidate-pool depth; it is not the end of the catalog.
+The API fuses 60 primary candidates, reranks them, and places those 60 first.
+Positions 61–200 are a stable tail matching whichever validated intent
+fields are present. For example, a query containing only `city=Chennai` can
+produce a Chennai tail; it does not also require a category, state, duration,
+and price. A completely unfiltered query does not receive a random catalog
+tail. Primary IDs are deduplicated from the tail.
 
 API behavior is configured under `api` in `config.yaml`:
 
 - `default_page_size`: used when the payload omits `page_size`
 - `max_page_size`: validation ceiling for one response
-- `max_results`: maximum ranked window available to scroll
+- `max_results`: maximum combined ranked-plus-related window available to scroll
 - `session_ttl_seconds`: lifetime of an in-memory cursor
 - `max_sessions`: memory bound for active searches
 

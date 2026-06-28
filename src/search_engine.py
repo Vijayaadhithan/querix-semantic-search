@@ -16,18 +16,22 @@ from query_planner import (
 from reranker import load_reranker, rerank
 from retrieval import (
     bm25_search,
-    category_fallback_search,
     extract_product_ids,
     filter_candidates_by_ad_type,
     load_collection,
     merge_results,
+    related_tail_product_ids,
     vector_search,
 )
 from settings import (
     BM25_TOP_K,
     EMBED_MODEL,
     HYBRID_CANDIDATE_K,
+    MYSQL_RESULT_ID_COLUMN,
+    PRIMARY_RANKED_K,
     QUERY_EXTRACT_MODELS,
+    RELATED_TAIL_ENABLED,
+    RERANK_CANDIDATE_K,
     RETRIEVAL_OVERFETCH_FACTOR,
     RERANK_MODEL,
     RERANK_TOP_K,
@@ -135,13 +139,13 @@ class ProductSearchEngine:
         self,
         query_plan: dict,
         resolved_filters: dict,
-        result_limit: int | None = None,
+        candidate_limit: int | None = None,
         trace_id: str = "-",
     ) -> dict:
         extended_window = (
-            result_limit is not None and result_limit > RERANK_TOP_K
+            candidate_limit is not None and candidate_limit > RERANK_TOP_K
         )
-        requested = result_limit or RERANK_TOP_K
+        requested = candidate_limit or RERANK_TOP_K
         retrieval_depth = (
             max(
                 VECTOR_TOP_K,
@@ -187,27 +191,10 @@ class ProductSearchEngine:
         )
         bm25_seconds = time.perf_counter() - bm25_started
 
-        category_started = time.perf_counter()
-        category_results = []
-        if extended_window:
-            category_results = category_fallback_search(
-                self.bm25_index,
-                self.collection,
-                resolved_filters,
-                query_plan.get("inferred_categories"),
-                retrieval_depth,
-                exclude_ids={
-                    item["id"]
-                    for item in (*vector_results, *bm25_results)
-                },
-            )
-        category_seconds = time.perf_counter() - category_started
-
         merged = merge_results(
             vector_results,
             bm25_results,
             query_plan.get("inferred_categories"),
-            category_results=category_results,
         )
         # Apply ad intent before truncating the candidate window. Otherwise a
         # page can be short merely because unwanted ad types occupied the K
@@ -218,26 +205,21 @@ class ProductSearchEngine:
         )[:hybrid_top_k]
         LOGGER.info(
             "[search:%s] step=retrieve status=complete vector=%d bm25=%d "
-            "category=%d merged=%d candidates=%d vector_ms=%.0f "
-            "bm25_ms=%.0f category_ms=%.0f",
+            "merged=%d candidates=%d vector_ms=%.0f bm25_ms=%.0f",
             trace_id,
             len(vector_results),
             len(bm25_results),
-            len(category_results),
             len(merged),
             len(candidates),
             vector_seconds * 1000,
             bm25_seconds * 1000,
-            category_seconds * 1000,
         )
         return {
             "vector_results": vector_results,
             "bm25_results": bm25_results,
-            "category_results": category_results,
             "candidates": candidates,
             "vector_seconds": vector_seconds,
             "bm25_seconds": bm25_seconds,
-            "category_seconds": category_seconds,
             "embedding_model_metrics": (
                 last_ollama_embedding_metrics()
                 if self.embedding_provider is None
@@ -316,6 +298,16 @@ class ProductSearchEngine:
     def search(self, query: str, limit: int | None = None) -> dict:
         if limit is not None and limit <= 0:
             raise ValueError("Search limit must be greater than zero.")
+        primary_limit = (
+            min(PRIMARY_RANKED_K, limit)
+            if limit is not None
+            else RERANK_TOP_K
+        )
+        rerank_candidate_limit = (
+            max(primary_limit, RERANK_CANDIDATE_K)
+            if limit is not None
+            else None
+        )
         trace_id = uuid.uuid4().hex[:8]
         started = time.perf_counter()
         LOGGER.info(
@@ -328,7 +320,7 @@ class ProductSearchEngine:
         retrieved = self.retrieve(
             planned["query_plan"],
             planned["resolved_filters"],
-            result_limit=limit,
+            candidate_limit=rerank_candidate_limit,
             trace_id=trace_id,
         )
         candidates = retrieved["candidates"]
@@ -337,7 +329,7 @@ class ProductSearchEngine:
                 query,
                 candidates,
                 planned["query_plan"],
-                top_k=limit,
+                top_k=primary_limit,
                 trace_id=trace_id,
             )
         else:
@@ -346,13 +338,64 @@ class ProductSearchEngine:
                 trace_id,
             )
             ranked = {"results": [], "load_seconds": 0.0, "seconds": 0.0}
-        product_ids = extract_product_ids(ranked["results"])
+        primary_product_ids = extract_product_ids(ranked["results"])
+        tail_limit = (
+            max(limit - len(primary_product_ids), 0)
+            if limit is not None
+            else 0
+        )
+        tail_started = time.perf_counter()
+        related_product_ids = []
+        if RELATED_TAIL_ENABLED and tail_limit:
+            related_product_ids = related_tail_product_ids(
+                self.bm25_index,
+                planned["resolved_filters"],
+                planned["query_plan"].get("inferred_categories"),
+                planned["query_plan"]["target_ad_type"],
+                tail_limit,
+                exclude_doc_ids={
+                    result["id"]
+                    for result in ranked["results"]
+                },
+                exclude_product_ids=set(primary_product_ids),
+            )
+        related_tail_seconds = time.perf_counter() - tail_started
+        product_ids = list(
+            dict.fromkeys((*primary_product_ids, *related_product_ids))
+        )
+        LOGGER.info(
+            "[search:%s] step=related_tail status=complete filters=%s "
+            "primary=%d related=%d duration_ms=%.0f",
+            trace_id,
+            ",".join(
+                active_filter_names(planned["resolved_filters"])
+            ) or "none",
+            len(primary_product_ids),
+            len(related_product_ids),
+            related_tail_seconds * 1000,
+        )
         LOGGER.info(
             "[search:%s] step=mysql_map status=start product_ids=%d",
             trace_id,
             len(product_ids),
         )
         products = fetch_products_by_ids(product_ids)
+        primary_identities = {
+            str(product_id)
+            for product_id in primary_product_ids
+        }
+        products = [
+            {
+                **product,
+                "result_tier": (
+                    "ranked"
+                    if str(product.get(MYSQL_RESULT_ID_COLUMN))
+                    in primary_identities
+                    else "related"
+                ),
+            }
+            for product in products
+        ]
         LOGGER.info(
             "[search:%s] step=mysql_map status=complete rows=%d",
             trace_id,
@@ -370,6 +413,9 @@ class ProductSearchEngine:
             "reranked": ranked["results"],
             "reranker_load_seconds": ranked["load_seconds"],
             "reranker_seconds": ranked["seconds"],
+            "related_tail_seconds": related_tail_seconds,
+            "primary_product_ids": primary_product_ids,
+            "related_product_ids": related_product_ids,
             "product_ids": product_ids,
             "products": products,
         }

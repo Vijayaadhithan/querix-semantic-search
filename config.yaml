@@ -27,15 +27,16 @@ retrieval:
   vector_top_k: 30
   bm25_top_k: 30
   hybrid_candidate_k: 60
+  # Rerank the 60 strongest fused candidates.
+  rerank_candidate_k: 60
+  primary_ranked_k: 60
+  related_tail_enabled: true
   # Scroll searches over-fetch each retrieval source before reranking. This
   # prevents top-K from becoming a hard end-of-results cutoff.
   overfetch_factor: 2
   rrf_constant: 60
   vector_weight: 1.0
   bm25_weight: 1.0
-  # Category-only candidates fill later pages but start below semantic and
-  # keyword matches in the fusion stage.
-  category_fallback_weight: 0.25
   soft_category_boost: 0.005
   final_top_k: 10
   reranker_model: Alibaba-NLP/gte-reranker-modernbert-base
@@ -55,8 +56,7 @@ api:
   default_page_size: 20
   max_page_size: 20
   preload_embedding: true
-  # The first request ranks this many results once. Later cursor requests
-  # return slices from that stable result window.
-  max_results: 60
+  # Combined cached window: 60 reranked results plus up to 140 related rows.
+  max_results: 200
   session_ttl_seconds: 600
   max_sessions: 500

@@ -86,6 +86,46 @@ def test_default_api_page_contains_twenty_products():
     assert SearchRequest(query="camera").page_size == 20
 
 
+def test_ranked_results_fill_first_three_pages_before_related_tail():
+    class TieredEngine(FakeEngine):
+        def search(self, query, limit=None):
+            result = super().search(query, limit)
+            result["products"] = [
+                {
+                    "id": number,
+                    "title": f"Product {number}",
+                    "result_tier": "ranked" if number <= 60 else "related",
+                }
+                for number in range(1, 66)
+            ]
+            return result
+
+    service = ProductSearchService(TieredEngine(), max_results=65)
+    pages = []
+    response = service.search(SearchRequest(query="bike", page_size=20))
+    pages.append(response)
+    while response.pagination.next_cursor:
+        response = service.search(
+            SearchRequest(
+                cursor=response.pagination.next_cursor,
+                page_size=20,
+            )
+        )
+        pages.append(response)
+
+    assert len(pages) == 4
+    assert all(
+        item["result_tier"] == "ranked"
+        for page in pages[:3]
+        for item in page.items
+    )
+    assert [item["id"] for item in pages[3].items] == [61, 62, 63, 64, 65]
+    assert all(
+        item["result_tier"] == "related"
+        for item in pages[3].items
+    )
+
+
 def test_expired_cursor_requires_a_new_query():
     now = [100.0]
     sessions = SearchSessionStore(ttl_seconds=5, clock=lambda: now[0])

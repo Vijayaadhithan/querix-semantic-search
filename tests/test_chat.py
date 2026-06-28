@@ -25,7 +25,7 @@ from chat import (
     rerank,
     resolve_query_filters,
 )
-from retrieval import category_fallback_search
+from retrieval import related_tail_product_ids
 
 
 class FakeCursor:
@@ -721,59 +721,109 @@ def test_rerank_diversifies_first_results_then_keeps_lower_ranked_duplicates():
     assert [result["id"] for result in results] == ["1", "3", "2"]
 
 
-def test_category_fallback_uses_inferred_category_and_existing_filters(tmp_path):
-    class FakeCollection:
-        def get(self, ids, include):
-            assert include == ["documents", "metadatas"]
-            return {
-                "ids": ids,
-                "documents": [f"document {doc_id}" for doc_id in ids],
-                "metadatas": [
-                    {"subcategory_name": "Camera", "id": doc_id}
-                    for doc_id in ids
-                ],
-            }
-
-    index = PersistentBM25Index(tmp_path / "category-fallback.sqlite3")
+def test_related_tail_uses_any_available_filter_and_offer_type(tmp_path):
+    index = PersistentBM25Index(tmp_path / "related-tail.sqlite3")
     index.upsert(
         [
             product_index_row(
-                "camera-chennai",
-                "camera listing",
-                subcategory_name="Camera",
+                "primary-bike",
+                "primary bike",
                 city_name="Chennai",
                 rental_fee=900,
             ),
             product_index_row(
-                "camera-expensive",
-                "camera listing",
+                "related-offer",
+                "related offer",
+                city_name="Chennai",
+                rental_fee=800,
+            ),
+            product_index_row(
+                "related-wanted",
+                "related wanted",
+                city_name="Chennai",
+                rental_fee=700,
+            ),
+            product_index_row(
+                "other-city",
+                "other city",
+                city_name="Madurai",
+                rental_fee=600,
+            ),
+        ]
+    )
+    product_types = {
+        "primary-bike": "1",
+        "related-offer": "1",
+        "related-wanted": "2",
+        "other-city": "1",
+    }
+
+    product_ids = related_tail_product_ids(
+        index,
+        {"categorical": {"city_name": "Chennai"}},
+        {"main_category": None, "subcategory": None},
+        "offer",
+        limit=10,
+        exclude_product_ids={"primary-bike"},
+        type_fetcher=lambda ids: {
+            str(product_id): product_types[str(product_id)]
+            for product_id in ids
+        },
+    )
+
+    assert product_ids == ["related-offer"]
+    index.close()
+
+
+def test_related_tail_combines_inferred_category_with_partial_filters(tmp_path):
+    index = PersistentBM25Index(tmp_path / "inferred-related-tail.sqlite3")
+    index.upsert(
+        [
+            product_index_row(
+                "camera-chennai",
+                "camera",
                 subcategory_name="Camera",
                 city_name="Chennai",
-                rental_fee=1900,
             ),
             product_index_row(
                 "bike-chennai",
-                "bike listing",
+                "bike",
                 subcategory_name="Bike",
                 city_name="Chennai",
-                rental_fee=800,
             ),
         ]
     )
 
-    results = category_fallback_search(
+    product_ids = related_tail_product_ids(
         index,
-        FakeCollection(),
-        {
-            "categorical": {"city_name": "Chennai"},
-            "max_rental_fee": 1000,
-        },
+        {"categorical": {"city_name": "Chennai"}},
         {"main_category": None, "subcategory": "Camera"},
-        top_k=10,
+        "offer",
+        limit=10,
+        type_fetcher=lambda ids: {
+            str(product_id): "1"
+            for product_id in ids
+        },
     )
 
-    assert [result["id"] for result in results] == ["camera-chennai"]
-    assert results[0]["source"] == "category"
+    assert product_ids == ["camera-chennai"]
+    index.close()
+
+
+def test_related_tail_requires_at_least_one_resolved_or_inferred_filter(tmp_path):
+    index = PersistentBM25Index(tmp_path / "unfiltered-tail.sqlite3")
+    index.upsert([product_index_row("bike", "bike")])
+
+    product_ids = related_tail_product_ids(
+        index,
+        {"categorical": {}},
+        {"main_category": None, "subcategory": None},
+        "offer",
+        limit=10,
+        type_fetcher=lambda _ids: {"bike": "1"},
+    )
+
+    assert product_ids == []
     index.close()
 
 

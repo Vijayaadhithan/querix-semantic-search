@@ -5,7 +5,6 @@ from mysql_store import fetch_product_types_by_ids
 from query_planner import OFFER_AD_TYPE, WANTED_AD_TYPE
 from settings import (
     BM25_WEIGHT,
-    CATEGORY_FALLBACK_WEIGHT,
     CHROMA_DIR,
     COLLECTION_NAME,
     MYSQL_SEARCH_ID_COLUMN,
@@ -131,14 +130,20 @@ def bm25_search(query, index, collection, resolved_filters, top_k=15):
     ]
 
 
-def category_fallback_search(
+def related_tail_product_ids(
     index,
-    collection,
     resolved_filters,
     inferred_categories,
-    top_k,
-    exclude_ids=None,
+    target_ad_type,
+    limit,
+    exclude_doc_ids=None,
+    exclude_product_ids=None,
+    type_fetcher=fetch_product_types_by_ids,
 ):
+    """Return a stable filtered tail without requiring keyword relevance."""
+    if limit <= 0:
+        return []
+
     categorical = resolved_filters.get("categorical", {})
     category_filters = {}
     category_keys = {
@@ -154,39 +159,53 @@ def category_fallback_search(
             value = (inferred_categories or {}).get(category_key)
             if value:
                 category_filters[metadata_key] = value
-    if not has_explicit_category and not category_filters:
-        return []
 
-    ranked = index.browse(
-        resolved_filters,
-        top_k,
-        category_filters=category_filters,
-        exclude_doc_ids=set(exclude_ids or []),
+    has_price_filter = any(
+        key in resolved_filters
+        for key in ("min_rental_fee", "max_rental_fee")
     )
-    if not ranked:
+    if not categorical and not category_filters and not has_price_filter:
         return []
 
-    ordered_ids = [item["doc_id"] for item in ranked]
-    data = collection.get(ids=ordered_ids, include=["documents", "metadatas"])
-    documents = {
-        doc_id: {"text": text, "metadata": metadata}
-        for doc_id, text, metadata in zip(
-            data["ids"],
-            data["documents"],
-            data["metadatas"],
-        )
+    expected_type = (
+        WANTED_AD_TYPE if target_ad_type == "wanted" else OFFER_AD_TYPE
+    )
+    excluded_products = {
+        str(product_id)
+        for product_id in (exclude_product_ids or set())
     }
-    return [
-        {
-            "id": doc_id,
-            "text": documents[doc_id]["text"],
-            "metadata": documents[doc_id]["metadata"],
-            "score": 0.0,
-            "source": "category",
-        }
-        for doc_id in ordered_ids
-        if doc_id in documents
-    ]
+    seen_products = set(excluded_products)
+    product_ids = []
+    offset = 0
+    page_size = max(100, min(limit * 3, 500))
+
+    while len(product_ids) < limit:
+        rows = index.browse(
+            resolved_filters,
+            page_size,
+            category_filters=category_filters,
+            exclude_doc_ids=set(exclude_doc_ids or set()),
+            offset=offset,
+        )
+        if not rows:
+            break
+        offset += len(rows)
+        row_product_ids = [row["product_id"] for row in rows]
+        product_types = type_fetcher(row_product_ids)
+        for product_id in row_product_ids:
+            identity = str(product_id)
+            if identity in seen_products:
+                continue
+            seen_products.add(identity)
+            if product_types.get(identity) != expected_type:
+                continue
+            product_ids.append(product_id)
+            if len(product_ids) >= limit:
+                break
+        if len(rows) < page_size:
+            break
+
+    return product_ids
 
 
 def merge_results(
@@ -197,14 +216,11 @@ def merge_results(
     vector_weight=VECTOR_WEIGHT,
     bm25_weight=BM25_WEIGHT,
     soft_category_boost=SOFT_CATEGORY_BOOST,
-    category_results=None,
-    category_weight=CATEGORY_FALLBACK_WEIGHT,
 ):
     merged = {}
     ranked_sources = (
         ("vector", vector_results, vector_weight),
         ("bm25", bm25_results, bm25_weight),
-        ("category", category_results or [], category_weight),
     )
     for source, results, weight in ranked_sources:
         for rank, item in enumerate(results, start=1):

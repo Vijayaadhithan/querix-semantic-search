@@ -31,6 +31,7 @@ from settings import (
 LOGGER = logging.getLogger("uvicorn.error")
 
 PUBLIC_PRODUCT_FIELDS = (
+    "result_tier",
     "id",
     "type",
     "category_type",
@@ -272,7 +273,7 @@ class ProductSearchService:
             "planning": result.get("seconds", 0.0) * 1000,
             "vector_search": result.get("vector_seconds", 0.0) * 1000,
             "bm25_search": result.get("bm25_seconds", 0.0) * 1000,
-            "category_fallback": result.get("category_seconds", 0.0) * 1000,
+            "related_tail": result.get("related_tail_seconds", 0.0) * 1000,
             "reranker_load": result.get("reranker_load_seconds", 0.0) * 1000,
             "reranking": result.get("reranker_seconds", 0.0) * 1000,
             "total": total_ms,
