@@ -161,10 +161,14 @@ def test_http_contract_and_validation():
     assert health.json()["indexed_products"] == 12
     assert health.json()["reranker_loaded"] is True
     assert health.json()["reranker_load_ms"] == 123.0
+    assert health.json()["redis_enabled"] is False
+    assert health.json()["redis_connected"] is False
+    assert health.json()["query_plan_cache_backend"] == "memory"
     assert service.engine.reranker_loads == 1
     assert response.status_code == 200
     assert response.json()["pagination"]["returned"] == 2
     assert response.json()["pagination"]["has_more"] is True
+    assert response.json()["interpreted_query"]["query_corrections"] == []
     assert invalid.status_code == 422
 
 

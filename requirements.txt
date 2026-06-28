@@ -6,6 +6,7 @@ PyMySQL>=1.1,<2
 python-dotenv>=1,<2
 PyYAML>=6,<7
 requests>=2.32,<3
+redis>=7,<9
 torch>=2.7,<3
 transformers>=5,<6
 uvicorn>=0.34,<1

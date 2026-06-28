@@ -4,7 +4,11 @@ from difflib import SequenceMatcher, get_close_matches
 
 from bm25_index import PersistentBM25Index
 from gemini_client import structured_chat
-from settings import QUERY_EXTRACT_MODEL, QUERY_EXTRACT_TEMPERATURE
+from settings import (
+    QUERY_EXTRACT_MODEL,
+    QUERY_EXTRACT_TEMPERATURE,
+    QUERY_FUZZY_MATCHING,
+)
 
 QUERY_FILTER_FIELDS = {
     "main_category": "main_category_name",
@@ -70,6 +74,96 @@ GENERIC_CATEGORY_HINT_TOKENS = {
     "service",
     "thing",
     "vehicle",
+}
+FAST_PATH_FILLER_TOKENS = {
+    "a",
+    "ad",
+    "ads",
+    "an",
+    "any",
+    "available",
+    "by",
+    "find",
+    "for",
+    "from",
+    "get",
+    "give",
+    "hire",
+    "i",
+    "in",
+    "item",
+    "items",
+    "looking",
+    "me",
+    "my",
+    "near",
+    "need",
+    "of",
+    "product",
+    "products",
+    "rent",
+    "rental",
+    "rentals",
+    "required",
+    "require",
+    "search",
+    "searching",
+    "show",
+    "some",
+    "the",
+    "to",
+    "want",
+}
+FAST_PATH_WANTED_TOKENS = {
+    "customers",
+    "people",
+    "person",
+    "persons",
+    "renters",
+    "request",
+    "someone",
+    "wanted",
+    "who",
+}
+FAST_PATH_PRICE_TOKENS = {
+    "above",
+    "and",
+    "below",
+    "between",
+    "budget",
+    "inr",
+    "less",
+    "max",
+    "maximum",
+    "min",
+    "minimum",
+    "more",
+    "not",
+    "over",
+    "price",
+    "range",
+    "rs",
+    "than",
+    "under",
+    "up",
+    "withing",
+    "within",
+}
+FAST_PATH_DURATION_TOKENS = {
+    "1",
+    "a",
+    "an",
+    "daily",
+    "day",
+    "hour",
+    "hourly",
+    "month",
+    "monthly",
+    "one",
+    "per",
+    "ride",
+    "week",
+    "weekly",
 }
 OFFER_AD_TYPE = "1"
 WANTED_AD_TYPE = "2"
@@ -231,9 +325,11 @@ def is_explicit_category_request(query: str, value: str) -> bool:
         rf"\b{request}\s+{article}{term}(?!\w)",
         rf"\b(?:wanted|request)\s+ads?\s+for\s+{article}{term}(?!\w)",
         rf"\b(?:rental|hire)\s+{term}(?!\w)",
-        rf"(?<!\w){term}\s+(?:for\s+(?:rent|hire)|rental|"
+        rf"(?<!\w){term}\s+(?:rent|hire|for\s+(?:rent|hire)|rental|"
         rf"in|near|at|under|below|within|between|per\s+hour|"
         rf"per\s+day|per\s+week|per\s+month)\b",
+        rf"\b\d+(?:\.\d+)?\s+{term}(?!\w)",
+        rf"(?<!\w){term}\s+\d+(?:\.\d+)?\b",
     )
     return any(re.search(pattern, normalized_query) for pattern in patterns)
 
@@ -361,6 +457,91 @@ def fuzzy_catalog_match(
     return values[matches[0]], first_score
 
 
+def edit_distance(left: str, right: str) -> int:
+    """Return Levenshtein distance for short catalog terms."""
+    if left == right:
+        return 0
+    if not left:
+        return len(right)
+    if not right:
+        return len(left)
+    previous = list(range(len(right) + 1))
+    for left_index, left_character in enumerate(left, start=1):
+        current = [left_index]
+        for right_index, right_character in enumerate(right, start=1):
+            current.append(
+                min(
+                    current[-1] + 1,
+                    previous[right_index] + 1,
+                    previous[right_index - 1]
+                    + (left_character != right_character),
+                )
+            )
+        previous = current
+    return previous[-1]
+
+
+def ordered_subsequence(shorter: str, longer: str) -> bool:
+    iterator = iter(longer)
+    return all(character in iterator for character in shorter)
+
+
+def typo_catalog_match(
+    normalized: str,
+    values: dict,
+    single_token_only: bool = False,
+) -> tuple[str, float] | None:
+    """Match a likely typo while rejecting close or ambiguous catalog values."""
+    normalized = normalize_filter_value(normalized)
+    if len(normalized) < 3:
+        return None
+
+    candidates: dict[str, tuple[str, float]] = {}
+    variants = [normalized]
+    if normalized.endswith("s") and len(normalized) > 3:
+        variants.append(normalized[:-1])
+
+    for candidate, actual in values.items():
+        if single_token_only and " " in candidate:
+            continue
+        best_score = 0.0
+        for variant in variants:
+            length = max(len(variant), len(candidate))
+            if abs(len(variant) - len(candidate)) > 3:
+                continue
+            distance = edit_distance(variant, candidate)
+            max_edits = 1 if length <= 5 else 2
+            if distance <= max_edits:
+                best_score = max(
+                    best_score,
+                    0.98 - (0.02 * distance),
+                )
+            if (
+                len(variant) >= 3
+                and len(candidate) - len(variant) in range(1, 4)
+                and variant[:2] == candidate[:2]
+                and variant[-1] == candidate[-1]
+                and ordered_subsequence(variant, candidate)
+            ):
+                best_score = max(best_score, 0.92)
+        if best_score:
+            identity = normalize_filter_value(actual)
+            current = candidates.get(identity)
+            if current is None or best_score > current[1]:
+                candidates[identity] = (actual, best_score)
+
+    ranked = sorted(
+        candidates.values(),
+        key=lambda item: (item[1], -len(str(item[0]))),
+        reverse=True,
+    )
+    if not ranked:
+        return None
+    if len(ranked) > 1 and ranked[0][1] - ranked[1][1] < 0.04:
+        return None
+    return ranked[0]
+
+
 def location_phrases(query: str) -> list[str]:
     tokens = re.findall(r"[^\W_]+", normalize_filter_value(query))
     phrases = []
@@ -392,6 +573,8 @@ def find_fuzzy_location(query: str, value_index: dict) -> tuple[str, str] | None
                 value_index[key],
                 threshold,
             )
+            if match is None and QUERY_FUZZY_MATCHING:
+                match = typo_catalog_match(phrase, value_index[key])
             if match is not None:
                 actual, score = match
                 candidates.append((score, key_priority[key], key, actual))
@@ -409,6 +592,115 @@ def find_fuzzy_location(query: str, value_index: dict) -> tuple[str, str] | None
         return None
     _, _, key, actual = candidates[0]
     return key, actual
+
+
+def correct_explicit_query_typos(
+    query: str,
+    value_index: dict,
+) -> tuple[str, list[dict[str, str]]]:
+    """Correct high-confidence catalog typos before deterministic planning."""
+    if not QUERY_FUZZY_MATCHING:
+        return query, []
+
+    corrected = normalize_filter_value(query)
+    corrections: list[dict[str, str]] = []
+
+    location_candidates = []
+    key_priority = {"city": 3, "state": 2, "locality": 1}
+    for phrase in location_phrases(corrected):
+        for key in ("city", "state", "locality"):
+            if canonical_catalog_value(
+                key,
+                phrase,
+                value_index[key],
+                allow_fuzzy=False,
+            ) is not None:
+                continue
+            match = typo_catalog_match(phrase, value_index[key])
+            if match is not None:
+                actual, score = match
+                location_candidates.append(
+                    (score, key_priority[key], key, phrase, actual)
+                )
+    location_candidates.sort(reverse=True)
+    if location_candidates and (
+        len(location_candidates) == 1
+        or location_candidates[0][0] - location_candidates[1][0] >= 0.04
+        or normalize_filter_value(location_candidates[0][4])
+        == normalize_filter_value(location_candidates[1][4])
+    ):
+        _, _, key, source, actual = location_candidates[0]
+        corrected = re.sub(
+            rf"(?<!\w){re.escape(source)}(?!\w)",
+            normalize_filter_value(actual),
+            corrected,
+            count=1,
+        )
+        corrections.append(
+            {"field": key, "input": source, "value": actual}
+        )
+
+    has_exact_category = any(
+        find_catalog_value(
+            corrected,
+            value_index[key],
+            allow_plural=True,
+        )
+        for key in ("main_category", "subcategory")
+    )
+    if not has_exact_category:
+        ignored_tokens = (
+            FAST_PATH_FILLER_TOKENS
+            | FAST_PATH_WANTED_TOKENS
+            | FAST_PATH_PRICE_TOKENS
+            | FAST_PATH_DURATION_TOKENS
+            | LOCATION_PREPOSITIONS
+            | LOCATION_STOP_WORDS
+        )
+        location_tokens = {
+            part
+            for location_key in ("city", "state", "locality")
+            for value in value_index[location_key]
+            for part in value.split()
+        }
+        category_candidates = []
+        for token in re.findall(r"[^\W_]+", corrected):
+            if (
+                token in ignored_tokens
+                or token.isdigit()
+                or token in location_tokens
+            ):
+                continue
+            for key, priority in (("subcategory", 2), ("main_category", 1)):
+                match = typo_catalog_match(
+                    token,
+                    value_index[key],
+                    single_token_only=True,
+                )
+                if match is not None:
+                    actual, score = match
+                    category_candidates.append(
+                        (score, priority, key, token, actual)
+                    )
+        category_candidates.sort(reverse=True)
+        if category_candidates and (
+            len(category_candidates) == 1
+            or category_candidates[0][0] - category_candidates[1][0] >= 0.04
+            or normalize_filter_value(category_candidates[0][4])
+            == normalize_filter_value(category_candidates[1][4])
+        ):
+            _, _, key, source, actual = category_candidates[0]
+            corrected = re.sub(
+                rf"(?<!\w){re.escape(source)}(?!\w)",
+                normalize_filter_value(actual),
+                corrected,
+                count=1,
+            )
+            corrections.append(
+                {"field": key, "input": source, "value": actual}
+            )
+
+    return corrected, corrections
 
 
 def infer_keyword_subcategory(keyword_query: str, values: dict) -> str | None:
@@ -496,6 +788,26 @@ def extract_price_constraints(query: str) -> tuple[float | None, float | None]:
     return minimum, maximum
 
 
+def extract_standalone_budget(query: str) -> float | None:
+    """Infer one bare amount only for the conservative direct-filter path."""
+    normalized = query.casefold().replace(",", "")
+    if re.search(
+        r"\b(?:cc|bhp|hp|km|kms|kilometers?|model|seater|year)\b",
+        normalized,
+    ):
+        return None
+    amounts = re.findall(
+        r"(?<![\w.])(?:rs\.?|inr|₹)?\s*(\d+(?:\.\d+)?)(?![\w.])",
+        normalized,
+    )
+    if len(amounts) != 1:
+        return None
+    amount = float(amounts[0])
+    if amount < 10 or 1900 <= amount <= 2100:
+        return None
+    return amount
+
+
 def extract_duration_filter(query: str, values: dict) -> str | None:
     normalized_query = normalize_filter_value(query)
     for canonical_value, pattern in DURATION_PATTERNS:
@@ -523,7 +835,28 @@ def infer_target_ad_type(query: str) -> str:
     )
 
 
+def expand_functional_keyword_query(query: str, keyword_query: str) -> str:
+    normalized = normalize_filter_value(query)
+    rough_terrain = (
+        re.search(r"\brough\s+terrain\b", normalized)
+        or re.search(r"\boff[\s-]?road\b", normalized)
+    )
+    vehicle_context = re.search(
+        r"\b(?:vehicle|driv(?:e|ing)|recreational)\b",
+        normalized,
+    )
+    if rough_terrain and vehicle_context:
+        concepts = "off-road vehicle ATV 4x4"
+        if "atv" not in normalize_filter_value(keyword_query):
+            return f"{keyword_query} {concepts}".strip()
+    return keyword_query
+
+
 def enrich_query_plan(query: str, plan: dict, value_index: dict) -> dict:
+    plan["keyword_query"] = expand_functional_keyword_query(
+        query,
+        plan["keyword_query"],
+    )
     filters = dict(plan["filters"])
     inferred_categories = dict(
         plan.get(
@@ -657,6 +990,83 @@ def enrich_query_plan(query: str, plan: dict, value_index: dict) -> dict:
     plan["filters"] = filters
     plan["inferred_categories"] = inferred_categories
     plan["target_ad_type"] = infer_target_ad_type(query)
+    return plan
+
+
+def deterministic_filter_query_plan(
+    query: str,
+    value_index: dict,
+) -> dict | None:
+    """Return a direct-filter plan for simple explicit catalog queries."""
+    corrected_query, corrections = correct_explicit_query_typos(
+        query,
+        value_index,
+    )
+    plan = enrich_query_plan(
+        corrected_query,
+        default_query_plan(corrected_query),
+        value_index,
+    )
+    filters = plan["filters"]
+    if not any(
+        filters.get(key)
+        for key in ("main_category", "subcategory")
+    ):
+        return None
+    if (
+        filters.get("min_rental_fee") is None
+        and filters.get("max_rental_fee") is None
+    ):
+        filters["max_rental_fee"] = extract_standalone_budget(
+            corrected_query
+        )
+
+    residual = normalize_filter_value(corrected_query)
+    for key in QUERY_FILTER_FIELDS:
+        value = filters.get(key)
+        if not value:
+            continue
+        residual = re.sub(
+            rf"(?<!\w){category_term_pattern(value)}(?!\w)",
+            " ",
+            residual,
+        )
+        normalized_value = normalize_filter_value(value)
+        for alias, canonical in QUERY_FILTER_ALIASES.get(key, {}).items():
+            if canonical == normalized_value:
+                residual = re.sub(
+                    rf"(?<!\w){re.escape(alias)}(?!\w)",
+                    " ",
+                    residual,
+                )
+
+    has_price = any(
+        filters.get(key) is not None
+        for key in ("min_rental_fee", "max_rental_fee")
+    )
+    has_duration = filters.get("rental_duration") is not None
+    allowed_tokens = set(FAST_PATH_FILLER_TOKENS)
+    if plan["target_ad_type"] == "wanted":
+        allowed_tokens.update(FAST_PATH_WANTED_TOKENS)
+    if has_price:
+        allowed_tokens.update(FAST_PATH_PRICE_TOKENS)
+    if has_duration:
+        allowed_tokens.update(FAST_PATH_DURATION_TOKENS)
+
+    unexplained_tokens = []
+    for token in re.findall(r"[^\W_]+", residual):
+        if token in allowed_tokens:
+            continue
+        if has_price and token.replace(".", "", 1).isdigit():
+            continue
+        unexplained_tokens.append(token)
+    if unexplained_tokens:
+        return None
+
+    plan["semantic_query"] = query
+    plan["keyword_query"] = query
+    plan["query_corrections"] = corrections
+    plan["execution_path"] = "deterministic_filter"
     return plan
 
 

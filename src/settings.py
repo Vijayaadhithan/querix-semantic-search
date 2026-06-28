@@ -10,6 +10,20 @@ CONFIG_PATH = PROJECT_ROOT / "config.yaml"
 load_dotenv(PROJECT_ROOT / ".env")
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    normalized = raw.strip().casefold()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(
+        f"{name} must be one of true/false, yes/no, on/off, or 1/0."
+    )
+
+
 def _load_config() -> dict:
     with CONFIG_PATH.open(encoding="utf-8") as config_file:
         return yaml.safe_load(config_file) or {}
@@ -54,6 +68,39 @@ if not QUERY_EXTRACT_MODELS:
 QUERY_EXTRACT_MODEL = QUERY_EXTRACT_MODELS[0]
 QUERY_EXTRACT_TEMPERATURE = float(
     QUERY_EXTRACT_CONFIG.get("temperature", 0)
+)
+QUERY_EXTRACT_TIMEOUT_SECONDS = float(
+    os.getenv(
+        "GEMINI_TIMEOUT_SECONDS",
+        str(QUERY_EXTRACT_CONFIG.get("timeout_seconds", 10)),
+    )
+)
+if QUERY_EXTRACT_TIMEOUT_SECONDS <= 0:
+    raise ValueError("GEMINI_TIMEOUT_SECONDS must be greater than zero.")
+QUERY_DETERMINISTIC_FAST_PATH = bool(
+    QUERY_EXTRACT_CONFIG.get("deterministic_fast_path", True)
+)
+QUERY_FUZZY_MATCHING = bool(
+    QUERY_EXTRACT_CONFIG.get("fuzzy_matching", True)
+)
+QUERY_PLAN_CACHE_SIZE = int(
+    QUERY_EXTRACT_CONFIG.get("cache_size", 500)
+)
+QUERY_PLAN_CACHE_TTL_SECONDS = int(
+    QUERY_EXTRACT_CONFIG.get("cache_ttl_seconds", 900)
+)
+REDIS_CONFIG = CONFIG.get("redis", {})
+REDIS_ENABLED = _env_bool(
+    "REDIS_ENABLED",
+    bool(REDIS_CONFIG.get("enabled", True)),
+)
+REDIS_URL = os.getenv(
+    "REDIS_URL",
+    str(REDIS_CONFIG.get("url", "redis://127.0.0.1:6379/0")),
+)
+REDIS_KEY_PREFIX = os.getenv(
+    "REDIS_KEY_PREFIX",
+    str(REDIS_CONFIG.get("key_prefix", "semantic_ads")),
 )
 
 CHUNK_SIZE = int(CONFIG.get("chunking", {}).get("chunk_size", 512))

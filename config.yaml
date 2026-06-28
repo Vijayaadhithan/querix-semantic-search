@@ -12,6 +12,18 @@ query_extraction:
     - gemma-4-31b-it
     - gemini-3.1-flash-lite
   temperature: 0
+  # Per-model deadline. Timeouts advance to the next configured model.
+  timeout_seconds: 10
+  deterministic_fast_path: true
+  fuzzy_matching: true
+  cache_size: 500
+  cache_ttl_seconds: 900
+
+redis:
+  # Redis shares query plans across API workers and survives API restarts.
+  # Search automatically falls back to its bounded in-process cache.
+  enabled: true
+  key_prefix: semantic_ads
 
 embedding:
   model: embeddinggemma:latest

@@ -1,6 +1,9 @@
 import logging
+import hashlib
 import time
 import uuid
+from collections import OrderedDict
+from copy import deepcopy
 
 from bm25_index import PersistentBM25Index
 from gemini_client import last_gemini_metrics
@@ -8,6 +11,7 @@ from mysql_store import fetch_products_by_ids, mysql_source_name
 from ollama_client import last_ollama_embedding_metrics
 from query_planner import (
     build_query_filter_catalog,
+    deterministic_filter_query_plan,
     enrich_query_plan,
     extract_query_plan,
     query_filter_value_index,
@@ -29,7 +33,10 @@ from settings import (
     HYBRID_CANDIDATE_K,
     MYSQL_RESULT_ID_COLUMN,
     PRIMARY_RANKED_K,
+    QUERY_DETERMINISTIC_FAST_PATH,
     QUERY_EXTRACT_MODELS,
+    QUERY_PLAN_CACHE_SIZE,
+    QUERY_PLAN_CACHE_TTL_SECONDS,
     RELATED_TAIL_ENABLED,
     RERANK_CANDIDATE_K,
     RETRIEVAL_OVERFETCH_FACTOR,
@@ -64,6 +71,7 @@ class ProductSearchEngine:
         query_provider=None,
         embedding_provider=None,
         ranker=None,
+        shared_plan_cache=None,
     ):
         self.collection = collection or load_collection()
         self._owns_bm25_index = bm25_index is None
@@ -71,13 +79,86 @@ class ProductSearchEngine:
         self.query_provider = query_provider
         self.embedding_provider = embedding_provider
         self.ranker = ranker
+        self.shared_plan_cache = shared_plan_cache
         self.source_name = mysql_source_name()
         self.filter_value_index = query_filter_value_index(self.bm25_index)
         self.filter_catalog = build_query_filter_catalog(self.filter_value_index)
+        self._query_plan_cache: OrderedDict[str, tuple[float, dict]] = (
+            OrderedDict()
+        )
 
     def close(self) -> None:
         if self._owns_bm25_index:
             self.bm25_index.close()
+
+    @staticmethod
+    def _query_cache_key(query: str) -> str:
+        return " ".join(query.casefold().split())
+
+    def set_shared_plan_cache(self, cache) -> None:
+        self.shared_plan_cache = cache
+
+    def plan_cache_health(self) -> dict:
+        if self.shared_plan_cache is None:
+            return {
+                "redis_enabled": False,
+                "redis_connected": False,
+                "query_plan_cache_backend": "memory",
+            }
+        return {
+            "redis_enabled": True,
+            "redis_connected": bool(
+                getattr(self.shared_plan_cache, "connected", False)
+            ),
+            "query_plan_cache_backend": (
+                "redis+memory"
+                if getattr(self.shared_plan_cache, "connected", False)
+                else "memory_fallback"
+            ),
+        }
+
+    def _cached_plan(self, query: str) -> dict | None:
+        if QUERY_PLAN_CACHE_SIZE <= 0 or QUERY_PLAN_CACHE_TTL_SECONDS <= 0:
+            return None
+        key = self._query_cache_key(query)
+        cached = self._query_plan_cache.get(key)
+        if cached is not None:
+            expires_at, result = cached
+            if expires_at > time.monotonic():
+                self._query_plan_cache.move_to_end(key)
+                return deepcopy(result)
+            del self._query_plan_cache[key]
+        if self.shared_plan_cache is None:
+            return None
+        shared_key = hashlib.sha256(key.encode("utf-8")).hexdigest()
+        result = self.shared_plan_cache.get_json("query_plan", shared_key)
+        if result is None:
+            return None
+        self._cache_memory_plan(key, result)
+        return deepcopy(result)
+
+    def _cache_memory_plan(self, key: str, result: dict) -> None:
+        self._query_plan_cache[key] = (
+            time.monotonic() + QUERY_PLAN_CACHE_TTL_SECONDS,
+            deepcopy(result),
+        )
+        self._query_plan_cache.move_to_end(key)
+        while len(self._query_plan_cache) > QUERY_PLAN_CACHE_SIZE:
+            self._query_plan_cache.popitem(last=False)
+
+    def _cache_plan(self, query: str, result: dict) -> None:
+        if QUERY_PLAN_CACHE_SIZE <= 0 or QUERY_PLAN_CACHE_TTL_SECONDS <= 0:
+            return
+        key = self._query_cache_key(query)
+        self._cache_memory_plan(key, result)
+        if self.shared_plan_cache is not None:
+            shared_key = hashlib.sha256(key.encode("utf-8")).hexdigest()
+            self.shared_plan_cache.set_json(
+                "query_plan",
+                shared_key,
+                result,
+                QUERY_PLAN_CACHE_TTL_SECONDS,
+            )
 
     def plan(self, query: str, trace_id: str = "-") -> dict:
         started = time.perf_counter()
@@ -87,16 +168,44 @@ class ProductSearchEngine:
             len(query),
             " -> ".join(QUERY_EXTRACT_MODELS),
         )
-        query_plan = extract_query_plan(
-            query,
-            self.filter_catalog,
-            query_provider=self.query_provider,
+        query_plan = (
+            deterministic_filter_query_plan(
+                query,
+                self.filter_value_index,
+            )
+            if QUERY_DETERMINISTIC_FAST_PATH
+            else None
         )
-        query_plan = enrich_query_plan(
-            query,
-            query_plan,
-            self.filter_value_index,
-        )
+        if query_plan is None:
+            cached = self._cached_plan(query)
+            if cached is not None:
+                elapsed = time.perf_counter() - started
+                cached.update(
+                    {
+                        "query_model_metrics": {},
+                        "seconds": elapsed,
+                        "plan_cache_hit": True,
+                    }
+                )
+                LOGGER.info(
+                    "[search:%s] step=plan status=cache_hit path=%s "
+                    "duration_ms=%.0f",
+                    trace_id,
+                    cached["query_plan"].get("execution_path", "semantic"),
+                    elapsed * 1000,
+                )
+                return cached
+            query_plan = extract_query_plan(
+                query,
+                self.filter_catalog,
+                query_provider=self.query_provider,
+            )
+            query_plan = enrich_query_plan(
+                query,
+                query_plan,
+                self.filter_value_index,
+            )
+            query_plan["execution_path"] = "semantic"
         resolved, unresolved = resolve_query_filters(
             query_plan["filters"],
             self.filter_value_index,
@@ -104,6 +213,7 @@ class ProductSearchEngine:
         query_metrics = (
             last_gemini_metrics()
             if self.query_provider is None
+            and query_plan["execution_path"] == "semantic"
             else {}
         )
         elapsed = time.perf_counter() - started
@@ -112,28 +222,51 @@ class ProductSearchEngine:
             if query_plan.get("fallback_reason")
             else LOGGER.info
         )
+        model_label = query_metrics.get("model")
+        attempted_label = ",".join(
+            query_metrics.get("attempted_models", [])
+        )
+        if query_plan["execution_path"] == "deterministic_filter":
+            model_label = "none"
+            attempted_label = "none"
+        elif not model_label:
+            model_label = type(self.query_provider).__name__
+            attempted_label = attempted_label or "custom"
         log_method(
-            "[search:%s] step=plan status=%s model=%s attempted=%s "
-            "filters=%s unresolved=%d duration_ms=%.0f",
+            "[search:%s] step=plan status=%s path=%s model=%s attempted=%s "
+            "filters=%s unresolved=%d reason=%s duration_ms=%.0f",
             trace_id,
             (
-                "deterministic_fallback"
+                "provider_fallback"
                 if query_plan.get("fallback_reason")
                 else "complete"
             ),
-            query_metrics.get("model", type(self.query_provider).__name__),
-            ",".join(query_metrics.get("attempted_models", [])) or "custom",
+            query_plan["execution_path"],
+            model_label,
+            attempted_label,
             ",".join(active_filter_names(query_plan["filters"])) or "none",
             len(unresolved),
+            query_plan.get("fallback_reason") or "none",
             elapsed * 1000,
         )
-        return {
+        result = {
             "query_plan": query_plan,
             "resolved_filters": resolved,
             "unresolved_filters": unresolved,
             "query_model_metrics": query_metrics,
             "seconds": elapsed,
+            "plan_cache_hit": False,
         }
+        if not query_plan.get("fallback_reason"):
+            self._cache_plan(
+                query,
+                {
+                    "query_plan": query_plan,
+                    "resolved_filters": resolved,
+                    "unresolved_filters": unresolved,
+                },
+            )
+        return result
 
     def retrieve(
         self,
@@ -295,6 +428,62 @@ class ProductSearchEngine:
             "seconds": elapsed,
         }
 
+    def _filtered_search(
+        self,
+        planned: dict,
+        limit: int | None,
+        trace_id: str,
+        search_started: float,
+    ) -> dict:
+        result_limit = limit if limit is not None else RERANK_TOP_K
+        browse_started = time.perf_counter()
+        product_ids = related_tail_product_ids(
+            self.bm25_index,
+            planned["resolved_filters"],
+            planned["query_plan"].get("inferred_categories"),
+            planned["query_plan"]["target_ad_type"],
+            result_limit,
+        )
+        browse_seconds = time.perf_counter() - browse_started
+        LOGGER.info(
+            "[search:%s] step=fast_filter status=complete filters=%s "
+            "products=%d duration_ms=%.0f",
+            trace_id,
+            ",".join(
+                active_filter_names(planned["resolved_filters"])
+            ) or "none",
+            len(product_ids),
+            browse_seconds * 1000,
+        )
+        products = [
+            {**product, "result_tier": "filtered"}
+            for product in fetch_products_by_ids(product_ids)
+        ]
+        LOGGER.info(
+            "[search:%s] step=search status=complete path=deterministic_filter "
+            "products=%d duration_ms=%.0f",
+            trace_id,
+            len(products),
+            (time.perf_counter() - search_started) * 1000,
+        )
+        return {
+            **planned,
+            "vector_results": [],
+            "bm25_results": [],
+            "candidates": [],
+            "vector_seconds": 0.0,
+            "bm25_seconds": 0.0,
+            "embedding_model_metrics": {},
+            "reranked": [],
+            "reranker_load_seconds": 0.0,
+            "reranker_seconds": 0.0,
+            "related_tail_seconds": browse_seconds,
+            "primary_product_ids": [],
+            "related_product_ids": product_ids,
+            "product_ids": product_ids,
+            "products": products,
+        }
+
     def search(self, query: str, limit: int | None = None) -> dict:
         if limit is not None and limit <= 0:
             raise ValueError("Search limit must be greater than zero.")
@@ -317,6 +506,16 @@ class ProductSearchEngine:
             limit if limit is not None else "default",
         )
         planned = self.plan(query, trace_id=trace_id)
+        if (
+            planned["query_plan"].get("execution_path")
+            == "deterministic_filter"
+        ):
+            return self._filtered_search(
+                planned,
+                limit,
+                trace_id,
+                started,
+            )
         retrieved = self.retrieve(
             planned["query_plan"],
             planned["resolved_filters"],

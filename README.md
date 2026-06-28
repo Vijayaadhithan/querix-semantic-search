@@ -33,6 +33,8 @@ Defaults are configured in `config.yaml`:
 - Embedding model: `embeddinggemma:latest`
 - Query models, in fallback order: `gemma-4-26b-a4b-it`,
   `gemma-4-31b-it`, `gemini-3.1-flash-lite`
+- Deterministic fast path: enabled
+- Normalized query-plan cache: 500 entries for 15 minutes
 - Reranker: `Alibaba-NLP/gte-reranker-modernbert-base`
 - Vector candidates: 30
 - BM25 candidates: 30
@@ -115,34 +117,70 @@ The planner also handles:
 - Price ranges and upper/lower budgets
 - Searcher intent versus wanted-ad intent
 
+### Deterministic Fast Path
+
+Simple explicit catalog queries bypass hosted query extraction, embeddings,
+BM25 relevance search, and cross-encoder reranking. Examples include:
+
+```text
+bike
+bikes in Chennai under 1000
+1000 rent car
+car rent 1000 in Chennai
+camera per day
+someone looking for bikes
+bke
+bkes in chni under 1000
+```
+
+The fast path requires an explicit indexed main category or subcategory. Every
+remaining term must be explainable as a validated location, duration, price,
+ad intent, or harmless request word. Descriptive attributes keep the semantic
+pipeline active:
+
+```text
+red bike with ABS
+portable camera for distant subjects
+vehicle for recreational driving on rough terrain
+```
+
+High-confidence, unique typo matches are corrected against the actual indexed
+taxonomy and locations before fast-path selection. For example, `bke` maps to
+`Bike`, while `chni` after `in` maps to `Chennai`. The API reports these
+decisions in `interpreted_query.query_corrections`. If two catalog values are
+similarly close, no correction is forced and the semantic path remains
+available. Set `query_extraction.fuzzy_matching: false` to disable this.
+
+Compact queries are order-independent. When a simple validated category query
+contains exactly one standalone amount, the fast path treats it as the maximum
+rental budget. Values that look like quantities, model years, or specifications
+such as `2 cars`, `2020 car`, and `1000 cc car` are not treated as budgets.
+
+Normalized query plans are cached for 15 minutes with a 500-entry LRU bound.
+Case and repeated whitespace do not create different cache keys. The cache
+skips only planning; semantic retrieval and reranking still run for a repeated
+descriptive query.
+
 ## End-to-End Search Flow
 
-1. The first available configured Gemini API model rewrites the request into a
-   semantic query, keyword query, ad
-   intent, and possible structured constraints.
-2. Deterministic validation corrects duration, price, ad type, taxonomy,
+1. Normalize the query and test conservative spelling corrections against
+   indexed taxonomy and filter values.
+2. Test the deterministic grammar; if it does not match, check the normalized
+   query-plan cache.
+3. Simple explicit queries browse matching products directly and stop here.
+4. Descriptive queries use the first available configured Google model to
+   produce semantic and keyword queries plus possible constraints.
+5. Deterministic validation corrects duration, price, ad type, taxonomy,
    aliases, spelling, and hierarchy relationships.
-3. Explicit constraints become hard filters. Guessed categories become soft
+6. Explicit constraints become hard filters. Guessed categories become soft
    hints.
-4. Chroma retrieves semantically similar advertisement documents.
-5. SQLite FTS5 retrieves exact brands, models, keywords, categories, and
-   attributes using BM25.
-6. Reciprocal Rank Fusion combines vector and BM25 ranks without comparing
-   their incompatible raw scores.
-7. API searches over-fetch and fuse a 60-document primary reranker pool.
-8. The canonical `ads.type` value removes offer/wanted mismatches before the
-   final candidate K is applied.
-9. `Alibaba-NLP/gte-reranker-modernbert-base` scores the original user request
-   against all primary candidates and retains the strongest 60.
-10. Repeated exact titles are diversified in the first result window. Lower
-    scoring duplicates remain available later in the primary tier.
-11. A stable related tail is selected using whichever validated category,
-    location, duration, or price filters are available. It is not necessary
-    for every filter field to be present.
-12. Primary IDs are excluded from the related tail, and offer/wanted intent is
-    enforced in both tiers.
-13. Full records are fetched from the canonical `ads` table in this order:
-    60 reranked advertisements, then up to 140 related advertisements.
+7. Chroma vector search and SQLite FTS5/BM25 retrieve primary candidates.
+8. Reciprocal Rank Fusion combines their ranks, and `ads.type` removes
+   offer/wanted mismatches.
+9. `Alibaba-NLP/gte-reranker-modernbert-base` orders the 60 primary candidates.
+10. A stable related tail is selected using whichever validated category,
+    location, duration, or price filters are available.
+11. Full MySQL records are returned in primary-then-related order.
 
 The extraction model never generates product records. Returned data always
 comes from MySQL.
@@ -152,7 +190,8 @@ comes from MySQL.
 `ProductSearchEngine` in `src/search_engine.py` exposes the complete:
 
 ```text
-plan -> retrieve -> filter -> rerank primary -> append filtered tail -> fetch ads
+cache/fast-plan -> filter browse
+                -> semantic retrieve -> rerank -> append filtered tail
 ```
 
 flow. The CLI and evaluation tools use this same implementation.
@@ -170,6 +209,37 @@ mapping remain provider-independent.
 
 ## Setup
 
+### One-command macOS bootstrap
+
+On a new Mac with Homebrew installed:
+
+```bash
+./scripts/bootstrap_macos.sh
+```
+
+This installs and starts Ollama and Redis, creates `.venv`, installs Python
+dependencies, creates `.env` from `.env.example` when needed, pulls
+`embeddinggemma:latest`, prefetches the ModernBERT reranker, and runs the
+environment doctor. It does not install Neo4j or PostgreSQL because this
+runtime does not use them.
+
+MySQL is required for the populated `ads_search_ready` and `ads` tables. To
+also install and start an empty local MySQL server, use:
+
+```bash
+INSTALL_MYSQL=1 ./scripts/bootstrap_macos.sh
+```
+
+Installing MySQL does not create or populate the application tables. To skip
+the model download during a lightweight setup, set `SKIP_MODEL_PREFETCH=1`.
+Rerun all infrastructure checks at any time with:
+
+```bash
+.venv/bin/python scripts/doctor.py --strict
+```
+
+### Manual setup
+
 Create `.env`:
 
 ```bash
@@ -177,6 +247,11 @@ OLLAMA_BASE_URL=http://localhost:11434
 OLLAMA_KEEP_ALIVE=-1
 GEMINI_API_KEY=your-gemini-api-key
 GEMINI_API_BASE_URL=https://generativelanguage.googleapis.com/v1beta
+GEMINI_TIMEOUT_SECONDS=10
+
+REDIS_ENABLED=true
+REDIS_URL=redis://127.0.0.1:6379/0
+REDIS_KEY_PREFIX=semantic_ads
 
 MYSQL_HOST=localhost
 MYSQL_PORT=3306
@@ -331,6 +406,7 @@ Expected startup output:
 
 ```text
 INFO: Waiting for application startup.
+INFO: Redis query-plan cache connected key_prefix=semantic_ads
 INFO: Preloading reranker Alibaba-NLP/gte-reranker-modernbert-base once for this process...
 INFO: Reranker ready in 2797 ms.
 INFO: Preloading the Ollama embedding model...
@@ -342,7 +418,7 @@ INFO: Uvicorn running on http://127.0.0.1:8000
 Each new search prints a correlated flow using an eight-character search ID:
 
 ```text
-INFO: [search:a1b2c3d4] step=search status=start query_chars=39 limit=60
+INFO: [search:a1b2c3d4] step=search status=start query_chars=39 limit=200
 INFO: [search:a1b2c3d4] step=plan status=start query_chars=39 models=gemma-4-26b-a4b-it -> ...
 INFO: step=query_model status=attempt model=gemma-4-26b-a4b-it position=1/3
 INFO: step=query_model status=success model=gemma-4-26b-a4b-it duration_ms=1120
@@ -353,6 +429,17 @@ INFO: [search:a1b2c3d4] step=related_tail status=complete primary=60 related=140
 INFO: [search:a1b2c3d4] step=mysql_map status=complete rows=200
 INFO: [search:a1b2c3d4] step=search status=complete products=200 duration_ms=2840
 ```
+
+Fast-path logs contain `path=deterministic_filter`, `model=none`, and
+`step=fast_filter`. Repeated normalized queries log
+`step=plan status=cache_hit`.
+
+Query plans are cached for 15 minutes by default. A bounded in-process LRU is
+checked first; Redis is the shared backing cache, allowing a plan to survive an
+API restart or be reused by another worker. Redis keys contain a SHA-256 digest
+of the normalized query rather than the query text. If Redis is stopped,
+search continues with the in-process cache and periodically retries Redis.
+Disable Redis with `REDIS_ENABLED=false`.
 
 When a model is exhausted or temporarily unavailable, a warning shows the HTTP
 status and next model. Logs include model names, stage timings, candidate
@@ -395,7 +482,10 @@ Example health output:
       "total_ms": 128.53,
       "load_ms": 83.12
     }
-  }
+  },
+  "redis_enabled": true,
+  "redis_connected": true,
+  "query_plan_cache_backend": "redis+memory"
 }
 ```
 
@@ -421,7 +511,7 @@ The response shape is:
   "cached": false,
   "items": [
     {
-      "result_tier": "ranked",
+      "result_tier": "filtered",
       "id": "231049",
       "title": "Bajaj Pulsar 220 Bike for Daily Rent",
       "rental_duration": "Per Day",
@@ -429,9 +519,12 @@ The response shape is:
     }
   ],
   "interpreted_query": {
-    "semantic_query": "bike",
-    "keyword_query": "bike",
-    "target_ad_type": "offer"
+    "semantic_query": "bike in Chennai under 1000 per day",
+    "keyword_query": "bike in Chennai under 1000 per day",
+    "target_ad_type": "offer",
+    "execution_path": "deterministic_filter",
+    "plan_cache_hit": false,
+    "query_corrections": []
   },
   "applied_filters": {
     "categorical": {
@@ -445,17 +538,17 @@ The response shape is:
   },
   "unresolved_filters": {},
   "timings_ms": {
-    "planning": 10007,
-    "vector_search": 1457,
-    "bm25_search": 245,
-    "related_tail": 75,
+    "planning": 136,
+    "vector_search": 0,
+    "bm25_search": 0,
+    "related_tail": 268,
     "reranker_load": 0,
-    "reranking": 5162,
-    "total": 17334,
-    "query_model_total": 9843,
-    "query_model_load": 228,
-    "embedding_model_total": 122,
-    "embedding_model_load": 86
+    "reranking": 0,
+    "total": 611,
+    "query_model_total": 0,
+    "query_model_load": 0,
+    "embedding_model_total": 0,
+    "embedding_model_load": 0
   },
   "pagination": {
     "page_size": 20,
@@ -473,11 +566,13 @@ returns an explicit field allowlist. Internal user IDs, phone numbers, hidden
 contact data, keywords, and administrative fields are not serialized. Rows
 with a non-null `deleted_at` are excluded. The API does not guess visibility
 from `ads.status`, because wanted rows use a different status lifecycle.
-`result_tier` is the only synthetic result field: `ranked` identifies the
-primary cross-encoder results and `related` identifies the filtered tail.
-With the default page size, pages 1–3 contain the 60 primary ranked results;
-page 4 onward contains the related tail. If fewer than 60 primary results are
-available, the related tier begins immediately after the last primary result.
+`result_tier` is the only synthetic result field: `filtered` identifies direct
+fast-path results, `ranked` identifies primary cross-encoder results, and
+`related` identifies the semantic pipeline's filtered tail. Fast-path result
+windows contain only `filtered` items. For semantic searches, pages 1–3 contain
+the 60 primary ranked results and page 4 onward contains the related tail. If
+fewer than 60 primary results are available, the related tier begins
+immediately after the last primary result.
 
 ### Infinite scroll / next batch
 
@@ -497,7 +592,7 @@ Abbreviated page-2 output:
   "cached": true,
   "items": [
     {
-      "result_tier": "ranked",
+      "result_tier": "filtered",
       "id": "10094",
       "title": "Honda Dream Yuga Bike for Daily Rent",
       "rental_fee": "600.00"
@@ -514,7 +609,7 @@ Abbreviated page-2 output:
 }
 ```
 
-The measured page-2 response time was 1.1 ms because it used the cached ranked
+The measured page-2 response time was 1.1 ms because it used the cached result
 window.
 
 The server constructs the configured combined result window once and keeps it
@@ -524,6 +619,12 @@ retrieval, reranking, or related-tail selection. Cursor responses have
 `"cached": true`. A cursor is intentionally opaque; the frontend should store
 and return it unchanged. An expired cursor returns HTTP `410`, and the frontend
 must start a new search using `query`.
+
+Pagination covers the configured result window, not an unlimited SQL catalog
+scan. The default maximum is 200 products before API visibility filtering,
+served 20 at a time. If more than 200 products match `bike`, the current cursor
+cannot continue beyond that window. Full-catalog scrolling would require
+database keyset pagination and a different API/session design.
 
 `K` controls primary candidate-pool depth; it is not the end of the catalog.
 The API fuses 60 primary candidates, reranks them, and places those 60 first.
@@ -546,10 +647,13 @@ origin. Use a comma-separated allowlist; do not use `*` with private data.
 
 ### Hosted query planning
 
-The Google API is used only for structured query extraction. The configured
-order is `gemma-4-26b-a4b-it`, `gemma-4-31b-it`,
+The Google API is used only for structured extraction when a query does not
+qualify for the deterministic fast path and its normalized plan is not cached.
+The configured order is `gemma-4-26b-a4b-it`, `gemma-4-31b-it`,
 then `gemini-3.1-flash-lite`. A request moves to the next model only for HTTP
-429 (quota/rate limit) or a temporary HTTP 5xx provider failure.
+429 (quota/rate limit), a temporary HTTP 5xx provider failure, a connection
+failure, or a per-model timeout. `GEMINI_TIMEOUT_SECONDS` defaults to 10
+seconds, so one stalled model no longer blocks planning for 60 seconds.
 Authentication, permission, and malformed-request errors do not trigger
 fallback. Quota numbers are not hardcoded because Google applies them per
 project and model and may change them; the provider's HTTP response is the
@@ -603,10 +707,9 @@ cases and Mean Reciprocal Rank.
 Latest verified results:
 
 ```text
-57 unit tests passed
-9/9 query-plan cases passed
+70 unit tests passed
 5/5 end-to-end retrieval cases passed
-MRR = 0.900
+MRR = 0.672
 ```
 
 Compile-check:
@@ -652,6 +755,7 @@ src/
   providers.py            Replaceable model-provider protocols
   gemini_client.py        Hosted structured-query provider
   ollama_client.py        Local embedding provider
+  redis_cache.py          Optional shared Redis query-plan cache
   bm25_index.py           Persistent SQLite FTS5 index
   mysql_store.py          MySQL reads and canonical record lookup
   ingestion_service.py    Incremental ingestion workflows

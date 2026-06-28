@@ -27,17 +27,21 @@ def require_pymysql():
 
 def mysql_connection(cursorclass=None):
     pymysql = require_pymysql()
+    connection_options = {
+        "host": MYSQL_HOST,
+        "port": MYSQL_PORT,
+        "user": MYSQL_USER,
+        "password": MYSQL_PASSWORD,
+        "database": MYSQL_DATABASE,
+        "charset": "utf8mb4",
+        "autocommit": True,
+        "read_timeout": 300,
+        "write_timeout": 300,
+    }
+    if cursorclass is not None:
+        connection_options["cursorclass"] = cursorclass
     return pymysql.connect(
-        host=MYSQL_HOST,
-        port=MYSQL_PORT,
-        user=MYSQL_USER,
-        password=MYSQL_PASSWORD,
-        database=MYSQL_DATABASE,
-        charset="utf8mb4",
-        autocommit=True,
-        cursorclass=cursorclass,
-        read_timeout=300,
-        write_timeout=300,
+        **connection_options,
     )
 
 

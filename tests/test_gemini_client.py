@@ -2,6 +2,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import requests
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
@@ -89,7 +90,7 @@ def test_structured_chat_uses_generate_content_json_schema(monkeypatch):
         "responseMimeType": "application/json",
         "responseJsonSchema": schema,
     }
-    assert captured["timeout"] == 60
+    assert captured["timeout"] == 10
     assert provider.last_chat_metrics["total_ms"] >= 0
 
 
@@ -158,3 +159,120 @@ def test_default_structured_chat_falls_back_for_unavailable_models(monkeypatch):
         "model-b",
         "model-c",
     ]
+
+
+def test_provider_timeout_becomes_retryable_model_failure(monkeypatch):
+    def timeout(*_args, **_kwargs):
+        raise requests.ReadTimeout("slow provider")
+
+    monkeypatch.setattr("gemini_client.requests.post", timeout)
+    provider = GeminiProvider(
+        api_key="test-key",
+        base_url="https://generativelanguage.test/v1beta",
+        timeout_seconds=2,
+    )
+
+    with pytest.raises(GeminiModelUnavailableError) as caught:
+        provider.structured_chat(
+            "model-a",
+            "system",
+            "user",
+            {"type": "object"},
+        )
+
+    assert caught.value.model == "model-a"
+    assert caught.value.status_code is None
+    assert caught.value.reason == "timeout"
+    assert provider.last_chat_metrics["model"] == "model-a"
+
+
+def test_default_structured_chat_advances_after_timeout(monkeypatch):
+    class TimeoutThenSuccessProvider:
+        def __init__(self):
+            self.calls = []
+            self.last_chat_metrics = {}
+
+        def structured_chat(self, model, *_args):
+            self.calls.append(model)
+            self.last_chat_metrics = {
+                "total_ms": 1.0,
+                "load_ms": 0.0,
+                "model": model,
+            }
+            if model == "model-a":
+                raise GeminiModelUnavailableError(
+                    model,
+                    reason="timeout",
+                )
+            return '{"query":"camera"}'
+
+    provider = TimeoutThenSuccessProvider()
+    monkeypatch.setattr(
+        gemini_client,
+        "QUERY_EXTRACT_MODELS",
+        ("model-a", "model-b", "model-c"),
+    )
+    monkeypatch.setattr(
+        gemini_client,
+        "DEFAULT_GEMINI_PROVIDER",
+        provider,
+    )
+
+    content = gemini_client.structured_chat(
+        "model-a",
+        "system",
+        "user",
+        {"type": "object"},
+    )
+
+    assert content == '{"query":"camera"}'
+    assert provider.calls == ["model-a", "model-b"]
+    assert provider.last_chat_metrics["model"] == "model-b"
+    assert provider.last_chat_metrics["attempted_models"] == [
+        "model-a",
+        "model-b",
+    ]
+
+
+def test_all_failed_models_keep_attempted_metrics(monkeypatch):
+    class AlwaysUnavailableProvider:
+        def __init__(self):
+            self.last_chat_metrics = {}
+
+        def structured_chat(self, model, *_args):
+            self.last_chat_metrics = {
+                "total_ms": 1.0,
+                "load_ms": 0.0,
+                "model": model,
+            }
+            raise GeminiModelUnavailableError(
+                model,
+                reason="timeout",
+            )
+
+    provider = AlwaysUnavailableProvider()
+    monkeypatch.setattr(
+        gemini_client,
+        "QUERY_EXTRACT_MODELS",
+        ("model-a", "model-b"),
+    )
+    monkeypatch.setattr(
+        gemini_client,
+        "DEFAULT_GEMINI_PROVIDER",
+        provider,
+    )
+
+    with pytest.raises(RuntimeError, match="last_reason=timeout"):
+        gemini_client.structured_chat(
+            "model-a",
+            "system",
+            "user",
+            {"type": "object"},
+        )
+
+    assert provider.last_chat_metrics["model"] == "model-b"
+    assert provider.last_chat_metrics["attempted_models"] == [
+        "model-a",
+        "model-b",
+    ]
+    assert provider.last_chat_metrics["failure_reason"] == "timeout"

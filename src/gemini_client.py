@@ -8,19 +8,28 @@ from settings import (
     GEMINI_API_BASE_URL,
     GEMINI_API_KEY,
     QUERY_EXTRACT_MODELS,
+    QUERY_EXTRACT_TIMEOUT_SECONDS,
 )
 
-FALLBACK_HTTP_STATUSES = {429, 500, 502, 503, 504}
+FALLBACK_HTTP_STATUSES = {408, 429, 500, 502, 503, 504}
 LOGGER = logging.getLogger("uvicorn.error")
 
 
 class GeminiModelUnavailableError(RuntimeError):
-    def __init__(self, model: str, status_code: int):
+    def __init__(
+        self,
+        model: str,
+        status_code: int | None = None,
+        reason: str | None = None,
+    ):
         self.model = model
         self.status_code = status_code
+        self.reason = reason or (
+            f"http_{status_code}" if status_code is not None else "unavailable"
+        )
         super().__init__(
             f"Google model '{model}' is temporarily unavailable "
-            f"(HTTP {status_code})."
+            f"({self.reason})."
         )
 
 
@@ -29,9 +38,11 @@ class GeminiProvider:
         self,
         api_key: str = GEMINI_API_KEY,
         base_url: str = GEMINI_API_BASE_URL,
+        timeout_seconds: float = QUERY_EXTRACT_TIMEOUT_SECONDS,
     ):
         self.api_key = api_key
         self.base_url = base_url.rstrip("/")
+        self.timeout_seconds = timeout_seconds
         self.last_chat_metrics: dict[str, float | str | list[str]] = {}
 
     def structured_chat(
@@ -74,7 +85,7 @@ class GeminiProvider:
                         "responseJsonSchema": schema,
                     },
                 },
-                timeout=60,
+                timeout=self.timeout_seconds,
             )
             response.raise_for_status()
             payload = response.json()
@@ -95,11 +106,21 @@ class GeminiProvider:
             if status_code in FALLBACK_HTTP_STATUSES:
                 raise GeminiModelUnavailableError(
                     model,
-                    status_code,
+                    status_code=status_code,
                 ) from exc
             raise RuntimeError(
                 f"Cannot extract a structured query with Google model "
                 f"'{model}' (HTTP {status_code})."
+            ) from exc
+        except requests.Timeout as exc:
+            raise GeminiModelUnavailableError(
+                model,
+                reason="timeout",
+            ) from exc
+        except requests.ConnectionError as exc:
+            raise GeminiModelUnavailableError(
+                model,
+                reason="connection_error",
             ) from exc
         except (
             requests.RequestException,
@@ -179,11 +200,18 @@ def structured_chat(
             return content
         except GeminiModelUnavailableError as exc:
             last_error = exc
+            DEFAULT_GEMINI_PROVIDER.last_chat_metrics.update(
+                {
+                    "total_ms": (time.perf_counter() - started) * 1000,
+                    "attempted_models": list(attempted_models),
+                    "failure_reason": exc.reason,
+                }
+            )
             LOGGER.warning(
-                "step=query_model status=fallback model=%s http_status=%d "
+                "step=query_model status=fallback model=%s reason=%s "
                 "next_model=%s",
                 candidate_model,
-                exc.status_code,
+                exc.reason,
                 (
                     models[position]
                     if position < len(models)
@@ -191,11 +219,13 @@ def structured_chat(
                 ),
             )
     LOGGER.error(
-        "step=query_model status=failed attempted_models=%s",
+        "step=query_model status=failed attempted_models=%s reason=%s",
         ",".join(attempted_models),
+        last_error.reason if last_error is not None else "unknown",
     )
     raise RuntimeError(
-        "All configured Google query models are rate-limited or unavailable."
+        "All configured Google query models are unavailable "
+        f"(last_reason={last_error.reason if last_error else 'unknown'})."
     ) from last_error
 
 

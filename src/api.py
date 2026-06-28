@@ -14,6 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from ollama_client import preload_ollama_embedding
+from redis_cache import create_redis_cache
 from search_engine import ProductSearchEngine
 from settings import (
     API_CORS_ORIGINS,
@@ -26,6 +27,9 @@ from settings import (
     API_SESSION_TTL_SECONDS,
     APP_NAME,
     RERANK_MODEL,
+    REDIS_ENABLED,
+    REDIS_KEY_PREFIX,
+    REDIS_URL,
 )
 
 LOGGER = logging.getLogger("uvicorn.error")
@@ -123,6 +127,9 @@ class HealthResponse(BaseModel):
     reranker_loaded: bool
     reranker_load_ms: float
     embedding_warmup: dict[str, Any]
+    redis_enabled: bool
+    redis_connected: bool
+    query_plan_cache_backend: str
 
 
 @dataclass
@@ -236,6 +243,15 @@ class ProductSearchService:
     def health(self) -> HealthResponse:
         with self._engine_lock:
             indexed_products = self.engine.bm25_index.count()
+            cache_health = (
+                self.engine.plan_cache_health()
+                if hasattr(self.engine, "plan_cache_health")
+                else {
+                    "redis_enabled": False,
+                    "redis_connected": False,
+                    "query_plan_cache_backend": "memory",
+                }
+            )
         return HealthResponse(
             status="ok",
             app=APP_NAME,
@@ -246,6 +262,7 @@ class ProductSearchService:
             reranker_loaded=self.engine.ranker is not None,
             reranker_load_ms=self.reranker_load_ms,
             embedding_warmup=self.embedding_warmup,
+            **cache_health,
         )
 
     def search(self, request: SearchRequest) -> SearchResponse:
@@ -269,6 +286,19 @@ class ProductSearchService:
             key: query_plan.get(key)
             for key in ("semantic_query", "keyword_query", "target_ad_type")
         }
+        interpreted_query.update(
+            {
+                "execution_path": query_plan.get(
+                    "execution_path",
+                    "semantic",
+                ),
+                "plan_cache_hit": bool(result.get("plan_cache_hit")),
+                "query_corrections": query_plan.get(
+                    "query_corrections",
+                    [],
+                ),
+            }
+        )
         timings_ms = {
             "planning": result.get("seconds", 0.0) * 1000,
             "vector_search": result.get("vector_seconds", 0.0) * 1000,
@@ -360,10 +390,17 @@ def create_app(
     @asynccontextmanager
     async def lifespan(application: FastAPI):
         if service is None:
+            redis_cache = create_redis_cache(
+                REDIS_ENABLED,
+                REDIS_URL,
+                REDIS_KEY_PREFIX,
+            )
             engine = engine_factory()
+            engine.set_shared_plan_cache(redis_cache)
             application.state.search_service = ProductSearchService(engine)
         else:
             engine = None
+            redis_cache = None
             application.state.search_service = service
         if API_PRELOAD_RERANKER:
             LOGGER.info("Preloading reranker %s once for this process...", RERANK_MODEL)
@@ -382,6 +419,8 @@ def create_app(
         finally:
             if engine is not None:
                 engine.close()
+            if redis_cache is not None:
+                redis_cache.close()
 
     application = FastAPI(
         title=f"{APP_NAME} API",
