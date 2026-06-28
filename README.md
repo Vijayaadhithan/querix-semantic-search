@@ -52,6 +52,17 @@ derived from a unique database relationship:
 - Minimum and maximum rental fee
 - Explicit main category or subcategory
 
+Advertisement intent uses the canonical `ads.type` field:
+
+- `type = 1`: offer advertisement
+- `type = 2`: wanted/request advertisement
+
+`I need a bike` means the searcher wants an available offer, so results must be
+`type = 1`. `Someone looking for bikes` asks for another person's request, so
+results must be `type = 2`. The deterministic planner enforces this perspective
+after LLM extraction. `ads.status` is a separate lifecycle field and must not
+be used to infer offer versus wanted intent.
+
 For example, `Quad Bike in Bangalore per hour` can safely resolve to:
 
 ```json
@@ -432,7 +443,8 @@ The response shape is:
 `items` come from canonical rows in the MySQL `ads` table, but the public API
 returns an explicit field allowlist. Internal user IDs, phone numbers, hidden
 contact data, keywords, and administrative fields are not serialized. Rows
-with a non-active `status` or non-null `deleted_at` are also excluded.
+with a non-null `deleted_at` are excluded. The API does not guess visibility
+from `ads.status`, because wanted rows use a different status lifecycle.
 
 ### Infinite scroll / next batch
 
@@ -625,10 +637,10 @@ eval/
   production-quality claims.
 - Soft category boosts and candidate counts still require benchmark-driven
   tuning.
-- The HTTP API currently treats `status = 1` and `deleted_at IS NULL` as the
-  public visibility policy. Confirm that policy with the owning team before
-  production deployment. The lower-level engine and CLI still return canonical
-  lookup rows without applying that API presentation rule.
+- The HTTP API excludes soft-deleted rows but does not interpret `ads.status`.
+  Confirm the complete status/visibility policy with the owning team before
+  production deployment. The lower-level engine and CLI return canonical rows
+  without applying the API presentation rule.
 - City aliases are not a complete geographic knowledge base.
 - Exact-title diversification can hide multiple legitimate listings with the
   same title; business-specific deduplication should eventually use seller,

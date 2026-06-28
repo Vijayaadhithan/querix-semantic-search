@@ -338,9 +338,9 @@ class ProductSearchService:
 
 
 def product_is_visible(product: dict[str, Any]) -> bool:
-    status = product.get("status")
-    if status is not None and str(status) != "1":
-        return False
+    # ads.type is the canonical offer/wanted discriminator. Do not infer
+    # visibility from ads.status: the source uses multiple status lifecycles,
+    # and valid wanted rows commonly carry status=2.
     return product.get("deleted_at") is None
 
 

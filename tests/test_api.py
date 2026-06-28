@@ -128,19 +128,32 @@ def test_http_contract_and_validation():
     assert invalid.status_code == 422
 
 
-def test_api_excludes_inactive_and_soft_deleted_products():
+def test_api_keeps_wanted_status_two_and_excludes_soft_deleted_products():
     engine = FakeEngine()
     original_search = engine.search
 
     def search_with_hidden_products(query, limit=None):
         result = original_search(query, limit)
         result["products"] = [
-            {"id": 1, "title": "Visible", "status": "1", "deleted_at": None},
-            {"id": 2, "title": "Inactive", "status": "0", "deleted_at": None},
+            {
+                "id": 1,
+                "type": "1",
+                "title": "Offer",
+                "status": "1",
+                "deleted_at": None,
+            },
+            {
+                "id": 2,
+                "type": "2",
+                "title": "Wanted",
+                "status": "2",
+                "deleted_at": None,
+            },
             {
                 "id": 3,
+                "type": "2",
                 "title": "Deleted",
-                "status": "1",
+                "status": "2",
                 "deleted_at": "2025-01-01",
             },
         ]
@@ -151,4 +164,7 @@ def test_api_excludes_inactive_and_soft_deleted_products():
 
     response = service.search(SearchRequest(query="camera"))
 
-    assert response.items == [{"id": 1, "title": "Visible"}]
+    assert response.items == [
+        {"id": 1, "type": "1", "title": "Offer"},
+        {"id": 2, "type": "2", "title": "Wanted"},
+    ]
