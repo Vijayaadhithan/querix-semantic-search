@@ -20,7 +20,8 @@ specific product category.
 ## Current Stack
 
 - MySQL: source and canonical advertisement records
-- Ollama: local embeddings and structured query extraction
+- Ollama: local embeddings only
+- Gemini API: hosted structured query extraction
 - Chroma: persistent vector index
 - SQLite FTS5: persistent BM25 keyword index
 - `Alibaba-NLP/gte-reranker-modernbert-base`: local cross-encoder reranking
@@ -30,7 +31,8 @@ Defaults are configured in `config.yaml`:
 
 - Collection: `local_data`
 - Embedding model: `embeddinggemma:latest`
-- Query model: `gemma4:12b`
+- Query models, in fallback order: `gemma-4-26b-a4b-it`,
+  `gemma-4-31b-it`, `gemini-3.1-flash-lite`
 - Reranker: `Alibaba-NLP/gte-reranker-modernbert-base`
 - Vector candidates: 30
 - BM25 candidates: 30
@@ -112,7 +114,8 @@ The planner also handles:
 
 ## End-to-End Search Flow
 
-1. `gemma4:12b` rewrites the request into a semantic query, keyword query, ad
+1. The first available configured Gemini API model rewrites the request into a
+   semantic query, keyword query, ad
    intent, and possible structured constraints.
 2. Deterministic validation corrects duration, price, ad type, taxonomy,
    aliases, spelling, and hierarchy relationships.
@@ -155,9 +158,10 @@ Provider protocols are defined in `src/providers.py`:
 - `StructuredQueryProvider`
 - `RerankingProvider`
 
-Ollama is the current local provider. A hosted API can later implement these
-interfaces without replacing filtering, retrieval, fusion, evaluation, or
-MySQL mapping.
+Ollama provides embeddings and the Google Generative Language API provides
+schema-constrained query plans using Gemma or Gemini models. Both use the same
+provider boundaries, so filtering, retrieval, fusion, evaluation, and MySQL
+mapping remain provider-independent.
 
 ## Setup
 
@@ -166,6 +170,8 @@ Create `.env`:
 ```bash
 OLLAMA_BASE_URL=http://localhost:11434
 OLLAMA_KEEP_ALIVE=-1
+GEMINI_API_KEY=your-gemini-api-key
+GEMINI_API_BASE_URL=https://generativelanguage.googleapis.com/v1beta
 
 MYSQL_HOST=localhost
 MYSQL_PORT=3306
@@ -186,11 +192,10 @@ Install dependencies:
 .venv/bin/python -m pip install -r requirements.txt
 ```
 
-Install local Ollama models:
+Install the local Ollama embedding model:
 
 ```bash
 ollama pull embeddinggemma:latest
-ollama pull gemma4:12b
 ```
 
 The ModernBERT reranker loads from the local Hugging Face cache. If it is not
@@ -323,20 +328,41 @@ Expected startup output:
 INFO: Waiting for application startup.
 INFO: Preloading reranker Alibaba-NLP/gte-reranker-modernbert-base once for this process...
 INFO: Reranker ready in 2797 ms.
-INFO: Preloading Ollama embedding and query models...
-INFO: Ollama models ready (embedding 129 ms, query 0 ms).
+INFO: Preloading the Ollama embedding model...
+INFO: Ollama embedding model ready in 129 ms.
 INFO: Application startup complete.
 INFO: Uvicorn running on http://127.0.0.1:8000
 ```
+
+Each new search prints a correlated flow using an eight-character search ID:
+
+```text
+INFO: [search:a1b2c3d4] step=search status=start query_chars=39 limit=60
+INFO: [search:a1b2c3d4] step=plan status=start query_chars=39 models=gemma-4-26b-a4b-it -> ...
+INFO: step=query_model status=attempt model=gemma-4-26b-a4b-it position=1/3
+INFO: step=query_model status=success model=gemma-4-26b-a4b-it duration_ms=1120
+INFO: [search:a1b2c3d4] step=plan status=complete model=gemma-4-26b-a4b-it ...
+INFO: [search:a1b2c3d4] step=retrieve status=complete vector=30 bm25=30 ...
+INFO: [search:a1b2c3d4] step=rerank status=complete results=60 ...
+INFO: [search:a1b2c3d4] step=mysql_map status=complete rows=60
+INFO: [search:a1b2c3d4] step=search status=complete products=60 duration_ms=2840
+```
+
+When a model is exhausted or temporarily unavailable, a warning shows the HTTP
+status and next model. Logs include model names, stage timings, candidate
+counts, and filter field names. They intentionally omit the API key, raw query,
+filter values, and product contents. Set `API_LOG_LEVEL=warning` in `.env` for
+quiet operation, or `API_LOG_LEVEL=debug` for library diagnostics.
 
 The first reranker run downloads approximately 598 MB of model weights. The
 measured first download plus load was 49.7 seconds; subsequent cached startup
 was about 2.8-3.1 seconds on the current machine.
 
-The API also preloads `embeddinggemma:latest` and `gemma4:12b`.
-`OLLAMA_KEEP_ALIVE=-1` keeps both resident until Ollama is stopped. Keep one API
-process running: requests reuse the loaded reranker and Ollama models. Run one
-API worker because every additional worker would hold another reranker copy.
+The API preloads `embeddinggemma:latest`.
+`OLLAMA_KEEP_ALIVE=-1` keeps it resident until Ollama is stopped. Keep one API
+process running: requests reuse the loaded reranker and embedding model. Run
+one API worker because every additional worker would hold another reranker
+copy.
 
 Interactive OpenAPI documentation is available at
 `http://127.0.0.1:8000/docs`. Check readiness with:
@@ -357,16 +383,11 @@ Example health output:
   "reranker_model": "Alibaba-NLP/gte-reranker-modernbert-base",
   "reranker_loaded": true,
   "reranker_load_ms": 2796.68,
-  "ollama_warmup": {
+  "embedding_warmup": {
     "embedding_model": {
       "model": "embeddinggemma:latest",
       "total_ms": 128.53,
       "load_ms": 83.12
-    },
-    "query_model": {
-      "model": "gemma4:12b",
-      "total_ms": 0,
-      "load_ms": 0
     }
   }
 }
@@ -510,31 +531,34 @@ API behavior is configured under `api` in `config.yaml`:
 Set `API_CORS_ORIGINS` in `.env` when a browser frontend runs on a different
 origin. Use a comma-separated allowlist; do not use `*` with private data.
 
-### Local query model versus hosted API
+### Hosted query planning
 
-Keeping `gemma4:12b` resident removes cold weight loading, but it does not
-remove inference time. In the measured warm requests:
+The Google API is used only for structured query extraction. The configured
+order is `gemma-4-26b-a4b-it`, `gemma-4-31b-it`,
+then `gemini-3.1-flash-lite`. A request moves to the next model only for HTTP
+429 (quota/rate limit) or a temporary HTTP 5xx provider failure.
+Authentication, permission, and malformed-request errors do not trigger
+fallback. Quota numbers are not hardcoded because Google applies them per
+project and model and may change them; the provider's HTTP response is the
+source of truth. Local embeddings, filtering, BM25, reranking, and canonical
+MySQL result retrieval are unchanged. The API key is read from `.env` and sent
+in the `X-goog-api-key` header.
 
-- Query-model load time: approximately 0.23 seconds
-- Query-model processing time: approximately 9.8-10.1 seconds
-- Full first-page request: approximately 16.7-17.3 seconds
-- Cached next page: approximately 1.1 ms
+`gemini-3.1-flash-live-preview` is intentionally excluded. It is a voice-first
+Live API model that exposes bidirectional generation rather than the
+`generateContent` endpoint used here, and it does not support structured JSON
+outputs. It is appropriate for a separate real-time audio interface, not this
+request-response query planner.
 
-Therefore the current bottleneck is query understanding, not repeated model
-loading. Keep the local model when privacy and zero per-request model cost are
-more important than first-page latency. If the production first-page target is
-below roughly 2-3 seconds, use a hosted low-latency structured-output model only
-for query extraction, while retaining local embeddings, filtering, reranking,
-and MySQL results. Query text, location, and budget would then leave the local
-machine, so that change requires an explicit privacy decision.
-
-A smaller local query model is the intermediate option. It should replace only
-`query_extraction.model` and must pass `eval/query_cases.json` before adoption.
+This removes the local 12B model's memory and cold-start cost. The tradeoff is
+that each raw search query, including any stated location and budget, is sent to
+Google. It also adds network dependency, provider rate limits, and usage cost.
+If every configured Google model is unavailable, the planner falls back to the
+original query with no model-extracted filters.
 
 To release Ollama memory after stopping the API:
 
 ```bash
-ollama stop gemma4:12b
 ollama stop embeddinggemma:latest
 ```
 
@@ -613,7 +637,8 @@ src/
   retrieval.py            Vector, BM25, RRF, and ad-type filtering
   reranker.py             Transformer cross-encoder adapter
   providers.py            Replaceable model-provider protocols
-  ollama_client.py        Local Ollama provider
+  gemini_client.py        Hosted structured-query provider
+  ollama_client.py        Local embedding provider
   bm25_index.py           Persistent SQLite FTS5 index
   mysql_store.py          MySQL reads and canonical record lookup
   ingestion_service.py    Incremental ingestion workflows

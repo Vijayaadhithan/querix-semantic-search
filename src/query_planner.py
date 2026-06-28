@@ -3,7 +3,7 @@ import re
 from difflib import SequenceMatcher, get_close_matches
 
 from bm25_index import PersistentBM25Index
-from ollama_client import structured_chat
+from gemini_client import structured_chat
 from settings import QUERY_EXTRACT_MODEL, QUERY_EXTRACT_TEMPERATURE
 
 QUERY_FILTER_FIELDS = {

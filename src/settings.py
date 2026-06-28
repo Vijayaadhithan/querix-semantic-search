@@ -31,14 +31,29 @@ OLLAMA_KEEP_ALIVE = os.getenv("OLLAMA_KEEP_ALIVE")
 if OLLAMA_KEEP_ALIVE is None:
     OLLAMA_KEEP_ALIVE = CONFIG.get("ollama", {}).get("keep_alive", -1)
 EMBED_MODEL = CONFIG.get("embedding", {}).get("model", "embeddinggemma:latest")
-LLM_MODEL = CONFIG.get("llm", {}).get("model", "gemma4:12b")
-TEMPERATURE = float(CONFIG.get("llm", {}).get("temperature", 0.2))
-LLM_THINK = bool(CONFIG.get("llm", {}).get("think", False))
-QUERY_EXTRACT_MODEL = CONFIG.get("query_extraction", {}).get(
-    "model", LLM_MODEL
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+GEMINI_API_BASE_URL = os.getenv(
+    "GEMINI_API_BASE_URL",
+    "https://generativelanguage.googleapis.com/v1beta",
+).rstrip("/")
+QUERY_EXTRACT_CONFIG = CONFIG.get("query_extraction", {})
+_query_extract_models = QUERY_EXTRACT_CONFIG.get("models")
+if not _query_extract_models:
+    _query_extract_models = [
+        QUERY_EXTRACT_CONFIG.get("model", "gemma-4-26b-a4b-it")
+    ]
+elif isinstance(_query_extract_models, str):
+    _query_extract_models = [_query_extract_models]
+QUERY_EXTRACT_MODELS = tuple(
+    str(model).strip()
+    for model in _query_extract_models
+    if str(model).strip()
 )
+if not QUERY_EXTRACT_MODELS:
+    raise ValueError("query_extraction.models must contain at least one model.")
+QUERY_EXTRACT_MODEL = QUERY_EXTRACT_MODELS[0]
 QUERY_EXTRACT_TEMPERATURE = float(
-    CONFIG.get("query_extraction", {}).get("temperature", 0)
+    QUERY_EXTRACT_CONFIG.get("temperature", 0)
 )
 
 CHUNK_SIZE = int(CONFIG.get("chunking", {}).get("chunk_size", 512))
@@ -88,14 +103,18 @@ API_PORT = int(
         str(CONFIG.get("api", {}).get("port", 8000)),
     )
 )
+API_LOG_LEVEL = os.getenv(
+    "API_LOG_LEVEL",
+    str(CONFIG.get("api", {}).get("log_level", "info")),
+).lower()
 API_DEFAULT_PAGE_SIZE = int(
     CONFIG.get("api", {}).get("default_page_size", 20)
 )
 API_PRELOAD_RERANKER = bool(
     CONFIG.get("api", {}).get("preload_reranker", True)
 )
-API_PRELOAD_OLLAMA = bool(
-    CONFIG.get("api", {}).get("preload_ollama", True)
+API_PRELOAD_EMBEDDING = bool(
+    CONFIG.get("api", {}).get("preload_embedding", True)
 )
 API_MAX_PAGE_SIZE = int(CONFIG.get("api", {}).get("max_page_size", 20))
 API_MAX_RESULTS = int(CONFIG.get("api", {}).get("max_results", 60))

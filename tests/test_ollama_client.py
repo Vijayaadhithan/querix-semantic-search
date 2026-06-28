@@ -33,12 +33,18 @@ def test_ollama_timing_metrics_converts_nanoseconds_to_milliseconds():
     }
 
 
-def test_preload_chat_model_uses_configured_keep_alive(monkeypatch):
+def test_preload_embedding_model_uses_configured_keep_alive(monkeypatch):
     captured = {}
 
     def fake_post(url, json, timeout):
         captured.update({"url": url, "json": json, "timeout": timeout})
-        return FakeResponse({"total_duration": 4_000_000, "load_duration": 0})
+        return FakeResponse(
+            {
+                "embeddings": [[0.1, 0.2]],
+                "total_duration": 4_000_000,
+                "load_duration": 0,
+            }
+        )
 
     monkeypatch.setattr("ollama_client.requests.post", fake_post)
     provider = OllamaProvider(
@@ -46,12 +52,12 @@ def test_preload_chat_model_uses_configured_keep_alive(monkeypatch):
         keep_alive="-1",
     )
 
-    metrics = provider.preload_chat_model("query-model")
+    metrics = provider.preload_embedding_model()
 
-    assert captured["url"] == "http://ollama.test/api/chat"
+    assert captured["url"] == "http://ollama.test/api/embed"
     assert captured["json"] == {
-        "model": "query-model",
-        "stream": False,
+        "model": provider.embedding_model,
+        "input": ["startup warmup"],
         "keep_alive": "-1",
     }
     assert metrics["total_ms"] == 4.0

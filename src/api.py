@@ -13,7 +13,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from ollama_client import preload_ollama_models
+from ollama_client import preload_ollama_embedding
 from search_engine import ProductSearchEngine
 from settings import (
     API_CORS_ORIGINS,
@@ -21,7 +21,7 @@ from settings import (
     API_MAX_PAGE_SIZE,
     API_MAX_RESULTS,
     API_MAX_SESSIONS,
-    API_PRELOAD_OLLAMA,
+    API_PRELOAD_EMBEDDING,
     API_PRELOAD_RERANKER,
     API_SESSION_TTL_SECONDS,
     APP_NAME,
@@ -121,7 +121,7 @@ class HealthResponse(BaseModel):
     reranker_model: str
     reranker_loaded: bool
     reranker_load_ms: float
-    ollama_warmup: dict[str, Any]
+    embedding_warmup: dict[str, Any]
 
 
 @dataclass
@@ -224,7 +224,7 @@ class ProductSearchService:
         self.max_results = max_results
         self._engine_lock = threading.Lock()
         self.reranker_load_ms = 0.0
-        self.ollama_warmup: dict[str, Any] = {}
+        self.embedding_warmup: dict[str, Any] = {}
 
     def warmup(self) -> float:
         with self._engine_lock:
@@ -244,7 +244,7 @@ class ProductSearchService:
             reranker_model=RERANK_MODEL,
             reranker_loaded=self.engine.ranker is not None,
             reranker_load_ms=self.reranker_load_ms,
-            ollama_warmup=self.ollama_warmup,
+            embedding_warmup=self.embedding_warmup,
         )
 
     def search(self, request: SearchRequest) -> SearchResponse:
@@ -368,14 +368,13 @@ def create_app(
             LOGGER.info("Preloading reranker %s once for this process...", RERANK_MODEL)
             load_ms = application.state.search_service.warmup()
             LOGGER.info("Reranker ready in %.0f ms.", load_ms)
-        if API_PRELOAD_OLLAMA and service is None:
-            LOGGER.info("Preloading Ollama embedding and query models...")
-            ollama_warmup = preload_ollama_models()
-            application.state.search_service.ollama_warmup = ollama_warmup
+        if API_PRELOAD_EMBEDDING and service is None:
+            LOGGER.info("Preloading the Ollama embedding model...")
+            embedding_warmup = preload_ollama_embedding()
+            application.state.search_service.embedding_warmup = embedding_warmup
             LOGGER.info(
-                "Ollama models ready (embedding %.0f ms, query %.0f ms).",
-                ollama_warmup["embedding_model"].get("total_ms", 0.0),
-                ollama_warmup["query_model"].get("total_ms", 0.0),
+                "Ollama embedding model ready in %.0f ms.",
+                embedding_warmup["embedding_model"].get("total_ms", 0.0),
             )
         try:
             yield

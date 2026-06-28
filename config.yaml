@@ -1,18 +1,16 @@
 app_name: Local Data Assistant
 collection_name: local_data
-#gemma3:1b
 ollama:
-  # Keep query and embedding models resident until Ollama is stopped. This
-  # removes cold model loading from requests after API startup.
+  # Keep the embedding model resident until Ollama is stopped.
   keep_alive: -1
 
-llm:
-  model: gemma4:12b
-  temperature: 0.2
-  think: false
-
 query_extraction:
-  model: gemma4:12b
+  # Try the next model only when the current model is rate-limited or
+  # temporarily unavailable.
+  models:
+    - gemma-4-26b-a4b-it
+    - gemma-4-31b-it
+    - gemini-3.1-flash-lite
   temperature: 0
 
 embedding:
@@ -48,13 +46,15 @@ retrieval:
 api:
   host: 127.0.0.1
   port: 8000
+  # Use debug for library-level diagnostics; info shows the search flow.
+  log_level: info
   # Load the reranker once when the API process starts. Requests reuse the
   # same in-memory model and do not pay model-loading latency.
   preload_reranker: true
   # Normal product-grid and infinite-scroll batch size.
   default_page_size: 20
   max_page_size: 20
-  preload_ollama: true
+  preload_embedding: true
   # The first request ranks this many results once. Later cursor requests
   # return slices from that stable result window.
   max_results: 60

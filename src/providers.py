@@ -10,6 +10,8 @@ class EmbeddingProvider(Protocol):
 
 
 class StructuredQueryProvider(Protocol):
+    """Hosted or local provider that returns schema-constrained JSON."""
+
     def structured_chat(
         self,
         model: str,
