@@ -2,6 +2,7 @@ import time
 
 from bm25_index import PersistentBM25Index
 from mysql_store import fetch_products_by_ids, mysql_source_name
+from ollama_client import last_ollama_metrics
 from query_planner import (
     build_query_filter_catalog,
     enrich_query_plan,
@@ -12,6 +13,7 @@ from query_planner import (
 from reranker import load_reranker, rerank
 from retrieval import (
     bm25_search,
+    category_fallback_search,
     extract_product_ids,
     filter_candidates_by_ad_type,
     load_collection,
@@ -21,6 +23,7 @@ from retrieval import (
 from settings import (
     BM25_TOP_K,
     HYBRID_CANDIDATE_K,
+    RETRIEVAL_OVERFETCH_FACTOR,
     RERANK_TOP_K,
     VECTOR_CANDIDATE_K,
     VECTOR_TOP_K,
@@ -70,16 +73,43 @@ class ProductSearchEngine:
             "query_plan": query_plan,
             "resolved_filters": resolved,
             "unresolved_filters": unresolved,
+            "query_model_metrics": (
+                last_ollama_metrics()["query_model"]
+                if self.query_provider is None
+                else {}
+            ),
             "seconds": time.perf_counter() - started,
         }
 
-    def retrieve(self, query_plan: dict, resolved_filters: dict) -> dict:
+    def retrieve(
+        self,
+        query_plan: dict,
+        resolved_filters: dict,
+        result_limit: int | None = None,
+    ) -> dict:
+        extended_window = (
+            result_limit is not None and result_limit > RERANK_TOP_K
+        )
+        requested = result_limit or RERANK_TOP_K
+        retrieval_depth = (
+            max(
+                VECTOR_TOP_K,
+                BM25_TOP_K,
+                requested * RETRIEVAL_OVERFETCH_FACTOR,
+            )
+            if extended_window
+            else None
+        )
+        vector_top_k = retrieval_depth or VECTOR_TOP_K
+        bm25_top_k = retrieval_depth or BM25_TOP_K
+        hybrid_top_k = max(HYBRID_CANDIDATE_K, requested)
+
         vector_started = time.perf_counter()
         vector_results = vector_search(
             query_plan["semantic_query"],
             self.collection,
-            VECTOR_TOP_K,
-            candidate_k=VECTOR_CANDIDATE_K,
+            vector_top_k,
+            candidate_k=max(VECTOR_CANDIDATE_K, vector_top_k),
             source_name=self.source_name,
             resolved_filters=resolved_filters,
             embedding_provider=self.embedding_provider,
@@ -92,25 +122,52 @@ class ProductSearchEngine:
             self.bm25_index,
             self.collection,
             resolved_filters,
-            BM25_TOP_K,
+            bm25_top_k,
         )
         bm25_seconds = time.perf_counter() - bm25_started
 
-        candidates = merge_results(
+        category_started = time.perf_counter()
+        category_results = []
+        if extended_window:
+            category_results = category_fallback_search(
+                self.bm25_index,
+                self.collection,
+                resolved_filters,
+                query_plan.get("inferred_categories"),
+                retrieval_depth,
+                exclude_ids={
+                    item["id"]
+                    for item in (*vector_results, *bm25_results)
+                },
+            )
+        category_seconds = time.perf_counter() - category_started
+
+        merged = merge_results(
             vector_results,
             bm25_results,
             query_plan.get("inferred_categories"),
-        )[:HYBRID_CANDIDATE_K]
-        candidates = filter_candidates_by_ad_type(
-            candidates,
-            query_plan["target_ad_type"],
+            category_results=category_results,
         )
+        # Apply ad intent before truncating the candidate window. Otherwise a
+        # page can be short merely because unwanted ad types occupied the K
+        # slots ahead of valid products.
+        candidates = filter_candidates_by_ad_type(
+            merged,
+            query_plan["target_ad_type"],
+        )[:hybrid_top_k]
         return {
             "vector_results": vector_results,
             "bm25_results": bm25_results,
+            "category_results": category_results,
             "candidates": candidates,
             "vector_seconds": vector_seconds,
             "bm25_seconds": bm25_seconds,
+            "category_seconds": category_seconds,
+            "embedding_model_metrics": (
+                last_ollama_metrics()["embedding_model"]
+                if self.embedding_provider is None
+                else {}
+            ),
         }
 
     def ensure_reranker(self) -> float:
@@ -125,6 +182,7 @@ class ProductSearchEngine:
         query: str,
         candidates: list[dict],
         query_plan: dict | None = None,
+        top_k: int | None = None,
     ) -> dict:
         load_seconds = self.ensure_reranker()
         ranking_query = query
@@ -154,7 +212,8 @@ class ProductSearchEngine:
             ranking_query,
             candidates,
             self.ranker,
-            RERANK_TOP_K,
+            RERANK_TOP_K if top_k is None else top_k,
+            diversity_top_k=RERANK_TOP_K,
         )
         return {
             "results": results,
@@ -162,15 +221,23 @@ class ProductSearchEngine:
             "seconds": time.perf_counter() - started,
         }
 
-    def search(self, query: str) -> dict:
+    def search(self, query: str, limit: int | None = None) -> dict:
+        if limit is not None and limit <= 0:
+            raise ValueError("Search limit must be greater than zero.")
         planned = self.plan(query)
         retrieved = self.retrieve(
             planned["query_plan"],
             planned["resolved_filters"],
+            result_limit=limit,
         )
         candidates = retrieved["candidates"]
         ranked = (
-            self.rank(query, candidates, planned["query_plan"])
+            self.rank(
+                query,
+                candidates,
+                planned["query_plan"],
+                top_k=limit,
+            )
             if candidates
             else {"results": [], "load_seconds": 0.0, "seconds": 0.0}
         )

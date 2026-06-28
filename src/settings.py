@@ -27,6 +27,9 @@ COLLECTION_NAME = CONFIG.get("collection_name", "local_data")
 OLLAMA_BASE_URL = os.getenv(
     "OLLAMA_BASE_URL", "http://localhost:11434"
 ).rstrip("/")
+OLLAMA_KEEP_ALIVE = os.getenv("OLLAMA_KEEP_ALIVE")
+if OLLAMA_KEEP_ALIVE is None:
+    OLLAMA_KEEP_ALIVE = CONFIG.get("ollama", {}).get("keep_alive", -1)
 EMBED_MODEL = CONFIG.get("embedding", {}).get("model", "embeddinggemma:latest")
 LLM_MODEL = CONFIG.get("llm", {}).get("model", "gemma4:12b")
 TEMPERATURE = float(CONFIG.get("llm", {}).get("temperature", 0.2))
@@ -49,15 +52,21 @@ BM25_TOP_K = int(CONFIG.get("retrieval", {}).get("bm25_top_k", 15))
 HYBRID_CANDIDATE_K = int(
     CONFIG.get("retrieval", {}).get("hybrid_candidate_k", 60)
 )
+RETRIEVAL_OVERFETCH_FACTOR = int(
+    CONFIG.get("retrieval", {}).get("overfetch_factor", 2)
+)
 RRF_CONSTANT = int(CONFIG.get("retrieval", {}).get("rrf_constant", 60))
 VECTOR_WEIGHT = float(CONFIG.get("retrieval", {}).get("vector_weight", 1.0))
 BM25_WEIGHT = float(CONFIG.get("retrieval", {}).get("bm25_weight", 1.0))
+CATEGORY_FALLBACK_WEIGHT = float(
+    CONFIG.get("retrieval", {}).get("category_fallback_weight", 0.25)
+)
 SOFT_CATEGORY_BOOST = float(
     CONFIG.get("retrieval", {}).get("soft_category_boost", 0.005)
 )
 RERANK_TOP_K = int(CONFIG.get("retrieval", {}).get("final_top_k", 6))
 RERANK_MODEL = CONFIG.get("retrieval", {}).get(
-    "reranker_model", "BAAI/bge-reranker-large"
+    "reranker_model", "Alibaba-NLP/gte-reranker-modernbert-base"
 )
 RERANK_BATCH_SIZE = int(
     CONFIG.get("retrieval", {}).get("reranker_batch_size", 4)
@@ -68,6 +77,37 @@ RERANK_MAX_LENGTH = int(
 RERANK_USE_FP16 = bool(
     CONFIG.get("retrieval", {}).get("reranker_use_fp16", False)
 )
+
+API_HOST = os.getenv(
+    "API_HOST",
+    str(CONFIG.get("api", {}).get("host", "127.0.0.1")),
+)
+API_PORT = int(
+    os.getenv(
+        "API_PORT",
+        str(CONFIG.get("api", {}).get("port", 8000)),
+    )
+)
+API_DEFAULT_PAGE_SIZE = int(
+    CONFIG.get("api", {}).get("default_page_size", 20)
+)
+API_PRELOAD_RERANKER = bool(
+    CONFIG.get("api", {}).get("preload_reranker", True)
+)
+API_PRELOAD_OLLAMA = bool(
+    CONFIG.get("api", {}).get("preload_ollama", True)
+)
+API_MAX_PAGE_SIZE = int(CONFIG.get("api", {}).get("max_page_size", 20))
+API_MAX_RESULTS = int(CONFIG.get("api", {}).get("max_results", 60))
+API_SESSION_TTL_SECONDS = int(
+    CONFIG.get("api", {}).get("session_ttl_seconds", 600)
+)
+API_MAX_SESSIONS = int(CONFIG.get("api", {}).get("max_sessions", 500))
+API_CORS_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv("API_CORS_ORIGINS", "").split(",")
+    if origin.strip()
+]
 
 MYSQL_HOST = os.getenv("MYSQL_HOST", "localhost")
 MYSQL_PORT = int(os.getenv("MYSQL_PORT", "3306"))

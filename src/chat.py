@@ -20,7 +20,7 @@ from query_planner import (
     query_filter_value_index,
     resolve_query_filters,
 )
-from reranker import BGEReranker, load_reranker, rerank
+from reranker import load_reranker, rerank
 from retrieval import (
     bm25_search,
     extract_product_ids,

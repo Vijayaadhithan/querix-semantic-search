@@ -26,7 +26,10 @@ class PersistentBM25Index:
     def __init__(self, path: Path | str = BM25_INDEX_PATH):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.connection = sqlite3.connect(self.path)
+        # The API creates the index during application startup and serves
+        # synchronous requests from worker threads. Access is serialized by
+        # ProductSearchService, so the connection can safely cross threads.
+        self.connection = sqlite3.connect(self.path, check_same_thread=False)
         self.connection.row_factory = sqlite3.Row
         self.connection.execute("PRAGMA journal_mode=WAL")
         self.connection.execute("PRAGMA synchronous=NORMAL")
@@ -265,6 +268,71 @@ class PersistentBM25Index:
                 "doc_id": row["doc_id"],
                 "product_id": row["product_id"],
                 "score": -float(row["rank"]),
+            }
+            for row in rows
+        ]
+
+    def browse(
+        self,
+        resolved_filters: dict,
+        top_k: int,
+        category_filters: dict[str, str] | None = None,
+        exclude_doc_ids: set[str] | None = None,
+    ) -> list[dict]:
+        """Return filtered category rows without requiring a keyword match."""
+        if top_k <= 0:
+            return []
+
+        conditions = []
+        params: list = []
+        categorical = dict(resolved_filters.get("categorical", {}))
+        for column, value in (category_filters or {}).items():
+            if column not in FILTER_COLUMNS:
+                continue
+            existing = categorical.get(column)
+            if existing is not None and existing != value:
+                return []
+            categorical[column] = value
+
+        for column, value in categorical.items():
+            if column not in FILTER_COLUMNS:
+                continue
+            conditions.append(f"{column} = ?")
+            params.append(value)
+        if "min_rental_fee" in resolved_filters:
+            conditions.append("rental_fee >= ?")
+            params.append(resolved_filters["min_rental_fee"])
+        if "max_rental_fee" in resolved_filters:
+            conditions.append("rental_fee <= ?")
+            params.append(resolved_filters["max_rental_fee"])
+
+        excluded = sorted(exclude_doc_ids or set())
+        if excluded:
+            placeholders = ", ".join("?" for _ in excluded)
+            conditions.append(f"doc_id NOT IN ({placeholders})")
+            params.extend(excluded)
+
+        where_clause = (
+            f"WHERE {' AND '.join(conditions)}"
+            if conditions
+            else ""
+        )
+        params.append(top_k)
+        rows = self.connection.execute(
+            f"""
+            SELECT doc_id, product_id
+            FROM products
+            {where_clause}
+            ORDER BY rowid DESC
+            LIMIT ?
+            """,
+            params,
+        ).fetchall()
+        return [
+            {
+                "doc_id": row["doc_id"],
+                "product_id": row["product_id"],
+                "score": 0.0,
             }
             for row in rows
         ]

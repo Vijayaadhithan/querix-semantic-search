@@ -6,7 +6,7 @@ from settings import (
 )
 
 
-class BGEReranker:
+class TransformerCrossEncoderReranker:
     def __init__(
         self,
         model_name: str,
@@ -22,7 +22,7 @@ class BGEReranker:
             )
         except ImportError as exc:
             raise RuntimeError(
-                "BAAI reranking requires torch and transformers. "
+                "Transformer reranking requires torch and transformers. "
                 "Install requirements.txt first."
             ) from exc
 
@@ -81,7 +81,7 @@ class BGEReranker:
 
 
 def load_reranker():
-    return BGEReranker(
+    return TransformerCrossEncoderReranker(
         RERANK_MODEL,
         use_fp16=RERANK_USE_FP16,
         batch_size=RERANK_BATCH_SIZE,
@@ -89,7 +89,17 @@ def load_reranker():
     )
 
 
-def rerank(query, candidates, ranker, top_k=6):
+# Backward-compatible import for existing callers.
+BGEReranker = TransformerCrossEncoderReranker
+
+
+def rerank(
+    query,
+    candidates,
+    ranker,
+    top_k=6,
+    diversity_top_k=None,
+):
     if not candidates:
         return []
 
@@ -107,24 +117,37 @@ def rerank(query, candidates, ranker, top_k=6):
         key=lambda item: float(item[1]),
         reverse=True,
     )
-    results = []
+    diversity_top_k = top_k if diversity_top_k is None else diversity_top_k
+    primary = []
+    deferred = []
     seen_titles = set()
-    for candidate, score in ranked:
+    for position, (candidate, score) in enumerate(ranked):
         metadata = candidate.get("metadata") or {}
         title = metadata.get("content_title") or metadata.get("title")
         normalized_title = " ".join(str(title).casefold().split()) if title else None
-        if normalized_title and normalized_title in seen_titles:
+        if (
+            len(primary) < diversity_top_k
+            and normalized_title
+            and normalized_title in seen_titles
+        ):
+            deferred.append((position, candidate, score))
             continue
         if normalized_title:
             seen_titles.add(normalized_title)
+        if len(primary) < diversity_top_k:
+            primary.append((position, candidate, score))
+        else:
+            deferred.append((position, candidate, score))
+
+    ordered = primary + sorted(deferred, key=lambda item: item[0])
+    results = []
+    for _, candidate, score in ordered[:top_k]:
         results.append(
             {
-            "id": candidate["id"],
-            "text": candidate["text"],
-            "metadata": candidate["metadata"],
-            "score": float(score),
+                "id": candidate["id"],
+                "text": candidate["text"],
+                "metadata": candidate["metadata"],
+                "score": float(score),
             }
         )
-        if len(results) >= top_k:
-            break
     return results

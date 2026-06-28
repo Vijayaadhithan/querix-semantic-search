@@ -5,6 +5,7 @@ from mysql_store import fetch_product_types_by_ids
 from query_planner import OFFER_AD_TYPE, WANTED_AD_TYPE
 from settings import (
     BM25_WEIGHT,
+    CATEGORY_FALLBACK_WEIGHT,
     CHROMA_DIR,
     COLLECTION_NAME,
     MYSQL_SEARCH_ID_COLUMN,
@@ -130,6 +131,64 @@ def bm25_search(query, index, collection, resolved_filters, top_k=15):
     ]
 
 
+def category_fallback_search(
+    index,
+    collection,
+    resolved_filters,
+    inferred_categories,
+    top_k,
+    exclude_ids=None,
+):
+    categorical = resolved_filters.get("categorical", {})
+    category_filters = {}
+    category_keys = {
+        "main_category": "main_category_name",
+        "subcategory": "subcategory_name",
+    }
+    has_explicit_category = any(
+        metadata_key in categorical
+        for metadata_key in category_keys.values()
+    )
+    if not has_explicit_category:
+        for category_key, metadata_key in category_keys.items():
+            value = (inferred_categories or {}).get(category_key)
+            if value:
+                category_filters[metadata_key] = value
+    if not has_explicit_category and not category_filters:
+        return []
+
+    ranked = index.browse(
+        resolved_filters,
+        top_k,
+        category_filters=category_filters,
+        exclude_doc_ids=set(exclude_ids or []),
+    )
+    if not ranked:
+        return []
+
+    ordered_ids = [item["doc_id"] for item in ranked]
+    data = collection.get(ids=ordered_ids, include=["documents", "metadatas"])
+    documents = {
+        doc_id: {"text": text, "metadata": metadata}
+        for doc_id, text, metadata in zip(
+            data["ids"],
+            data["documents"],
+            data["metadatas"],
+        )
+    }
+    return [
+        {
+            "id": doc_id,
+            "text": documents[doc_id]["text"],
+            "metadata": documents[doc_id]["metadata"],
+            "score": 0.0,
+            "source": "category",
+        }
+        for doc_id in ordered_ids
+        if doc_id in documents
+    ]
+
+
 def merge_results(
     vector_results,
     bm25_results,
@@ -138,11 +197,14 @@ def merge_results(
     vector_weight=VECTOR_WEIGHT,
     bm25_weight=BM25_WEIGHT,
     soft_category_boost=SOFT_CATEGORY_BOOST,
+    category_results=None,
+    category_weight=CATEGORY_FALLBACK_WEIGHT,
 ):
     merged = {}
     ranked_sources = (
         ("vector", vector_results, vector_weight),
         ("bm25", bm25_results, bm25_weight),
+        ("category", category_results or [], category_weight),
     )
     for source, results, weight in ranked_sources:
         for rank, item in enumerate(results, start=1):

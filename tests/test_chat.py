@@ -25,6 +25,7 @@ from chat import (
     rerank,
     resolve_query_filters,
 )
+from retrieval import category_fallback_search
 
 
 class FakeCursor:
@@ -692,7 +693,7 @@ def test_hybrid_merge_uses_rrf_and_soft_category_boost():
     assert merged[0]["source"] == "vector+bm25"
 
 
-def test_rerank_keeps_only_highest_scoring_duplicate_title():
+def test_rerank_diversifies_first_results_then_keeps_lower_ranked_duplicates():
     class OrderedReranker:
         def compute_score(self, _pairs, **_kwargs):
             return [0.9, 0.8, 0.7]
@@ -717,7 +718,63 @@ def test_rerank_keeps_only_highest_scoring_duplicate_title():
 
     results = rerank("quad bike", candidates, OrderedReranker(), top_k=3)
 
-    assert [result["id"] for result in results] == ["1", "3"]
+    assert [result["id"] for result in results] == ["1", "3", "2"]
+
+
+def test_category_fallback_uses_inferred_category_and_existing_filters(tmp_path):
+    class FakeCollection:
+        def get(self, ids, include):
+            assert include == ["documents", "metadatas"]
+            return {
+                "ids": ids,
+                "documents": [f"document {doc_id}" for doc_id in ids],
+                "metadatas": [
+                    {"subcategory_name": "Camera", "id": doc_id}
+                    for doc_id in ids
+                ],
+            }
+
+    index = PersistentBM25Index(tmp_path / "category-fallback.sqlite3")
+    index.upsert(
+        [
+            product_index_row(
+                "camera-chennai",
+                "camera listing",
+                subcategory_name="Camera",
+                city_name="Chennai",
+                rental_fee=900,
+            ),
+            product_index_row(
+                "camera-expensive",
+                "camera listing",
+                subcategory_name="Camera",
+                city_name="Chennai",
+                rental_fee=1900,
+            ),
+            product_index_row(
+                "bike-chennai",
+                "bike listing",
+                subcategory_name="Bike",
+                city_name="Chennai",
+                rental_fee=800,
+            ),
+        ]
+    )
+
+    results = category_fallback_search(
+        index,
+        FakeCollection(),
+        {
+            "categorical": {"city_name": "Chennai"},
+            "max_rental_fee": 1000,
+        },
+        {"main_category": None, "subcategory": "Camera"},
+        top_k=10,
+    )
+
+    assert [result["id"] for result in results] == ["camera-chennai"]
+    assert results[0]["source"] == "category"
+    index.close()
 
 
 def test_extract_product_ids_uses_rank_order_and_deduplicates():
