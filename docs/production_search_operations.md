@@ -946,6 +946,32 @@ engine opens.
 
 ## 18. Troubleshooting
 
+### Ollama `/api/embed` returns HTTP 400 while the CLI works
+
+`ollama run embeddinggemma "startup test"` and the REST request are different:
+the application also sends `keep_alive`. Dotenv reads
+`OLLAMA_KEEP_ALIVE=-1` as a string, while Ollama expects numeric `-1` or a
+duration string such as `-1m`. The current client normalizes integer-looking
+environment values before constructing JSON.
+
+For an older deployed checkout, either deploy the current client or use:
+
+```env
+OLLAMA_KEEP_ALIVE=-1m
+```
+
+Then restart the API/ingestion process and test:
+
+```bash
+.venv/bin/python -c '
+import sys
+sys.path.insert(0, "src")
+from ollama_client import embed_texts
+result = embed_texts(["startup test"])
+print("embeddings:", len(result), "dimensions:", len(result[0]))
+'
+```
+
 ### `401 Missing API key`
 
 Use a named header:

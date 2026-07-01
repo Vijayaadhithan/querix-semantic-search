@@ -612,6 +612,17 @@ is detected.
 
 ### E. Operational troubleshooting
 
+If Ollama is reachable and `ollama run embeddinggemma "test"` works, but
+Python receives `400 Bad Request` from `/api/embed`, update to the current
+`ollama_client.py`. It normalizes dotenv values such as
+`OLLAMA_KEEP_ALIVE=-1` to the numeric JSON value `-1`. As an immediate
+workaround on an older checkout, remove `OLLAMA_KEEP_ALIVE` from `.env` so
+`config.yaml` supplies numeric `-1`, or use a duration string such as:
+
+```env
+OLLAMA_KEEP_ALIVE=-1m
+```
+
 - `401 Missing API key`: send the `X-API-Key` header.
 - `401 Invalid API key`: check the configured secret and restart after changes.
 - `403 API key does not match`: the key belongs to another company endpoint.

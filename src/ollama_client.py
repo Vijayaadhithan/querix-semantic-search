@@ -1,3 +1,5 @@
+import re
+
 import requests
 
 from settings import (
@@ -5,6 +7,34 @@ from settings import (
     OLLAMA_BASE_URL,
     OLLAMA_KEEP_ALIVE,
 )
+
+
+def normalize_keep_alive(value: str | int) -> str | int:
+    """Convert integer-looking environment values to JSON numbers.
+
+    dotenv/environment values are always strings. Ollama accepts a numeric
+    negative value such as -1, or a duration string such as "-1m", but the
+    bare string "-1" is rejected by newer API versions.
+    """
+    if isinstance(value, int):
+        return value
+    normalized = str(value).strip()
+    if re.fullmatch(r"[+-]?\d+", normalized):
+        return int(normalized)
+    return normalized
+
+
+def ollama_error_detail(exc: requests.RequestException) -> str:
+    response = getattr(exc, "response", None)
+    if response is None:
+        return ""
+    try:
+        error = response.json().get("error")
+    except (AttributeError, TypeError, ValueError):
+        return ""
+    if not isinstance(error, str) or not error.strip():
+        return ""
+    return f" Ollama error: {error.strip()[:300]}"
 
 
 def ollama_timing_metrics(payload: dict) -> dict[str, float]:
@@ -31,7 +61,7 @@ class OllamaProvider:
     ):
         self.base_url = base_url.rstrip("/")
         self.embedding_model = embedding_model
-        self.keep_alive = keep_alive
+        self.keep_alive = normalize_keep_alive(keep_alive)
         self.last_embedding_metrics: dict[str, float] = {}
 
     def embed_text(self, text: str) -> list[float]:
@@ -57,6 +87,7 @@ class OllamaProvider:
             raise RuntimeError(
                 f"Cannot get embeddings from Ollama at {self.base_url}. "
                 f"Start Ollama and confirm '{self.embedding_model}' is installed."
+                f"{ollama_error_detail(exc)}"
             ) from exc
 
         payload = response.json()
