@@ -87,9 +87,10 @@ api:
   auth_enabled: false
   rate_limit_enabled: true
   tenant_config_dir: configs/tenants
-  # Bound open Chroma/BM25/database contexts on the 16 GB production host.
-  tenant_engine_cache_size: 8
-  tenant_max_concurrent_searches: 4
+  # Conservative defaults for the one-company 8 GB test host. Production can
+  # override these per deployment through .env after load testing.
+  tenant_engine_cache_size: 1
+  tenant_max_concurrent_searches: 2
   # Use debug for library-level diagnostics; info shows the search flow.
   log_level: info
   # Load the reranker once when the API process starts. Requests reuse the

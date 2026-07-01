@@ -20,6 +20,13 @@ This can retrieve cameras, drone cameras, portable recorders, microphones,
 gimbals, and related recording equipment without forcing the user to name one
 specific product category.
 
+Detailed references:
+
+- `docs/production_search_operations.md`: complete command and operations
+  runbook.
+- `docs/hackathon_technical_guide.tex`: judge-facing problem statement, demo
+  story, architecture, innovation, evidence, tradeoffs, and prepared Q&A.
+
 ## Production Runbook
 
 This section is the ordered operational path. Run commands from the repository
@@ -107,6 +114,8 @@ Gainr is configured in `configs/tenants/gainr.yaml`. Confirm:
 - `company.id: gainr`
 - `api.endpoint_slug: gainr`
 - MySQL table/column mappings
+- database TLS, timeout and bounded-pool settings
+- `storage.chroma_dir: storage/companies/gainr/chroma`
 - `storage.collection_name: company_gainr`
 - `storage.bm25_path: storage/companies/gainr/bm25.sqlite3`
 - public response fields
@@ -270,6 +279,23 @@ The response separates searches, model requests, input tokens, output tokens
 and total tokens by provider/model. Deterministic and result-cache hits record
 zero model tokens.
 
+#### 14. Run a concurrent API load test
+
+The tester reads the endpoint, request mapping and API-key environment
+variable from the company profile; it never prints the key:
+
+```bash
+.venv/bin/python scripts/load_test.py \
+  --company gainr \
+  --requests 20 \
+  --concurrency 2 \
+  --query "portable camera"
+```
+
+Repeat `--query` to mix deterministic and semantic traffic. The report includes
+throughput, status counts, execution paths, result-cache hits and
+min/mean/p50/p95/p99/max latency.
+
 ### B. Routine Gainr refresh
 
 First let RAG_HT preprocess and atomically publish the newest Gainr
@@ -289,12 +315,15 @@ Then refresh Gainr's retrieval indexes:
 .venv/bin/python src/ingest.py \
   --company gainr \
   --mysql \
+  --mysql-reconcile-deletions \
   --mysql-batch-size 500 \
   --embed-batch-size 32
 ```
 
 The command scans the configured source but embeds only changed/new content;
-unchanged hashes are skipped.
+unchanged hashes are skipped. Deletion reconciliation runs only after a
+successful full scan and removes vector/BM25 IDs no longer present in the
+published source. It is rejected when `--limit` is supplied.
 
 Rebuild only BM25 without embedding:
 
@@ -350,7 +379,8 @@ Configure:
 - unique `api.endpoint_slug`
 - unique API-key environment-variable name
 - MySQL or PostgreSQL source/result tables
-- Chroma or pgvector storage
+- TLS mode/certificate environment variables, query timeouts and pool limits
+- company-specific Chroma directory or pgvector table
 - unique BM25 path
 - canonical filter mapping
 - request-field mapping
@@ -371,6 +401,10 @@ ACME_POSTGRES_PASSWORD=<secret>
 ```
 
 The YAML profile declares which environment-variable names to read.
+Use `tls.mode: verify-full` for remote production databases. Certificate file
+contents belong in mounted secrets; the YAML stores only environment-variable
+names. `pool.max_size` is per active company, so keep it aligned with
+`API_TENANT_MAX_CONCURRENT_SEARCHES`.
 
 #### 3. Prepare pgvector only when selected
 
@@ -931,10 +965,11 @@ company, database, table, and row identity. Vector metadata also includes
 `company_id`.
 
 Changed and new rows are embedded; unchanged content hashes are skipped. The
-company database remains read-only. `--mysql-replace-source` treats the current
-table as an authoritative snapshot by clearing that company's vector/BM25
-indexes before rebuilding. Despite the legacy CLI flag name, a PostgreSQL
-profile uses PostgreSQL.
+company database remains read-only. `--mysql-reconcile-deletions` compares the
+completed full scan with that company's isolated indexes and removes missing
+IDs; it cannot be combined with `--limit`. `--mysql-replace-source` remains the
+full authoritative rebuild option. Despite the legacy CLI flag name, a
+PostgreSQL profile uses PostgreSQL.
 
 Validate the configured local database without embedding:
 
@@ -961,6 +996,7 @@ Chroma/pgvector):
 .venv/bin/python src/ingest.py \
   --company gainr \
   --mysql \
+  --mysql-reconcile-deletions \
   --mysql-batch-size 500 \
   --embed-batch-size 32
 ```
@@ -973,6 +1009,15 @@ separate from company indexes.
 Rows are streamed from the company database. Stable document IDs and content
 hashes allow
 unchanged rows to be skipped when ingestion is resumed.
+
+Reconcile deletions without re-embedding unchanged rows:
+
+```bash
+.venv/bin/python src/ingest.py \
+  --company gainr \
+  --mysql \
+  --mysql-reconcile-deletions
+```
 
 Rebuild only BM25:
 
@@ -1453,7 +1498,7 @@ Run deterministic unit tests:
 Run query-understanding scenarios:
 
 ```bash
-.venv/bin/python src/evaluate_queries.py
+.venv/bin/python src/evaluate_queries.py --company gainr
 ```
 
 Cases are stored in `eval/query_cases.json`.
@@ -1461,7 +1506,7 @@ Cases are stored in `eval/query_cases.json`.
 Run end-to-end labeled retrieval:
 
 ```bash
-.venv/bin/python src/evaluate_retrieval.py
+.venv/bin/python src/evaluate_retrieval.py --company gainr
 ```
 
 Cases are stored in `eval/retrieval_cases.json`. The evaluator reports passed
@@ -1552,11 +1597,12 @@ scripts/
   does not include a PostgreSQL service fixture.
 - Add generation-based index builds with atomic promotion so a failed full
   company reindex cannot expose a partially replaced vector/BM25 pair.
-- Add a durable asynchronous ingestion job API, progress state, retry policy,
-  and deletion manifest. The current CLI is resumable but still operator-run.
-- Benchmark deterministic, semantic, cached, and hosted-provider-fallback
-  paths on the target 16 GB Ubuntu host before setting concurrency and rate
-  limits.
+- Add a durable asynchronous ingestion job API, progress state and retry
+  policy. Full-scan deletion reconciliation is implemented, but the CLI is
+  still operator-run.
+- Run `scripts/load_test.py` on the target Ubuntu host with representative
+  deterministic, semantic, cached and provider-fallback query sets before
+  raising concurrency or rate limits.
 - Add service units, TLS/reverse-proxy configuration, encrypted secret
   injection, Redis/PostgreSQL backup monitoring, and provider usage alerts.
 - The labeled retrieval set is intentionally small and must grow before making

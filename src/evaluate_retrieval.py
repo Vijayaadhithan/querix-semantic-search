@@ -2,8 +2,11 @@ import argparse
 import json
 from pathlib import Path
 
+from bm25_index import PersistentBM25Index
 from search_engine import ProductSearchEngine
 from settings import PROJECT_ROOT
+from tenant_config import discover_tenant_profiles
+from vector_store import get_tenant_vector_collection
 
 DEFAULT_CASES_PATH = PROJECT_ROOT / "eval" / "retrieval_cases.json"
 
@@ -26,13 +29,37 @@ def main() -> None:
         help=f"retrieval case JSON file (default: {DEFAULT_CASES_PATH})",
     )
     parser.add_argument("--limit", type=int, help="run only the first N cases")
+    parser.add_argument(
+        "--company",
+        help="tenant profile slug; uses that company's isolated indexes and DB",
+    )
     args = parser.parse_args()
 
     cases = json.loads(args.cases.read_text(encoding="utf-8"))
     if args.limit is not None:
         cases = cases[: args.limit]
 
-    engine = ProductSearchEngine()
+    if args.company:
+        profiles = discover_tenant_profiles()
+        try:
+            profile = profiles[args.company]
+        except KeyError as exc:
+            available = ", ".join(sorted(profiles)) or "none"
+            raise SystemExit(
+                f"Unknown company {args.company!r}; available: {available}"
+            ) from exc
+        index = PersistentBM25Index(profile.storage.bm25_path)
+        engine = ProductSearchEngine(
+            collection=get_tenant_vector_collection(profile),
+            bm25_index=index,
+            company_id=profile.company_id,
+            mysql_config=profile.database,
+            close_bm25_index=True,
+            planner_enabled=profile.planner_enabled,
+            planner_prompt_context=profile.planner_prompt_context,
+        )
+    else:
+        engine = ProductSearchEngine()
     passed = 0
     reciprocal_ranks = []
     try:

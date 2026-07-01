@@ -122,6 +122,26 @@ def format_duration(seconds: float) -> str:
     return f"{hours}h {minutes}m"
 
 
+def reconcile_deleted_documents(
+    collection,
+    bm25_index: PersistentBM25Index,
+    source_name: str,
+    seen_ids: set[str],
+) -> tuple[int, int]:
+    vector_rows = collection.get(
+        where={"source_file": source_name},
+        include=[],
+    )
+    vector_ids = {str(doc_id) for doc_id in vector_rows.get("ids", [])}
+    stale_vector_ids = vector_ids - seen_ids
+    stale_bm25_ids = bm25_index.doc_ids() - seen_ids
+
+    deleted_bm25 = bm25_index.delete_doc_ids(stale_bm25_ids)
+    if stale_vector_ids:
+        collection.delete(ids=sorted(stale_vector_ids))
+    return len(stale_vector_ids), deleted_bm25
+
+
 def ingest_sources(source_files: list[Path]) -> None:
     CHROMA_DIR.mkdir(parents=True, exist_ok=True)
     _, collection = get_collection(create=True)
@@ -176,6 +196,7 @@ def ingest_mysql_source(
     primary_key_column: str | None = None,
     replace_source: bool = False,
     force_reembed: bool = False,
+    reconcile_deletions: bool = False,
     tenant: TenantProfile | None = None,
 ) -> None:
     if batch_size <= 0:
@@ -184,6 +205,10 @@ def ingest_mysql_source(
         raise RuntimeError("--embed-batch-size must be greater than zero.")
     if limit is not None and limit <= 0:
         raise RuntimeError("--limit must be greater than zero.")
+    if reconcile_deletions and limit is not None:
+        raise RuntimeError(
+            "Deletion reconciliation requires a full scan; remove --limit."
+        )
 
     mysql_config = tenant.database if tenant else None
     content_column = (
@@ -250,6 +275,7 @@ def ingest_mysql_source(
     processed = 0
     skipped_empty = 0
     skipped_current = 0
+    seen_ids: set[str] = set()
     started_at = time.monotonic()
 
     def flush_batch() -> None:
@@ -339,6 +365,7 @@ def ingest_mysql_source(
             continue
 
         doc_id, document, metadata = prepared
+        seen_ids.add(str(doc_id))
         ids.append(doc_id)
         documents.append(document)
         metadatas.append(metadata)
@@ -356,6 +383,21 @@ def ingest_mysql_source(
             flush_batch()
 
     flush_batch()
+    deleted_vectors = 0
+    deleted_bm25 = 0
+    if reconcile_deletions:
+        deleted_vectors, deleted_bm25 = reconcile_deleted_documents(
+            collection,
+            bm25_index,
+            source_name,
+            seen_ids,
+        )
+        print(
+            "Deletion reconciliation complete. "
+            f"Removed {deleted_vectors} vectors and "
+            f"{deleted_bm25} BM25 rows.",
+            flush=True,
+        )
     bm25_count = bm25_index.count()
     bm25_index.close()
     print(

@@ -9,6 +9,7 @@ from copy import deepcopy
 
 from bm25_index import PersistentBM25Index
 from database_store import (
+    create_database_pool,
     DatabaseRuntimeConfig,
     database_source_name,
     fetch_product_types_by_ids,
@@ -105,6 +106,7 @@ class ProductSearchEngine:
         self.planner_enabled = planner_enabled
         self.planner_prompt_context = planner_prompt_context
         self.mysql_config = mysql_config
+        self.database_pool = create_database_pool(mysql_config)
         self.source_name = database_source_name(mysql_config)
         self.search_table = (
             mysql_config.search_table if mysql_config is not None else MYSQL_TABLE
@@ -127,6 +129,8 @@ class ProductSearchEngine:
         self._plan_cache_lock = threading.RLock()
 
     def close(self) -> None:
+        if self.database_pool is not None:
+            self.database_pool.close()
         if self._owns_bm25_index:
             self.bm25_index.close()
 
@@ -143,11 +147,25 @@ class ProductSearchEngine:
     def _fetch_products(self, product_ids) -> list[dict]:
         if self.mysql_config is None:
             return fetch_products_by_ids(product_ids)
+        if self.database_pool is not None:
+            with self.database_pool.connection() as connection:
+                return fetch_products_by_ids(
+                    product_ids,
+                    connection=connection,
+                    config=self.mysql_config,
+                )
         return fetch_products_by_ids(product_ids, config=self.mysql_config)
 
     def _fetch_product_types(self, product_ids) -> dict[str, str]:
         if self.mysql_config is None:
             return fetch_product_types_by_ids(product_ids)
+        if self.database_pool is not None:
+            with self.database_pool.connection() as connection:
+                return fetch_product_types_by_ids(
+                    product_ids,
+                    connection=connection,
+                    config=self.mysql_config,
+                )
         return fetch_product_types_by_ids(
             product_ids,
             config=self.mysql_config,

@@ -21,6 +21,11 @@ from ingest import (
     quote_mysql_identifier,
     source_is_current,
 )
+from bm25_index import PersistentBM25Index
+from ingestion_service import (
+    ingest_mysql_source,
+    reconcile_deleted_documents,
+)
 
 
 def test_chunk_text_uses_overlap():
@@ -296,3 +301,45 @@ def test_source_is_current_matches_ids_text_and_model():
 def test_source_is_current_rejects_different_embedding_model():
     collection = FakeCollection(["id-1"], ["stored text"], model="another-model")
     assert not source_is_current(collection, "source.pdf", ["id-1"], ["stored text"])
+
+
+class ReconciliationCollection:
+    def __init__(self, ids):
+        self.ids = list(ids)
+        self.deleted = []
+
+    def get(self, **_kwargs):
+        return {"ids": list(self.ids)}
+
+    def delete(self, *, ids):
+        self.deleted.extend(ids)
+        self.ids = [doc_id for doc_id in self.ids if doc_id not in set(ids)]
+
+
+def test_deletion_reconciliation_removes_only_unseen_rows(tmp_path):
+    index = PersistentBM25Index(tmp_path / "bm25.sqlite3")
+    index.upsert(
+        [
+            {"doc_id": "keep", "product_id": "1", "content": "keep"},
+            {"doc_id": "stale-bm25", "product_id": "2", "content": "stale"},
+        ]
+    )
+    collection = ReconciliationCollection(["keep", "stale-vector"])
+
+    deleted_vectors, deleted_bm25 = reconcile_deleted_documents(
+        collection,
+        index,
+        "mysql:catalog.search_ready",
+        {"keep"},
+    )
+
+    assert deleted_vectors == 1
+    assert deleted_bm25 == 1
+    assert collection.ids == ["keep"]
+    assert index.doc_ids() == {"keep"}
+    index.close()
+
+
+def test_deletion_reconciliation_rejects_partial_scan():
+    with pytest.raises(RuntimeError, match="requires a full scan"):
+        ingest_mysql_source(limit=10, reconcile_deletions=True)

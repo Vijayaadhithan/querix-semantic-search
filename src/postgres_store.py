@@ -20,6 +20,50 @@ class PostgresRuntimeConfig:
     result_id_column: str = "id"
     result_type_column: str = "type"
     schema: str = "public"
+    connect_timeout_seconds: int = 10
+    read_timeout_seconds: int = 300
+    write_timeout_seconds: int = 300
+    statement_timeout_ms: int = 0
+    pool_min_size: int = 0
+    pool_max_size: int = 4
+    pool_timeout_seconds: float = 5.0
+    tls_mode: str = "prefer"
+    tls_ca_file: str = ""
+    tls_cert_file: str = ""
+    tls_key_file: str = ""
+
+    def __post_init__(self) -> None:
+        if min(
+            self.connect_timeout_seconds,
+            self.read_timeout_seconds,
+            self.write_timeout_seconds,
+        ) <= 0:
+            raise ValueError(
+                "PostgreSQL connection timeouts must be greater than zero"
+            )
+        if self.statement_timeout_ms < 0:
+            raise ValueError("PostgreSQL statement_timeout_ms must not be negative")
+        if (
+            self.pool_min_size < 0
+            or self.pool_max_size <= 0
+            or self.pool_min_size > self.pool_max_size
+        ):
+            raise ValueError("Invalid PostgreSQL connection pool size")
+        if self.pool_timeout_seconds <= 0:
+            raise ValueError(
+                "PostgreSQL pool_timeout_seconds must be greater than zero"
+            )
+        if self.tls_mode not in {
+            "disable",
+            "allow",
+            "prefer",
+            "require",
+            "verify-ca",
+            "verify-full",
+        }:
+            raise ValueError(
+                f"Unsupported PostgreSQL TLS mode {self.tls_mode!r}"
+            )
 
 
 def require_psycopg():
@@ -47,7 +91,19 @@ def postgres_connection(
         "user": config.user,
         "password": config.password,
         "autocommit": autocommit,
+        "connect_timeout": config.connect_timeout_seconds,
+        "sslmode": config.tls_mode,
     }
+    if config.tls_ca_file:
+        options["sslrootcert"] = config.tls_ca_file
+    if config.tls_cert_file:
+        options["sslcert"] = config.tls_cert_file
+    if config.tls_key_file:
+        options["sslkey"] = config.tls_key_file
+    if config.statement_timeout_ms:
+        options["options"] = (
+            f"-c statement_timeout={config.statement_timeout_ms}"
+        )
     if dict_rows:
         options["row_factory"] = dict_row
     return psycopg.connect(**options)

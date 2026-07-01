@@ -156,6 +156,9 @@ def load_tenant_profile(path: Path) -> TenantProfile:
         )
     default_prefix = "POSTGRES" if backend == "postgres" else "MYSQL"
     default_port = "5432" if backend == "postgres" else "3306"
+    timeouts = dict(database.get("timeouts", {}))
+    pool = dict(database.get("pool", {}))
+    tls = dict(database.get("tls", {}))
     try:
         port = int(
             _env_value(
@@ -193,6 +196,38 @@ def load_tenant_profile(path: Path) -> TenantProfile:
         result_table=_identifier(database, "result_table", "ads"),
         result_id_column=_identifier(database, "result_id_column", "id"),
         result_type_column=_identifier(database, "result_type_column", "type"),
+        connect_timeout_seconds=int(
+            timeouts.get("connect_seconds", 10)
+        ),
+        read_timeout_seconds=int(timeouts.get("read_seconds", 300)),
+        write_timeout_seconds=int(timeouts.get("write_seconds", 300)),
+        statement_timeout_ms=int(
+            timeouts.get("statement_timeout_ms", 0)
+        ),
+        pool_min_size=int(pool.get("min_size", 0)),
+        pool_max_size=int(pool.get("max_size", 4)),
+        pool_timeout_seconds=float(pool.get("timeout_seconds", 5)),
+        tls_mode=str(
+            tls.get(
+                "mode",
+                "prefer" if backend == "postgres" else "disable",
+            )
+        ).strip().casefold(),
+        tls_ca_file=_env_value(
+            tls,
+            "ca_file_env",
+            f"{default_prefix}_TLS_CA_FILE",
+        ),
+        tls_cert_file=_env_value(
+            tls,
+            "cert_file_env",
+            f"{default_prefix}_TLS_CERT_FILE",
+        ),
+        tls_key_file=_env_value(
+            tls,
+            "key_file_env",
+            f"{default_prefix}_TLS_KEY_FILE",
+        ),
     )
     mysql = (
         PostgresRuntimeConfig(
@@ -290,7 +325,12 @@ def load_tenant_profile(path: Path) -> TenantProfile:
                 "configured."
             )
     storage_config = TenantStorageConfig(
-        chroma_dir=_path(storage.get("chroma_dir", "storage/chroma")),
+        chroma_dir=_path(
+            storage.get(
+                "chroma_dir",
+                f"storage/companies/{company_id}/chroma",
+            )
+        ),
         collection_name=collection_name,
         bm25_path=_path(
             storage.get(

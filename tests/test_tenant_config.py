@@ -32,6 +32,17 @@ database:
   search_id_column: id
   result_table: products
   result_id_column: id
+  timeouts:
+    connect_seconds: 7
+    read_seconds: 31
+    write_seconds: 32
+    statement_timeout_ms: 9000
+  pool:
+    min_size: 1
+    max_size: 3
+    timeout_seconds: 2.5
+  tls:
+    mode: disable
 storage:
   chroma_dir: {chroma_dir}
   collection_name: company_{company}
@@ -112,6 +123,14 @@ def test_tenant_profiles_resolve_separate_storage_and_api_keys(
     assert profiles["alpha"].storage.bm25_path != profiles["beta"].storage.bm25_path
     assert profiles["alpha"].endpoint_slug == "alpha"
     assert profiles["alpha"].payload.request_mapping["query"] == "query"
+    assert profiles["alpha"].database.connect_timeout_seconds == 7
+    assert profiles["alpha"].database.read_timeout_seconds == 31
+    assert profiles["alpha"].database.write_timeout_seconds == 32
+    assert profiles["alpha"].database.statement_timeout_ms == 9000
+    assert profiles["alpha"].database.pool_min_size == 1
+    assert profiles["alpha"].database.pool_max_size == 3
+    assert profiles["alpha"].database.pool_timeout_seconds == 2.5
+    assert profiles["alpha"].database.tls_mode == "disable"
     assert registry.resolve_api_key("alpha-key").company_id == "alpha"
     assert registry.resolve_api_key("beta-key").company_id == "beta"
     assert registry.resolve_api_key("wrong") is None

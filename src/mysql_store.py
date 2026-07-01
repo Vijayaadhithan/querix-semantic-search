@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field
+import ssl
 from typing import Any
 
 from settings import (
@@ -32,6 +33,43 @@ class MySQLRuntimeConfig:
     result_table: str
     result_id_column: str
     result_type_column: str = "type"
+    connect_timeout_seconds: int = 10
+    read_timeout_seconds: int = 300
+    write_timeout_seconds: int = 300
+    statement_timeout_ms: int = 0
+    pool_min_size: int = 0
+    pool_max_size: int = 4
+    pool_timeout_seconds: float = 5.0
+    tls_mode: str = "disable"
+    tls_ca_file: str = ""
+    tls_cert_file: str = ""
+    tls_key_file: str = ""
+
+    def __post_init__(self) -> None:
+        if min(
+            self.connect_timeout_seconds,
+            self.read_timeout_seconds,
+            self.write_timeout_seconds,
+        ) <= 0:
+            raise ValueError("MySQL connection timeouts must be greater than zero")
+        if self.statement_timeout_ms < 0:
+            raise ValueError("MySQL statement_timeout_ms must not be negative")
+        if (
+            self.pool_min_size < 0
+            or self.pool_max_size <= 0
+            or self.pool_min_size > self.pool_max_size
+        ):
+            raise ValueError("Invalid MySQL connection pool size")
+        if self.pool_timeout_seconds <= 0:
+            raise ValueError("MySQL pool_timeout_seconds must be greater than zero")
+        if self.tls_mode not in {
+            "disable",
+            "prefer",
+            "require",
+            "verify-ca",
+            "verify-full",
+        }:
+            raise ValueError(f"Unsupported MySQL TLS mode {self.tls_mode!r}")
 
 
 DEFAULT_MYSQL_CONFIG = MySQLRuntimeConfig(
@@ -65,6 +103,26 @@ def require_pymysql():
     return pymysql
 
 
+def _mysql_ssl_context(config: MySQLRuntimeConfig) -> ssl.SSLContext | None:
+    if config.tls_mode in {"disable", "prefer"}:
+        return None
+    if config.tls_mode == "require":
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+    else:
+        context = ssl.create_default_context(
+            cafile=config.tls_ca_file or None,
+        )
+        context.check_hostname = config.tls_mode == "verify-full"
+    if config.tls_cert_file:
+        context.load_cert_chain(
+            certfile=config.tls_cert_file,
+            keyfile=config.tls_key_file or None,
+        )
+    return context
+
+
 def mysql_connection(
     cursorclass=None,
     config: MySQLRuntimeConfig | None = None,
@@ -79,9 +137,20 @@ def mysql_connection(
         "database": config.database,
         "charset": "utf8mb4",
         "autocommit": True,
-        "read_timeout": 300,
-        "write_timeout": 300,
+        "connect_timeout": config.connect_timeout_seconds,
+        "read_timeout": config.read_timeout_seconds,
+        "write_timeout": config.write_timeout_seconds,
     }
+    if config.statement_timeout_ms:
+        connection_options["init_command"] = (
+            "SET SESSION MAX_EXECUTION_TIME="
+            f"{config.statement_timeout_ms}"
+        )
+    ssl_context = _mysql_ssl_context(config)
+    if config.tls_mode == "disable":
+        connection_options["ssl_disabled"] = True
+    elif ssl_context is not None:
+        connection_options["ssl"] = ssl_context
     if cursorclass is not None:
         connection_options["cursorclass"] = cursorclass
     return pymysql.connect(

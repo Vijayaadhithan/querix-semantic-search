@@ -146,6 +146,14 @@ def main() -> None:
         action="store_true",
         help="re-embed rows even when the existing content hash matches",
     )
+    parser.add_argument(
+        "--mysql-reconcile-deletions",
+        action="store_true",
+        help=(
+            "after a successful full scan, remove tenant vector/BM25 rows "
+            "that no longer exist in the configured source table"
+        ),
+    )
     args = parser.parse_args()
     tenant = None
     if args.company:
@@ -227,6 +235,7 @@ def main() -> None:
             primary_key_column=args.mysql_primary_key,
             replace_source=args.mysql_replace_source,
             force_reembed=args.mysql_force_reembed,
+            reconcile_deletions=args.mysql_reconcile_deletions,
             tenant=tenant,
         )
         return

@@ -115,6 +115,13 @@ class PersistentBM25Index:
             ).fetchone()
         return int(row["row_count"])
 
+    def doc_ids(self) -> set[str]:
+        with self._lock:
+            rows = self.connection.execute(
+                "SELECT doc_id FROM products"
+            ).fetchall()
+        return {str(row["doc_id"]) for row in rows}
+
     def revision(self) -> int:
         with self._lock:
             row = self.connection.execute(
@@ -133,6 +140,26 @@ class PersistentBM25Index:
             with self.connection:
                 self.connection.execute("DELETE FROM products")
                 self._increment_revision()
+
+    def delete_doc_ids(self, doc_ids: list[str] | set[str]) -> int:
+        unique_ids = sorted({str(doc_id) for doc_id in doc_ids})
+        if not unique_ids:
+            return 0
+        deleted = 0
+        with self._lock:
+            with self.connection:
+                for start in range(0, len(unique_ids), 500):
+                    batch = unique_ids[start : start + 500]
+                    placeholders = ", ".join("?" for _ in batch)
+                    cursor = self.connection.execute(
+                        f"DELETE FROM products "
+                        f"WHERE doc_id IN ({placeholders})",
+                        batch,
+                    )
+                    deleted += max(cursor.rowcount, 0)
+                if deleted:
+                    self._increment_revision()
+        return deleted
 
     def upsert(self, rows: list[dict]) -> None:
         if not rows:

@@ -10,6 +10,7 @@ from query_planner import (
     query_filter_value_index,
 )
 from settings import PROJECT_ROOT
+from tenant_config import discover_tenant_profiles
 
 DEFAULT_CASES_PATH = PROJECT_ROOT / "eval" / "query_cases.json"
 
@@ -21,8 +22,17 @@ def nested_value(document: dict, path: str):
     return value
 
 
-def evaluate_case(case: dict, value_index: dict, catalog: dict) -> tuple[dict, list]:
-    plan = extract_query_plan(case["query"], catalog)
+def evaluate_case(
+    case: dict,
+    value_index: dict,
+    catalog: dict,
+    prompt_context: str = "",
+) -> tuple[dict, list]:
+    plan = extract_query_plan(
+        case["query"],
+        catalog,
+        prompt_context=prompt_context,
+    )
     plan = enrich_query_plan(case["query"], plan, value_index)
     failures = []
     for path, expected in case["expected"].items():
@@ -53,19 +63,40 @@ def main() -> None:
         type=int,
         help="run only the first N cases",
     )
+    parser.add_argument(
+        "--company",
+        help="tenant profile slug; uses that company's isolated BM25 index",
+    )
     args = parser.parse_args()
 
     cases = json.loads(args.cases.read_text(encoding="utf-8"))
     if args.limit is not None:
         cases = cases[: args.limit]
 
-    index = PersistentBM25Index()
+    profile = None
+    if args.company:
+        profiles = discover_tenant_profiles()
+        try:
+            profile = profiles[args.company]
+        except KeyError as exc:
+            available = ", ".join(sorted(profiles)) or "none"
+            raise SystemExit(
+                f"Unknown company {args.company!r}; available: {available}"
+            ) from exc
+    index = PersistentBM25Index(
+        profile.storage.bm25_path if profile else None
+    ) if profile else PersistentBM25Index()
     try:
         value_index = query_filter_value_index(index)
         catalog = build_query_filter_catalog(value_index)
         failed = 0
         for case in cases:
-            plan, failures = evaluate_case(case, value_index, catalog)
+            plan, failures = evaluate_case(
+                case,
+                value_index,
+                catalog,
+                profile.planner_prompt_context if profile else "",
+            )
             if failures:
                 failed += 1
                 print(f"FAIL {case['name']}")

@@ -30,10 +30,26 @@ database:
   result_table: ads
   result_id_column: id
   result_type_column: type
+  timeouts:
+    connect_seconds: 10
+    read_seconds: 300
+    write_seconds: 300
+    statement_timeout_ms: 0
+  pool:
+    min_size: 0
+    max_size: 2
+    timeout_seconds: 5
+  # Local testing uses plaintext loopback. Production must use verify-full
+  # with a CA path supplied through ca_file_env.
+  tls:
+    mode: disable
+    ca_file_env: GAINR_DB_TLS_CA_FILE
+    cert_file_env: GAINR_DB_TLS_CERT_FILE
+    key_file_env: GAINR_DB_TLS_KEY_FILE
 
 storage:
   vector_backend: chroma
-  chroma_dir: storage/chroma
+  chroma_dir: storage/companies/gainr/chroma
   collection_name: company_gainr
   bm25_path: storage/companies/gainr/bm25.sqlite3
 
