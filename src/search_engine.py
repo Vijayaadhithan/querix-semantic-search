@@ -1,4 +1,5 @@
 import hashlib
+import json
 import logging
 import threading
 import time
@@ -194,7 +195,13 @@ class ProductSearchEngine:
             "result_cache_ttl_seconds": RESULT_CACHE_TTL_SECONDS,
         }
 
-    def _result_cache_key(self, query: str, limit: int | None) -> str:
+    def _result_cache_key(
+        self,
+        query: str,
+        limit: int | None,
+        resolved_filters: dict | None = None,
+        allowed_ad_types: set[str] | None = None,
+    ) -> str:
         version_parts = (
             RESULT_CACHE_SCHEMA_VERSION,
             self.company_id or "legacy",
@@ -204,6 +211,15 @@ class ProductSearchEngine:
             RERANK_MODEL,
             str(RERANK_CANDIDATE_K),
             str(PRIMARY_RANKED_K),
+            json.dumps(
+                resolved_filters,
+                sort_keys=True,
+                separators=(",", ":"),
+                default=str,
+            )
+            if resolved_filters is not None
+            else "",
+            ",".join(sorted(allowed_ad_types or set())),
             self._query_cache_key(query),
         )
         return hashlib.sha256("\0".join(version_parts).encode()).hexdigest()
@@ -213,11 +229,18 @@ class ProductSearchEngine:
         query: str,
         limit: int | None,
         trace_id: str,
+        resolved_filters: dict | None = None,
+        allowed_ad_types: set[str] | None = None,
     ) -> dict | None:
         if not RESULT_CACHE_ENABLED or self.shared_plan_cache is None:
             return None
         started = time.perf_counter()
-        cache_key = self._result_cache_key(query, limit)
+        cache_key = self._result_cache_key(
+            query,
+            limit,
+            resolved_filters,
+            allowed_ad_types,
+        )
         cached = self.shared_plan_cache.get_json(
             self._cache_namespace("search_result"),
             cache_key,
@@ -315,6 +338,8 @@ class ProductSearchEngine:
         query: str,
         limit: int | None,
         result: dict,
+        resolved_filters: dict | None = None,
+        allowed_ad_types: set[str] | None = None,
     ) -> None:
         if (
             not RESULT_CACHE_ENABLED
@@ -342,7 +367,12 @@ class ProductSearchEngine:
         }
         self.shared_plan_cache.set_json(
             self._cache_namespace("search_result"),
-            self._result_cache_key(query, limit),
+            self._result_cache_key(
+                query,
+                limit,
+                resolved_filters,
+                allowed_ad_types,
+            ),
             payload,
             RESULT_CACHE_TTL_SECONDS,
         )
@@ -519,6 +549,7 @@ class ProductSearchEngine:
         resolved_filters: dict,
         candidate_limit: int | None = None,
         trace_id: str = "-",
+        allowed_ad_types: set[str] | None = None,
     ) -> dict:
         extended_window = (
             candidate_limit is not None and candidate_limit > RERANK_TOP_K
@@ -595,6 +626,7 @@ class ProductSearchEngine:
             type_fetcher=self._fetch_product_types,
             search_table=self.search_table,
             search_id_column=self.search_id_column,
+            allowed_ad_types=allowed_ad_types,
         )[:hybrid_top_k]
         LOGGER.info(
             "[search:%s] step=retrieve status=complete vector=%d bm25=%d "
@@ -709,6 +741,7 @@ class ProductSearchEngine:
         limit: int | None,
         trace_id: str,
         search_started: float,
+        allowed_ad_types: set[str] | None = None,
     ) -> dict:
         result_limit = limit if limit is not None else RERANK_TOP_K
         browse_started = time.perf_counter()
@@ -720,6 +753,7 @@ class ProductSearchEngine:
             result_limit,
             type_fetcher=self._fetch_product_types,
             sort_order=planned["query_plan"].get("sort_order"),
+            allowed_ad_types=allowed_ad_types,
         )
         browse_seconds = time.perf_counter() - browse_started
         LOGGER.info(
@@ -763,7 +797,15 @@ class ProductSearchEngine:
             "products": products,
         }
 
-    def search(self, query: str, limit: int | None = None) -> dict:
+    def search(
+        self,
+        query: str,
+        limit: int | None = None,
+        *,
+        planned_result: dict | None = None,
+        resolved_filters: dict | None = None,
+        allowed_ad_types: set[str] | None = None,
+    ) -> dict:
         if limit is not None and limit <= 0:
             raise ValueError("Search limit must be greater than zero.")
         primary_limit = (
@@ -790,6 +832,8 @@ class ProductSearchEngine:
             query,
             limit,
             trace_id,
+            resolved_filters,
+            allowed_ad_types,
         )
         if cached_result is not None:
             LOGGER.info(
@@ -800,7 +844,13 @@ class ProductSearchEngine:
                 (time.perf_counter() - started) * 1000,
             )
             return cached_result
-        planned = self.plan(query, trace_id=trace_id)
+        planned = (
+            deepcopy(planned_result)
+            if planned_result is not None
+            else self.plan(query, trace_id=trace_id)
+        )
+        if resolved_filters is not None:
+            planned["resolved_filters"] = deepcopy(resolved_filters)
         if (
             planned["query_plan"].get("execution_path")
             == "deterministic_filter"
@@ -810,16 +860,24 @@ class ProductSearchEngine:
                 limit,
                 trace_id,
                 started,
+                allowed_ad_types,
             )
             result["result_cache_hit"] = False
             result["result_cache_seconds"] = 0.0
-            self._cache_search_result(query, limit, result)
+            self._cache_search_result(
+                query,
+                limit,
+                result,
+                resolved_filters,
+                allowed_ad_types,
+            )
             return result
         retrieved = self.retrieve(
             planned["query_plan"],
             planned["resolved_filters"],
             candidate_limit=rerank_candidate_limit,
             trace_id=trace_id,
+            allowed_ad_types=allowed_ad_types,
         )
         candidates = retrieved["candidates"]
         if candidates:
@@ -868,6 +926,7 @@ class ProductSearchEngine:
                 exclude_product_ids=set(primary_product_ids),
                 type_fetcher=self._fetch_product_types,
                 sort_order=planned["query_plan"].get("sort_order"),
+                allowed_ad_types=allowed_ad_types,
             )
         related_tail_seconds = time.perf_counter() - tail_started
         product_ids = list(
@@ -952,5 +1011,11 @@ class ProductSearchEngine:
             "result_cache_hit": False,
             "result_cache_seconds": 0.0,
         }
-        self._cache_search_result(query, limit, result)
+        self._cache_search_result(
+            query,
+            limit,
+            result,
+            resolved_filters,
+            allowed_ad_types,
+        )
         return result

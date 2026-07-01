@@ -94,3 +94,23 @@ payload:
 rate_limit:
   requests_per_minute: 120
   burst: 20
+
+# Gainr's current frontend calls these legacy paths under /api/v1/gainr:
+# search-suggestions, filter-data, filter-result, and recent-search.
+# This adapter is deliberately enabled only for Gainr; other tenants keep the
+# generic configurable /search contract.
+compatibility:
+  adapter: gainr_legacy
+  page_size: 20
+  suggestions_limit: 8
+  recent_limit: 10
+  recent_ttl_seconds: 7776000
+  # Change only these two values if the production Network request uses
+  # different price-range keys.
+  min_fee_field: min_fee
+  max_fee_field: max_fee
+  # Gainr UI contract: 1 = Fixed and 0 = Negotiable. These are translated to
+  # ads.is_rent_negotiable values 0 and 1 respectively.
+  fixed_fee_id: 1
+  negotiable_fee_id: 0
+  emit_search_meta: true

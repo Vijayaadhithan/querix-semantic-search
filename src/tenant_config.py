@@ -59,6 +59,46 @@ class TenantPayloadConfig:
 
 
 @dataclass(frozen=True)
+class TenantCompatibilityConfig:
+    adapter: str = ""
+    page_size: int = 20
+    suggestions_limit: int = 8
+    recent_limit: int = 10
+    recent_ttl_seconds: int = 60 * 60 * 24 * 90
+    min_fee_field: str = "min_fee"
+    max_fee_field: str = "max_fee"
+    fixed_fee_id: int = 1
+    negotiable_fee_id: int = 0
+    emit_search_meta: bool = True
+
+    def __post_init__(self) -> None:
+        if self.adapter not in {"", "gainr_legacy"}:
+            raise ValueError(
+                f"Unsupported compatibility adapter {self.adapter!r}"
+            )
+        if self.page_size <= 0 or self.page_size > 100:
+            raise ValueError("Compatibility page_size must be between 1 and 100")
+        if self.suggestions_limit <= 0 or self.suggestions_limit > 50:
+            raise ValueError(
+                "Compatibility suggestions_limit must be between 1 and 50"
+            )
+        if self.recent_limit <= 0 or self.recent_limit > 50:
+            raise ValueError(
+                "Compatibility recent_limit must be between 1 and 50"
+            )
+        if self.recent_ttl_seconds <= 0:
+            raise ValueError(
+                "Compatibility recent_ttl_seconds must be greater than zero"
+            )
+        if not self.min_fee_field or not self.max_fee_field:
+            raise ValueError("Compatibility fee field names must not be empty")
+        if self.min_fee_field == self.max_fee_field:
+            raise ValueError("Compatibility fee field names must be different")
+        if self.fixed_fee_id == self.negotiable_fee_id:
+            raise ValueError("Fixed and negotiable fee IDs must be different")
+
+
+@dataclass(frozen=True)
 class TenantProfile:
     company_id: str
     database: MySQLRuntimeConfig | PostgresRuntimeConfig
@@ -71,6 +111,9 @@ class TenantProfile:
     endpoint_slug: str = ""
     planner_enabled: bool = True
     planner_prompt_context: str = ""
+    compatibility: TenantCompatibilityConfig = field(
+        default_factory=TenantCompatibilityConfig
+    )
 
 
 def validate_tenant_id(value: str) -> str:
@@ -428,6 +471,34 @@ def load_tenant_profile(path: Path) -> TenantProfile:
     )
     if not api_key_envs:
         api_key_envs = (f"{company_id.upper()}_API_KEY",)
+    compatibility = dict(raw.get("compatibility", {}))
+    compatibility_config = TenantCompatibilityConfig(
+        adapter=str(compatibility.get("adapter", "")).strip().casefold(),
+        page_size=int(compatibility.get("page_size", 20)),
+        suggestions_limit=int(
+            compatibility.get("suggestions_limit", 8)
+        ),
+        recent_limit=int(compatibility.get("recent_limit", 10)),
+        recent_ttl_seconds=int(
+            compatibility.get(
+                "recent_ttl_seconds",
+                60 * 60 * 24 * 90,
+            )
+        ),
+        min_fee_field=str(
+            compatibility.get("min_fee_field", "min_fee")
+        ).strip(),
+        max_fee_field=str(
+            compatibility.get("max_fee_field", "max_fee")
+        ).strip(),
+        fixed_fee_id=int(compatibility.get("fixed_fee_id", 1)),
+        negotiable_fee_id=int(
+            compatibility.get("negotiable_fee_id", 0)
+        ),
+        emit_search_meta=bool(
+            compatibility.get("emit_search_meta", True)
+        ),
+    )
 
     return TenantProfile(
         company_id=company_id,
@@ -446,6 +517,7 @@ def load_tenant_profile(path: Path) -> TenantProfile:
         endpoint_slug=endpoint_slug,
         planner_enabled=planner_enabled,
         planner_prompt_context=planner_prompt_context,
+        compatibility=compatibility_config,
     )
 
 

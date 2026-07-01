@@ -655,6 +655,125 @@ curl "http://127.0.0.1:8000/api/v1/gainr/usage?month=${MONTH}" \
 
 Usage is grouped by company, month, provider, model, operation, and status.
 
+### 13.6 Gainr frontend-compatible endpoints
+
+Gainr can keep its four existing frontend service functions by configuring:
+
+```env
+VITE_SEARCH_API_BASE_URL=https://your-api-domain.com/api/v1/gainr
+```
+
+Test all four contracts:
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/gainr/search-suggestions \
+  -H 'Content-Type: application/json' \
+  -H "X-API-Key: $GAINR_API_KEY" \
+  -d '{"term":"bike"}'
+
+curl -X POST http://127.0.0.1:8000/api/v1/gainr/filter-data \
+  -H 'Content-Type: application/json' \
+  -H "X-API-Key: $GAINR_API_KEY" \
+  -d '{"city_id":456}'
+
+curl -X POST http://127.0.0.1:8000/api/v1/gainr/filter-result \
+  -H 'Content-Type: application/json' \
+  -H "X-API-Key: $GAINR_API_KEY" \
+  -H 'X-User-ID: local-test-user' \
+  -d '{
+    "searchTerm":"Bike",
+    "filter":{
+      "city_id":456,
+      "subcategory_id":"",
+      "locality_id":[],
+      "rental_duration":[],
+      "ad_type":[1],
+      "fee":[],
+      "min_fee":null,
+      "max_fee":null
+    },
+    "page":1
+  }'
+
+curl http://127.0.0.1:8000/api/v1/gainr/recent-search \
+  -H "X-API-Key: $GAINR_API_KEY" \
+  -H 'X-User-ID: local-test-user'
+```
+
+The `filter-result` response keeps Gainr's `status`, `message`, `data`,
+`current_page`, and `last_page` fields. `search_meta` additionally reports the
+chosen route, automatic filters, explicit filters, effective filters, ignored
+automatic filters, result-window status, and usage.
+
+Rules:
+
+- explicit checkbox/range filters are hard constraints and override matching
+  query-derived filters;
+- automatic query filters fill only missing fields;
+- values inside one multi-select use OR, while different filter groups use AND;
+- deterministic catalogue queries use complete page-number pagination;
+- semantic queries use the configured bounded ranked window;
+- recent searches are isolated by company and verified Gainr user ID;
+- `type` and `is_rent_negotiable` are present in `ads_search_ready` and in the
+  rebuilt Gainr BM25 index;
+- final card hydration checks the current `ads` row, so a changed ad type or
+  negotiability value does not wait for the next vector refresh.
+
+Existing installations must rebuild only the Gainr BM25 index once so its new
+numeric ID columns are populated:
+
+```bash
+.venv/bin/python src/ingest.py \
+  --company gainr \
+  --mysql-bm25-only \
+  --mysql-batch-size 5000
+```
+
+This command does not call the embedding model and does not modify Chroma.
+
+### 13.7 Compatibility and regression verification
+
+Verify that enabling the frontend-compatible adapter did not change Gainr's
+existing generic company endpoint:
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/gainr/search \
+  -H 'Content-Type: application/json' \
+  -H "X-API-Key: $GAINR_API_KEY" \
+  -d '{"query":"bike in Mumbai under 1000","page_size":5}'
+```
+
+Run the complete local verification:
+
+```bash
+.venv/bin/python -m pytest -q
+.venv/bin/python scripts/doctor.py --company gainr --strict
+git diff --check
+```
+
+Current verified local state:
+
+```text
+ads_search_ready rows:   250117
+ads rows:                250117
+Chroma vectors:          250117
+BM25 products:           250117
+tests:                   123 passed
+strict doctor:           8 passed, 0 failed
+```
+
+The compatibility routes are created only when a tenant profile explicitly
+sets:
+
+```yaml
+compatibility:
+  adapter: gainr_legacy
+```
+
+Profiles without that setting retain their existing configured endpoint,
+request mapping, response fields, database, vector collection, BM25 file,
+API keys and rate limits.
+
 ## 14. Concurrent load testing
 
 Repeated semantic/cache test:
@@ -897,6 +1016,31 @@ pool:
 ```
 
 Do not raise the pool independently of useful search concurrency.
+
+### Vector search suddenly takes tens of seconds
+
+Check the server log:
+
+```text
+step=retrieve ... vector_ms=...
+```
+
+Each company already owns an isolated Chroma collection. Do not add
+`company_id` or `source_file` as unconditional Chroma `where` predicates:
+doing so can turn a normal ANN lookup into an expensive metadata-filtered
+scan. The current implementation adds a Chroma `where` clause only for actual
+category, location, duration or price constraints and still validates
+tenant/source metadata after retrieval.
+
+Reference measurements on the 250,117-vector local Gainr collection:
+
+```text
+unfiltered, 120 candidates: approximately 592 ms
+city_id=456, 120 candidates: approximately 937 ms
+```
+
+After changing retrieval code, restart the API process; no ingestion or vector
+rebuild is needed for this specific optimization.
 
 ### Google query-planner timeout/503
 

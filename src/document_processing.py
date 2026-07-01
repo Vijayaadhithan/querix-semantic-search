@@ -473,6 +473,19 @@ def prepare_bm25_index_row(
         "locality_name": metadata_value(row.get("locality_name")),
         "rental_duration": metadata_value(row.get("rental_duration")),
         "rental_fee": rental_fee,
+        "main_category_id": metadata_value(row.get("main_category_id")),
+        "subcategory_id": metadata_value(row.get("subcategory_id")),
+        "state_id": metadata_value(row.get("state_id")),
+        "city_id": metadata_value(row.get("city_id")),
+        "locality_id": metadata_value(row.get("locality_id")),
+        # These two fields are intentionally optional. Gainr can add them to
+        # ads_search_ready later without blocking today's ingestion.
+        "ad_type": metadata_value(
+            row.get("type", row.get("ad_type"))
+        ),
+        "is_rent_negotiable": metadata_value(
+            row.get("is_rent_negotiable")
+        ),
     }
 
 

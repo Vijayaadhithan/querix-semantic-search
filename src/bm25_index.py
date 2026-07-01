@@ -13,6 +13,30 @@ FILTER_COLUMNS = (
     "locality_name",
     "rental_duration",
 )
+STRUCTURED_FILTER_COLUMNS = {
+    "main_category_name",
+    "subcategory_name",
+    "state_name",
+    "city_name",
+    "locality_name",
+    "rental_duration",
+    "main_category_id",
+    "subcategory_id",
+    "state_id",
+    "city_id",
+    "locality_id",
+    "ad_type",
+    "is_rent_negotiable",
+}
+OPTIONAL_PRODUCT_COLUMNS = {
+    "main_category_id": "INTEGER",
+    "subcategory_id": "INTEGER",
+    "state_id": "INTEGER",
+    "city_id": "INTEGER",
+    "locality_id": "INTEGER",
+    "ad_type": "INTEGER",
+    "is_rent_negotiable": "INTEGER",
+}
 
 
 def tokenize_query(text: str) -> list[str]:
@@ -51,7 +75,14 @@ class PersistentBM25Index:
                 city_name TEXT,
                 locality_name TEXT,
                 rental_duration TEXT,
-                rental_fee REAL
+                rental_fee REAL,
+                main_category_id INTEGER,
+                subcategory_id INTEGER,
+                state_id INTEGER,
+                city_id INTEGER,
+                locality_id INTEGER,
+                ad_type INTEGER,
+                is_rent_negotiable INTEGER
             );
 
             CREATE TABLE IF NOT EXISTS index_metadata (
@@ -102,6 +133,22 @@ class PersistentBM25Index:
                 ON products(rental_fee);
             """
         )
+        existing_columns = {
+            str(row["name"])
+            for row in self.connection.execute(
+                "PRAGMA table_info(products)"
+            ).fetchall()
+        }
+        for column, column_type in OPTIONAL_PRODUCT_COLUMNS.items():
+            if column not in existing_columns:
+                self.connection.execute(
+                    f"ALTER TABLE products ADD COLUMN {column} {column_type}"
+                )
+        for column in OPTIONAL_PRODUCT_COLUMNS:
+            self.connection.execute(
+                f"CREATE INDEX IF NOT EXISTS products_{column} "
+                f"ON products({column})"
+            )
         self.connection.commit()
 
     def close(self) -> None:
@@ -176,6 +223,13 @@ class PersistentBM25Index:
                 row.get("locality_name"),
                 row.get("rental_duration"),
                 row.get("rental_fee"),
+                row.get("main_category_id"),
+                row.get("subcategory_id"),
+                row.get("state_id"),
+                row.get("city_id"),
+                row.get("locality_id"),
+                row.get("ad_type"),
+                row.get("is_rent_negotiable"),
             )
             for row in rows
         ]
@@ -193,9 +247,16 @@ class PersistentBM25Index:
                         city_name,
                         locality_name,
                         rental_duration,
-                        rental_fee
+                        rental_fee,
+                        main_category_id,
+                        subcategory_id,
+                        state_id,
+                        city_id,
+                        locality_id,
+                        ad_type,
+                        is_rent_negotiable
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(doc_id) DO UPDATE SET
                         product_id = excluded.product_id,
                         content = excluded.content,
@@ -205,7 +266,14 @@ class PersistentBM25Index:
                         city_name = excluded.city_name,
                         locality_name = excluded.locality_name,
                         rental_duration = excluded.rental_duration,
-                        rental_fee = excluded.rental_fee
+                        rental_fee = excluded.rental_fee,
+                        main_category_id = excluded.main_category_id,
+                        subcategory_id = excluded.subcategory_id,
+                        state_id = excluded.state_id,
+                        city_id = excluded.city_id,
+                        locality_id = excluded.locality_id,
+                        ad_type = excluded.ad_type,
+                        is_rent_negotiable = excluded.is_rent_negotiable
                     """,
                     values,
                 )
@@ -296,10 +364,14 @@ class PersistentBM25Index:
         params: list = [match_query]
 
         for column, value in resolved_filters["categorical"].items():
-            if column not in FILTER_COLUMNS:
+            if column not in STRUCTURED_FILTER_COLUMNS:
                 continue
-            conditions.append(f"p.{column} = ?")
-            params.append(value)
+            self._append_filter_condition(
+                conditions,
+                params,
+                f"p.{column}",
+                value,
+            )
         if "min_rental_fee" in resolved_filters:
             conditions.append("p.rental_fee > ?")
             params.append(UNPRICED_RENTAL_FEE_CEILING)
@@ -334,6 +406,24 @@ class PersistentBM25Index:
             for row in rows
         ]
 
+    @staticmethod
+    def _append_filter_condition(
+        conditions: list[str],
+        params: list,
+        column: str,
+        value,
+    ) -> None:
+        if isinstance(value, (list, tuple, set)):
+            values = list(dict.fromkeys(value))
+            if not values:
+                return
+            placeholders = ", ".join("?" for _ in values)
+            conditions.append(f"{column} IN ({placeholders})")
+            params.extend(values)
+            return
+        conditions.append(f"{column} = ?")
+        params.append(value)
+
     def browse(
         self,
         resolved_filters: dict,
@@ -361,10 +451,14 @@ class PersistentBM25Index:
             categorical[column] = value
 
         for column, value in categorical.items():
-            if column not in FILTER_COLUMNS:
+            if column not in STRUCTURED_FILTER_COLUMNS:
                 continue
-            conditions.append(f"{column} = ?")
-            params.append(value)
+            self._append_filter_condition(
+                conditions,
+                params,
+                column,
+                value,
+            )
         if "min_rental_fee" in resolved_filters:
             conditions.append("rental_fee > ?")
             params.append(UNPRICED_RENTAL_FEE_CEILING)

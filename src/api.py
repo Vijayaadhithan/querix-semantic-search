@@ -22,6 +22,11 @@ from pydantic import (
 )
 
 from bm25_index import PersistentBM25Index
+from gainr_compat import (
+    GainrCompatibilityService,
+    GainrFilterDataRequest,
+    GainrSuggestionRequest,
+)
 from ollama_client import preload_ollama_embedding
 from rate_limit import TenantRateLimiter
 from redis_cache import create_redis_cache
@@ -577,6 +582,7 @@ class TenantServicePool:
         shared_cache=None,
         max_services: int = API_TENANT_ENGINE_CACHE_SIZE,
         engine_factory=None,
+        compatibility_factory=None,
         usage_store: MonthlyUsageStore | None = None,
     ):
         if max_services <= 0:
@@ -585,6 +591,9 @@ class TenantServicePool:
         self.shared_cache = shared_cache
         self.max_services = max_services
         self.engine_factory = engine_factory
+        self.compatibility_factory = (
+            compatibility_factory or GainrCompatibilityService
+        )
         self.usage_store = usage_store
         self.shared_reranker = SharedReranker()
         self.reranker_load_ms = 0.0
@@ -649,6 +658,13 @@ class TenantServicePool:
         )
         service.reranker_load_ms = self.reranker_load_ms
         service.embedding_warmup = self.embedding_warmup
+        service.compatibility_service = None
+        if profile.compatibility.adapter == "gainr_legacy":
+            service.compatibility_service = self.compatibility_factory(
+                profile,
+                service,
+                self.shared_cache,
+            )
         return service
 
     def close(self) -> None:
@@ -664,6 +680,7 @@ def create_app(
     service: ProductSearchService | None = None,
     tenant_registry: TenantRegistry | None = None,
     tenant_engine_factory=None,
+    compatibility_factory=None,
     rate_limiter: TenantRateLimiter | None = None,
     preload_models: bool | None = None,
     usage_store: MonthlyUsageStore | None = None,
@@ -698,6 +715,7 @@ def create_app(
                 shared_cache=redis_cache,
                 max_services=API_TENANT_ENGINE_CACHE_SIZE,
                 engine_factory=tenant_engine_factory,
+                compatibility_factory=compatibility_factory,
                 usage_store=active_usage_store,
             )
             application.state.tenant_registry = registry
@@ -782,7 +800,12 @@ def create_app(
             allow_origins=API_CORS_ORIGINS,
             allow_credentials=False,
             allow_methods=["GET", "POST"],
-            allow_headers=["Content-Type", "X-API-Key"],
+            allow_headers=[
+                "Content-Type",
+                "Authorization",
+                "X-API-Key",
+                "X-User-ID",
+            ],
         )
 
     def resolve_company_profile(
@@ -855,6 +878,28 @@ def create_app(
                     headers={"Retry-After": "1"},
                 )
         return application.state.tenant_service_pool.get(profile.company_id)
+
+    def resolve_compatibility_service(
+        api_key: str | None,
+        *,
+        company_endpoint: str,
+    ):
+        search_service = resolve_service(
+            api_key,
+            apply_rate_limit=True,
+            company_endpoint=company_endpoint,
+        )
+        compatibility_service = getattr(
+            search_service,
+            "compatibility_service",
+            None,
+        )
+        if compatibility_service is None:
+            raise HTTPException(
+                status_code=404,
+                detail="This company has no compatibility API configured.",
+            )
+        return compatibility_service
 
     def company_search_request(
         company_endpoint: str,
@@ -1009,6 +1054,84 @@ def create_app(
             x_api_key,
             company_endpoint=company_endpoint,
         )
+
+    @application.post(
+        "/api/v1/{company_endpoint}/search-suggestions",
+        tags=["company-compatibility"],
+    )
+    def company_search_suggestions(
+        company_endpoint: str,
+        request: GainrSuggestionRequest,
+        x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+    ) -> dict[str, Any]:
+        try:
+            return resolve_compatibility_service(
+                x_api_key,
+                company_endpoint=company_endpoint,
+            ).search_suggestions(request)
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    @application.post(
+        "/api/v1/{company_endpoint}/filter-data",
+        tags=["company-compatibility"],
+    )
+    def company_filter_data(
+        company_endpoint: str,
+        request: GainrFilterDataRequest,
+        x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+    ) -> dict[str, Any]:
+        try:
+            return resolve_compatibility_service(
+                x_api_key,
+                company_endpoint=company_endpoint,
+            ).filter_data(request)
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    @application.post(
+        "/api/v1/{company_endpoint}/filter-result",
+        tags=["company-compatibility"],
+    )
+    def company_filter_result(
+        company_endpoint: str,
+        payload: dict[str, Any],
+        x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+        x_user_id: str | None = Header(default=None, alias="X-User-ID"),
+    ) -> dict[str, Any]:
+        compatibility_service = resolve_compatibility_service(
+            x_api_key,
+            company_endpoint=company_endpoint,
+        )
+        try:
+            request = compatibility_service.parse_filter_result(payload)
+            return compatibility_service.filter_results(
+                request,
+                user_id=x_user_id,
+            )
+        except ValidationError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail=exc.errors(include_context=False),
+            ) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    @application.get(
+        "/api/v1/{company_endpoint}/recent-search",
+        tags=["company-compatibility"],
+    )
+    def company_recent_search(
+        company_endpoint: str,
+        x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+        x_user_id: str | None = Header(default=None, alias="X-User-ID"),
+    ) -> dict[str, Any]:
+        return resolve_compatibility_service(
+            x_api_key,
+            company_endpoint=company_endpoint,
+        ).recent_searches(x_user_id)
 
     @application.get(
         "/api/v1/{company_endpoint}/usage",

@@ -15,9 +15,11 @@ from api import (
     TenantServicePool,
     create_app,
 )
+from gainr_compat import GainrFilterResultRequest
 from mysql_store import MySQLRuntimeConfig
 from rate_limit import TenantRateLimiter
 from tenant_config import (
+    TenantCompatibilityConfig,
     TenantPayloadConfig,
     TenantProfile,
     TenantRateLimit,
@@ -83,6 +85,7 @@ def tenant_profile(
     burst=10,
     request_mapping=None,
     endpoint_slug="",
+    compatibility=None,
 ):
     return TenantProfile(
         company_id=company_id,
@@ -118,6 +121,7 @@ def tenant_profile(
         api_key_envs=(f"{company_id.upper()}_API_KEY",),
         config_path=tmp_path / f"{company_id}.yaml",
         endpoint_slug=endpoint_slug,
+        compatibility=compatibility or TenantCompatibilityConfig(),
     )
 
 
@@ -644,3 +648,97 @@ def test_company_usage_endpoint_returns_only_that_company_totals(tmp_path):
     assert beta_usage.status_code == 200
     assert beta_usage.json()["total_tokens"] == 0
     assert cross_company.status_code == 403
+
+
+def test_gainr_compatibility_routes_are_enabled_only_by_tenant_config(
+    tmp_path,
+):
+    gainr = tenant_profile(
+        tmp_path,
+        "gainr",
+        compatibility=TenantCompatibilityConfig(
+            adapter="gainr_legacy",
+        ),
+    )
+    alpha = tenant_profile(tmp_path, "alpha")
+    registry = TenantRegistry(
+        {"gainr": gainr, "alpha": alpha},
+        api_keys={"gainr": ["gainr-key"], "alpha": ["alpha-key"]},
+    )
+
+    class FakeCompatibility:
+        def search_suggestions(self, request):
+            return {"status": True, "data": [{"value": request.term}]}
+
+        def filter_data(self, request):
+            return {"data": {"city_id": request.city_id}}
+
+        def parse_filter_result(self, payload):
+            return GainrFilterResultRequest.model_validate(payload)
+
+        def filter_results(self, request, *, user_id=None):
+            return {
+                "status": True,
+                "message": "",
+                "data": [],
+                "current_page": request.page,
+                "last_page": 1,
+                "user_id": user_id,
+            }
+
+        def recent_searches(self, user_id):
+            return {
+                "status": True,
+                "data": [{"id": 1, "value": user_id, "is_prosper": 0}],
+            }
+
+    app = create_app(
+        tenant_registry=registry,
+        tenant_engine_factory=lambda *_args: FakeEngine(),
+        compatibility_factory=lambda *_args: FakeCompatibility(),
+        preload_models=False,
+    )
+    with TestClient(app) as client:
+        suggestions = client.post(
+            "/api/v1/gainr/search-suggestions",
+            headers={"X-API-Key": "gainr-key"},
+            json={"term": "bike"},
+        )
+        filter_data = client.post(
+            "/api/v1/gainr/filter-data",
+            headers={"X-API-Key": "gainr-key"},
+            json={"city_id": 456},
+        )
+        results = client.post(
+            "/api/v1/gainr/filter-result",
+            headers={
+                "X-API-Key": "gainr-key",
+                "X-User-ID": "user-7",
+            },
+            json={"searchTerm": "bike", "filter": {}, "page": 2},
+        )
+        recent = client.get(
+            "/api/v1/gainr/recent-search",
+            headers={
+                "X-API-Key": "gainr-key",
+                "X-User-ID": "user-7",
+            },
+        )
+        disabled = client.post(
+            "/api/v1/alpha/search-suggestions",
+            headers={"X-API-Key": "alpha-key"},
+            json={"term": "bike"},
+        )
+        mismatched = client.post(
+            "/api/v1/gainr/filter-data",
+            headers={"X-API-Key": "alpha-key"},
+            json={"city_id": 456},
+        )
+
+    assert suggestions.json()["data"] == [{"value": "bike"}]
+    assert filter_data.json() == {"data": {"city_id": 456}}
+    assert results.json()["current_page"] == 2
+    assert results.json()["user_id"] == "user-7"
+    assert recent.json()["data"][0]["value"] == "user-7"
+    assert disabled.status_code == 404
+    assert mismatched.status_code == 403

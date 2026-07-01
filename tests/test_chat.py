@@ -25,7 +25,11 @@ from chat import (
     rerank,
     resolve_query_filters,
 )
-from retrieval import related_tail_product_ids
+from retrieval import (
+    related_tail_product_ids,
+    vector_search,
+    vector_where_filter,
+)
 
 
 class FakeCursor:
@@ -61,12 +65,75 @@ class FakeReranker:
         return [0.1 if "first" in passage else 0.9 for _, passage in pairs]
 
 
+class FakeEmbeddingProvider:
+    def embed_text(self, _text):
+        return [0.1, 0.2]
+
+
+class CapturingVectorCollection:
+    def __init__(self, metadata):
+        self.metadata = metadata
+        self.query_options = None
+
+    def count(self):
+        return 1
+
+    def query(self, **options):
+        self.query_options = options
+        return {
+            "ids": [["doc-1"]],
+            "documents": [["bike"]],
+            "metadatas": [[self.metadata]],
+            "distances": [[0.1]],
+        }
+
+
 def product_index_row(doc_id, content, **metadata):
     return {
         "doc_id": doc_id,
         "product_id": metadata.pop("product_id", doc_id),
         "content": content,
         **metadata,
+    }
+
+
+def test_unfiltered_vector_query_skips_redundant_tenant_metadata_where():
+    metadata = {
+        "source_file": "mysql:gainr.ads_search_ready",
+        "company_id": "gainr",
+    }
+    collection = CapturingVectorCollection(metadata)
+
+    results = vector_search(
+        "portable camera",
+        collection,
+        source_name="mysql:gainr.ads_search_ready",
+        resolved_filters={"categorical": {}},
+        company_id="gainr",
+        embedding_provider=FakeEmbeddingProvider(),
+    )
+
+    assert "where" not in collection.query_options
+    assert [result["id"] for result in results] == ["doc-1"]
+
+
+def test_filtered_vector_query_uses_only_real_search_constraints():
+    where_filter = vector_where_filter(
+        "mysql:gainr.ads_search_ready",
+        {
+            "categorical": {
+                "city_id": 456,
+                "rental_duration": ["Per Hour", "Per Day"],
+            }
+        },
+        "gainr",
+    )
+
+    assert where_filter == {
+        "$and": [
+            {"city_id": 456},
+            {"rental_duration": {"$in": ["Per Hour", "Per Day"]}},
+        ]
     }
 
 
@@ -533,6 +600,53 @@ def test_filters_resolve_case_insensitively_and_apply_to_both_searches(tmp_path)
         "mysql:test.ads_search_ready",
         resolved,
     )
+    index.close()
+
+
+def test_bm25_supports_numeric_and_multi_value_compatibility_filters(tmp_path):
+    index = PersistentBM25Index(tmp_path / "structured-filters.sqlite3")
+    index.upsert(
+        [
+            product_index_row(
+                "1",
+                "bike",
+                city_id=456,
+                locality_id=10,
+                subcategory_id=312,
+                rental_duration="Per Hour",
+            ),
+            product_index_row(
+                "2",
+                "bike",
+                city_id=456,
+                locality_id=20,
+                subcategory_id=312,
+                rental_duration="Per Day",
+            ),
+            product_index_row(
+                "3",
+                "bike",
+                city_id=142,
+                locality_id=30,
+                subcategory_id=312,
+                rental_duration="Per Day",
+            ),
+        ]
+    )
+    filters = {
+        "categorical": {
+            "city_id": 456,
+            "locality_id": [10, 20],
+            "rental_duration": ["Per Hour", "Per Day"],
+        }
+    }
+
+    assert [
+        row["doc_id"] for row in index.search("bike", filters, top_k=10)
+    ] == ["1", "2"]
+    assert [
+        row["doc_id"] for row in index.browse(filters, top_k=10)
+    ] == ["2", "1"]
     index.close()
 
 

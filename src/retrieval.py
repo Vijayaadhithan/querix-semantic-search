@@ -41,7 +41,11 @@ def metadata_matches_filters(
     if company_id is not None and metadata.get("company_id") != company_id:
         return False
     for key, expected in resolved_filters["categorical"].items():
-        if metadata.get(key) != expected:
+        actual = metadata.get(key)
+        if isinstance(expected, (list, tuple, set)):
+            if actual not in expected:
+                return False
+        elif actual != expected:
             return False
 
     minimum = resolved_filters.get("min_rental_fee")
@@ -59,6 +63,37 @@ def metadata_matches_filters(
     if maximum is not None and rental_fee > maximum:
         return False
     return True
+
+
+def vector_where_filter(
+    source_name,
+    resolved_filters,
+    company_id=None,
+):
+    # Each tenant already owns an isolated vector collection. Adding
+    # source_file/company_id to every Chroma query makes HNSW search fall back
+    # to an expensive metadata-filtered path across the whole collection.
+    # Source and tenant are still verified by metadata_matches_filters below.
+    clauses = []
+    for key, expected in resolved_filters.get("categorical", {}).items():
+        if isinstance(expected, (list, tuple, set)):
+            values = list(dict.fromkeys(expected))
+            if not values:
+                continue
+            clauses.append({key: {"$in": values}})
+        else:
+            clauses.append({key: expected})
+    minimum = resolved_filters.get("min_rental_fee")
+    maximum = resolved_filters.get("max_rental_fee")
+    if minimum is not None:
+        clauses.append({"rental_fee": {"$gte": minimum}})
+    if maximum is not None:
+        clauses.append({"rental_fee": {"$lte": maximum}})
+    if not clauses:
+        return None
+    if len(clauses) == 1:
+        return clauses[0]
+    return {"$and": clauses}
 
 
 def vector_search(
@@ -79,11 +114,29 @@ def vector_search(
         if embedding_provider is not None
         else embed_text(query)
     )
-    results = collection.query(
-        query_embeddings=[query_embedding],
-        n_results=min(max(candidate_k, top_k), collection.count()),
-        include=["documents", "metadatas", "distances"],
-    )
+    query_options = {
+        "query_embeddings": [query_embedding],
+        "n_results": min(max(candidate_k, top_k), collection.count()),
+        "include": ["documents", "metadatas", "distances"],
+    }
+    if source_name is not None and resolved_filters is not None:
+        where_filter = vector_where_filter(
+            source_name,
+            resolved_filters,
+            company_id,
+        )
+        if where_filter is not None:
+            query_options["where"] = where_filter
+    try:
+        results = collection.query(**query_options)
+    except TypeError as exc:
+        # The pgvector compatibility collection in older deployments did not
+        # yet expose Chroma's `where` keyword. Keep the correctness-preserving
+        # metadata check below as a fallback.
+        if "where" not in str(exc):
+            raise
+        query_options.pop("where", None)
+        results = collection.query(**query_options)
 
     output = []
     for doc_id, text, metadata, distance in zip(
@@ -156,6 +209,7 @@ def related_tail_product_ids(
     exclude_product_ids=None,
     type_fetcher=fetch_product_types_by_ids,
     sort_order=None,
+    allowed_ad_types: set[str] | None = None,
 ):
     """Return a stable filtered tail without requiring keyword relevance."""
     if limit <= 0:
@@ -184,8 +238,14 @@ def related_tail_product_ids(
     if not categorical and not category_filters and not has_price_filter:
         return []
 
-    expected_type = (
-        WANTED_AD_TYPE if target_ad_type == "wanted" else OFFER_AD_TYPE
+    expected_types = (
+        {str(value) for value in allowed_ad_types}
+        if allowed_ad_types is not None
+        else {
+            WANTED_AD_TYPE
+            if target_ad_type == "wanted"
+            else OFFER_AD_TYPE
+        }
     )
     excluded_products = {
         str(product_id)
@@ -215,7 +275,7 @@ def related_tail_product_ids(
             if identity in seen_products:
                 continue
             seen_products.add(identity)
-            if product_types.get(identity) != expected_type:
+            if product_types.get(identity) not in expected_types:
                 continue
             product_ids.append(product_id)
             if len(product_ids) >= limit:
@@ -312,8 +372,17 @@ def filter_candidates_by_ad_type(
     type_fetcher=None,
     search_table=MYSQL_TABLE,
     search_id_column=MYSQL_SEARCH_ID_COLUMN,
+    allowed_ad_types: set[str] | None = None,
 ):
-    expected_type = WANTED_AD_TYPE if target_ad_type == "wanted" else OFFER_AD_TYPE
+    expected_types = (
+        {str(value) for value in allowed_ad_types}
+        if allowed_ad_types is not None
+        else {
+            WANTED_AD_TYPE
+            if target_ad_type == "wanted"
+            else OFFER_AD_TYPE
+        }
+    )
     product_ids = extract_product_ids(
         candidates,
         search_table=search_table,
@@ -336,6 +405,6 @@ def filter_candidates_by_ad_type(
         )
         if not candidate_ids:
             continue
-        if product_types.get(str(candidate_ids[0])) == expected_type:
+        if product_types.get(str(candidate_ids[0])) in expected_types:
             filtered.append(candidate)
     return filtered

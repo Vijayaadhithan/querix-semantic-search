@@ -279,7 +279,126 @@ The response separates searches, model requests, input tokens, output tokens
 and total tokens by provider/model. Deterministic and result-cache hits record
 zero model tokens.
 
-#### 14. Run a concurrent API load test
+#### 14. Test Gainr's existing frontend-compatible API
+
+Use this frontend base URL:
+
+```env
+VITE_SEARCH_API_BASE_URL=https://your-api-domain.com/api/v1/gainr
+```
+
+Autocomplete:
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/gainr/search-suggestions \
+  -H 'Content-Type: application/json' \
+  -H 'X-API-Key: <GAINR_API_KEY>' \
+  -d '{"term":"bike"}'
+```
+
+Filter options for a city:
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/gainr/filter-data \
+  -H 'Content-Type: application/json' \
+  -H 'X-API-Key: <GAINR_API_KEY>' \
+  -d '{"city_id":456}'
+```
+
+Filtered product cards:
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/gainr/filter-result \
+  -H 'Content-Type: application/json' \
+  -H 'X-API-Key: <GAINR_API_KEY>' \
+  -H 'X-User-ID: <GAINR_USER_ID>' \
+  -d '{
+    "searchTerm":"Bike",
+    "filter":{
+      "city_id":456,
+      "subcategory_id":"",
+      "locality_id":[],
+      "rental_duration":["Per Day"],
+      "ad_type":[1],
+      "fee":[],
+      "min_fee":100,
+      "max_fee":1000
+    },
+    "page":1
+  }'
+```
+
+Recent searches for the same authenticated Gainr user:
+
+```bash
+curl http://127.0.0.1:8000/api/v1/gainr/recent-search \
+  -H 'X-API-Key: <GAINR_API_KEY>' \
+  -H 'X-User-ID: <GAINR_USER_ID>'
+```
+
+`X-User-ID` is required for user-specific recent searches. If it is absent,
+the endpoint safely returns an empty list rather than sharing searches between
+users. In production, Gainr's backend should set this value from its verified
+user session; do not trust a freely editable browser value.
+
+The compatibility adapter is enabled only by
+`compatibility.adapter: gainr_legacy` in `configs/tenants/gainr.yaml`.
+Other companies keep their own configured `/search` contracts.
+
+Explicit UI filters override automatically extracted query filters. Automatic
+filters fill only fields the user did not select. Gainr's
+`ads_search_ready` now contains `type` and `is_rent_negotiable`, and the Gainr
+BM25 index stores both fields for all indexed rows. The response adapter still
+checks the current `ads` row before returning a card so stale indexed metadata
+cannot expose an outdated ad type or fee mode.
+
+After installing this version over an existing Gainr index, rebuild BM25 once
+to populate numeric city, locality and subcategory IDs. This does not re-embed
+documents or modify Chroma:
+
+```bash
+.venv/bin/python src/ingest.py \
+  --company gainr \
+  --mysql-bm25-only \
+  --mysql-batch-size 5000
+```
+
+Confirm the original company search contract still works after enabling the
+Gainr compatibility adapter:
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/gainr/search \
+  -H 'Content-Type: application/json' \
+  -H 'X-API-Key: <GAINR_API_KEY>' \
+  -d '{"query":"bike in Mumbai under 1000","page_size":5}'
+```
+
+Current local verification:
+
+```text
+Gainr source rows:       250117
+Gainr vectors:           250117
+Gainr BM25 products:     250117
+Unit/integration tests:  123 passed
+Strict doctor:           8 passed, 0 failed
+Vector query, no filter: approximately 592 ms for 120 candidates
+Vector query, city ID:   approximately 937 ms for 120 candidates
+```
+
+These latency values are local reference measurements, not production SLAs.
+Tenant collections are already isolated, so unfiltered vector queries do not
+add redundant `company_id`/`source_file` Chroma predicates. Actual UI
+category, location, duration and price constraints still use vector metadata
+prefiltering, followed by a tenant/source metadata check.
+
+Security that is implemented in the application includes per-company API-key
+binding, tenant-specific rate limits, isolated Chroma/BM25 paths, bounded
+database pools, request validation and per-company usage tracking. Production
+must additionally terminate HTTPS at a reverse proxy, keep permanent company
+API keys out of browser bundles, set `X-User-ID` only from a verified Gainr
+session, configure remote DB TLS, and restrict database/network credentials.
+
+#### 15. Run a concurrent API load test
 
 The tester reads the endpoint, request mapping and API-key environment
 variable from the company profile; it never prints the key:
