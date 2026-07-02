@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any
-from uuid import uuid4
 
 
 @dataclass(frozen=True)
@@ -210,32 +209,66 @@ def iter_postgres_rows(
     primary_key_column: str | None,
     limit: int | None = None,
     table: str | None = None,
+    fetch_batch_size: int = 1000,
 ):
+    if fetch_batch_size <= 0:
+        raise ValueError("fetch_batch_size must be greater than zero")
     content_column = content_column or config.content_column
     table = table or config.search_table
     quoted_content = quote_postgres_identifier(content_column)
-    query = (
-        f"SELECT * FROM {qualified_table(config, table)} "
-        f"WHERE {quoted_content} IS NOT NULL "
-        f"AND BTRIM({quoted_content}::text) <> ''"
+    qualified = qualified_table(config, table)
+    quoted_primary_key = (
+        quote_postgres_identifier(primary_key_column)
+        if primary_key_column
+        else None
     )
-    params: list[Any] = []
-    if primary_key_column:
-        query += f" ORDER BY {quote_postgres_identifier(primary_key_column)}"
-    if limit is not None:
-        query += " LIMIT %s"
-        params.append(limit)
+    emitted = 0
+    last_primary_key = None
+    has_last_primary_key = False
+    offset = 0
 
-    with postgres_connection(
-        config,
-        dict_rows=True,
-        autocommit=False,
-    ) as connection:
-        cursor_name = f"rag_ht_{uuid4().hex[:12]}"
-        with connection.cursor(name=cursor_name) as cursor:
-            cursor.execute(query, params)
-            for row in cursor:
-                yield dict(row)
+    while limit is None or emitted < limit:
+        page_size = (
+            fetch_batch_size
+            if limit is None
+            else min(fetch_batch_size, limit - emitted)
+        )
+        conditions = [
+            f"{quoted_content} IS NOT NULL",
+            f"BTRIM({quoted_content}::text) <> ''",
+        ]
+        params: list[Any] = []
+        if quoted_primary_key and has_last_primary_key:
+            conditions.append(f"{quoted_primary_key} > %s")
+            params.append(last_primary_key)
+        query = f"SELECT * FROM {qualified} WHERE {' AND '.join(conditions)}"
+        if quoted_primary_key:
+            query += f" ORDER BY {quoted_primary_key}"
+        query += " LIMIT %s"
+        params.append(page_size)
+        if not quoted_primary_key:
+            query += " OFFSET %s"
+            params.append(offset)
+
+        # Do not hold a server-side cursor/transaction open while the caller
+        # performs slow embedding work.
+        with postgres_connection(config, dict_rows=True) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(query, params)
+                rows = [dict(row) for row in cursor.fetchall()]
+        if not rows:
+            break
+
+        if quoted_primary_key:
+            last_primary_key = rows[-1][primary_key_column]
+            has_last_primary_key = True
+        else:
+            offset += len(rows)
+        emitted += len(rows)
+        yield from rows
+
+        if len(rows) < page_size:
+            break
 
 
 def fetch_postgres_product_types_by_ids(

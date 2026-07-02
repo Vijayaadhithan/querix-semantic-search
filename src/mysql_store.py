@@ -244,30 +244,75 @@ def iter_mysql_rows(
     limit: int | None = None,
     table: str | None = None,
     config: MySQLRuntimeConfig | None = None,
+    fetch_batch_size: int = 1000,
 ):
+    if fetch_batch_size <= 0:
+        raise ValueError("fetch_batch_size must be greater than zero")
     config = resolved_mysql_config(config)
     content_column = content_column or config.content_column
     table = table or config.search_table
     pymysql = require_pymysql()
     quoted_content = quote_mysql_identifier(content_column)
-    query = (
-        f"SELECT * FROM {quote_mysql_identifier(table)} "
-        f"WHERE {quoted_content} IS NOT NULL AND TRIM({quoted_content}) <> ''"
+    quoted_table = quote_mysql_identifier(table)
+    quoted_primary_key = (
+        quote_mysql_identifier(primary_key_column)
+        if primary_key_column
+        else None
     )
-    params: list[Any] = []
-    if primary_key_column:
-        query += f" ORDER BY {quote_mysql_identifier(primary_key_column)}"
-    if limit is not None:
-        query += " LIMIT %s"
-        params.append(limit)
+    emitted = 0
+    last_primary_key = None
+    has_last_primary_key = False
+    offset = 0
 
-    with mysql_connection(
-        cursorclass=pymysql.cursors.SSDictCursor,
-        config=config,
-    ) as connection:
-        with connection.cursor() as cursor:
-            cursor.execute(query, params)
-            yield from cursor
+    while limit is None or emitted < limit:
+        page_size = (
+            fetch_batch_size
+            if limit is None
+            else min(fetch_batch_size, limit - emitted)
+        )
+        conditions = [
+            f"{quoted_content} IS NOT NULL",
+            f"TRIM({quoted_content}) <> ''",
+        ]
+        params: list[Any] = []
+        if quoted_primary_key and has_last_primary_key:
+            conditions.append(f"{quoted_primary_key} > %s")
+            params.append(last_primary_key)
+        query = (
+            f"SELECT * FROM {quoted_table} "
+            f"WHERE {' AND '.join(conditions)}"
+        )
+        if quoted_primary_key:
+            query += f" ORDER BY {quoted_primary_key}"
+        query += " LIMIT %s"
+        params.append(page_size)
+        if not quoted_primary_key:
+            query += " OFFSET %s"
+            params.append(offset)
+
+        # Fetch the complete page and close the database connection before
+        # yielding any row. Ingestion can then spend minutes embedding the
+        # page without leaving a streaming MySQL socket idle.
+        with mysql_connection(
+            cursorclass=pymysql.cursors.DictCursor,
+            config=config,
+        ) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(query, params)
+                rows = list(cursor.fetchall())
+        if not rows:
+            break
+
+        if quoted_primary_key:
+            last_primary_key = rows[-1][primary_key_column]
+            has_last_primary_key = True
+        else:
+            offset += len(rows)
+        emitted += len(rows)
+        yield from rows
+
+        if len(rows) < page_size:
+            break
 
 
 def fetch_product_types_by_ids(

@@ -164,7 +164,10 @@ primary key.
 
 This reads Gainr's `search_ready` rows, embeds changed/new rows, writes only
 `company_gainr`, and builds only Gainr's BM25 file. It does not update the
-company database.
+company database. Source rows are fetched in bounded pages; every database
+cursor and connection is closed before Ollama starts embedding that page. This
+prevents a slow CPU-only embedding batch from leaving a MySQL streaming socket
+idle until it times out.
 
 Check the result:
 

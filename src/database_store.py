@@ -210,6 +210,7 @@ def iter_database_rows(
     primary_key_column: str | None,
     limit: int | None = None,
     config: DatabaseRuntimeConfig | None = None,
+    fetch_batch_size: int = 1000,
 ):
     resolved = resolved_database_config(config)
     if isinstance(resolved, PostgresRuntimeConfig):
@@ -218,6 +219,7 @@ def iter_database_rows(
             content_column,
             primary_key_column,
             limit,
+            fetch_batch_size=fetch_batch_size,
         )
         return
     yield from iter_mysql_rows(
@@ -225,6 +227,7 @@ def iter_database_rows(
         primary_key_column,
         limit,
         config=resolved,
+        fetch_batch_size=fetch_batch_size,
     )
 
 

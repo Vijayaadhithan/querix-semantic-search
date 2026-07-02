@@ -444,11 +444,15 @@ planned row count. It does not write to the company database or local indexes.
 The command:
 
 - reads the company's configured `search_ready` table
+- fetches one bounded page and closes its database connection before embedding
 - upserts BM25 rows
 - compares stable content hashes
 - embeds only changed/new documents
 - writes only Gainr's Chroma collection and BM25 file
 - never updates or deletes company DB rows
+
+This paging boundary is important on CPU-only hosts: Ollama may spend minutes
+on a page, but no MySQL/PostgreSQL cursor remains open during that work.
 
 ### 10.3 Routine refresh with deletion reconciliation
 
@@ -971,6 +975,28 @@ result = embed_texts(["startup test"])
 print("embeddings:", len(result), "dimensions:", len(result[0]))
 '
 ```
+
+### PyMySQL cleanup fails after slow embedding or `Ctrl+C`
+
+Older ingestion code used one unbuffered cursor for the full source table and
+left it open while Ollama embedded each batch. A timeout or interruption could
+then produce `_finish_unbuffered_query` or
+`AttributeError: 'NoneType' object has no attribute 'settimeout'`.
+
+The current implementation fetches a bounded page, closes the cursor and
+connection, and then embeds. Deploy the current `mysql_store.py`,
+`postgres_store.py`, `database_store.py`, and `ingestion_service.py`, then
+resume with the same command. Completed vectors are skipped:
+
+```bash
+.venv/bin/python src/ingest.py \
+  --company gainr \
+  --mysql \
+  --mysql-batch-size 100 \
+  --embed-batch-size 4
+```
+
+Do not use `--mysql-replace-source` when resuming.
 
 ### `401 Missing API key`
 

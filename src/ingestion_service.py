@@ -352,6 +352,7 @@ def ingest_mysql_source(
         detected_primary_key,
         limit,
         mysql_config,
+        fetch_batch_size=batch_size,
     ):
         prepared = prepare_mysql_row(
             row,
@@ -472,6 +473,7 @@ def rebuild_mysql_bm25_index(
         detected_primary_key,
         limit,
         mysql_config,
+        fetch_batch_size=batch_size,
     ):
         entry = prepare_bm25_index_row(
             row,
