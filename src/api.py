@@ -1,13 +1,18 @@
 import base64
 import binascii
 import hashlib
+import hmac
 import logging
+import os
+import resource
+import sys
 import threading
 import time
 import uuid
-from collections import OrderedDict
+from collections import OrderedDict, deque
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any, Callable
 
 from fastapi import FastAPI, Header, HTTPException, Query
@@ -33,6 +38,7 @@ from redis_cache import create_redis_cache
 from reranker import SharedReranker
 from search_engine import ProductSearchEngine
 from settings import (
+    API_ADMIN_KEY,
     API_AUTH_ENABLED,
     API_CORS_ORIGINS,
     API_DEFAULT_PAGE_SIZE,
@@ -63,6 +69,7 @@ from vector_store import get_tenant_vector_collection
 from usage_store import MonthlyUsageStore
 
 LOGGER = logging.getLogger("uvicorn.error")
+PROCESS_STARTED_MONOTONIC = time.monotonic()
 
 PUBLIC_PRODUCT_FIELDS = (
     "result_tier",
@@ -165,6 +172,34 @@ class HealthResponse(BaseModel):
     result_cache_enabled: bool
     result_cache_ttl_seconds: int
     company_id: str | None = None
+
+
+def _process_rss_mb() -> float:
+    try:
+        with open("/proc/self/statm", encoding="utf-8") as handle:
+            resident_pages = int(handle.read().split()[1])
+        return resident_pages * os.sysconf("SC_PAGE_SIZE") / (1024 * 1024)
+    except (OSError, ValueError, IndexError):
+        maximum_rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        divisor = 1024 * 1024 if sys.platform == "darwin" else 1024
+        return float(maximum_rss) / divisor
+
+
+def process_monitor_status() -> dict[str, Any]:
+    try:
+        load_average = [round(value, 3) for value in os.getloadavg()]
+    except OSError:
+        load_average = []
+    return {
+        "pid": os.getpid(),
+        "uptime_seconds": round(
+            time.monotonic() - PROCESS_STARTED_MONOTONIC,
+            3,
+        ),
+        "cpu_count": os.cpu_count(),
+        "load_average": load_average,
+        "rss_mb": round(_process_rss_mb(), 3),
+    }
 
 
 @dataclass
@@ -284,6 +319,12 @@ class ProductSearchService:
         )
         self.reranker_load_ms = 0.0
         self.embedding_warmup: dict[str, Any] = {}
+        self._monitor_lock = threading.Lock()
+        self._monitor_active = 0
+        self._monitor_started = 0
+        self._monitor_completed = 0
+        self._monitor_failed = 0
+        self._monitor_events: deque[dict[str, Any]] = deque(maxlen=20)
 
     def warmup(self) -> float:
         with self._engine_lock:
@@ -323,6 +364,138 @@ class ProductSearchService:
             **cache_health,
         )
 
+    def monitor_status(self) -> dict[str, Any]:
+        with self._monitor_lock:
+            events = list(self._monitor_events)
+            return {
+                "active": self._monitor_active,
+                "started": self._monitor_started,
+                "completed": self._monitor_completed,
+                "failed": self._monitor_failed,
+                "recent": events,
+            }
+
+    def run_engine_search(self, query: str, **kwargs) -> dict[str, Any]:
+        started = time.perf_counter()
+        timestamp = datetime.now(timezone.utc).isoformat()
+        with self._monitor_lock:
+            self._monitor_active += 1
+            self._monitor_started += 1
+        try:
+            with self._search_slots:
+                result = self.engine.search(query, **kwargs)
+        except Exception as exc:
+            duration_ms = (time.perf_counter() - started) * 1000
+            with self._monitor_lock:
+                self._monitor_failed += 1
+                self._monitor_events.appendleft(
+                    {
+                        "timestamp_utc": timestamp,
+                        "status": "failed",
+                        "query_chars": len(query),
+                        "duration_ms": round(duration_ms, 3),
+                        "error_type": type(exc).__name__,
+                    }
+                )
+            raise
+        else:
+            duration_ms = (time.perf_counter() - started) * 1000
+            query_plan = result.get("query_plan") or {}
+            embedding = result.get("embedding_model_metrics") or {}
+            event = {
+                "timestamp_utc": timestamp,
+                "status": "success",
+                "query_chars": len(query),
+                "duration_ms": round(duration_ms, 3),
+                "execution_path": query_plan.get(
+                    "execution_path",
+                    "semantic",
+                ),
+                "result_cache_hit": bool(result.get("result_cache_hit")),
+                "products": len(result.get("products") or []),
+                "reranker_provider": result.get(
+                    "reranker_provider",
+                    "none",
+                ),
+                "timings_ms": {
+                    "planning": round(
+                        float(result.get("seconds", 0.0)) * 1000,
+                        3,
+                    ),
+                    "vector_search": round(
+                        float(result.get("vector_seconds", 0.0)) * 1000,
+                        3,
+                    ),
+                    "bm25_search": round(
+                        float(result.get("bm25_seconds", 0.0)) * 1000,
+                        3,
+                    ),
+                    "embedding_total": round(
+                        float(embedding.get("total_ms", 0.0)),
+                        3,
+                    ),
+                    "embedding_load": round(
+                        float(embedding.get("load_ms", 0.0)),
+                        3,
+                    ),
+                    "reranking": round(
+                        float(result.get("reranker_seconds", 0.0)) * 1000,
+                        3,
+                    ),
+                    "related_tail": round(
+                        float(result.get("related_tail_seconds", 0.0))
+                        * 1000,
+                        3,
+                    ),
+                    "result_cache": round(
+                        float(result.get("result_cache_seconds", 0.0))
+                        * 1000,
+                        3,
+                    ),
+                },
+            }
+            result["_service_total_ms"] = duration_ms
+            with self._monitor_lock:
+                self._monitor_completed += 1
+                self._monitor_events.appendleft(event)
+            return result
+        finally:
+            with self._monitor_lock:
+                self._monitor_active -= 1
+
+    def record_external_search(
+        self,
+        query: str,
+        *,
+        execution_path: str,
+        duration_ms: float,
+        products: int,
+    ) -> None:
+        event = {
+            "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+            "status": "success",
+            "query_chars": len(query),
+            "duration_ms": round(duration_ms, 3),
+            "execution_path": execution_path,
+            "result_cache_hit": False,
+            "products": products,
+            "reranker_provider": "none",
+            "timings_ms": {
+                "planning": 0.0,
+                "vector_search": 0.0,
+                "bm25_search": 0.0,
+                "embedding_total": 0.0,
+                "embedding_load": 0.0,
+                "reranking": 0.0,
+                "related_tail": 0.0,
+                "result_cache": 0.0,
+            },
+        }
+        with self._monitor_lock:
+            self._monitor_started += 1
+            self._monitor_completed += 1
+            self._monitor_events.appendleft(event)
+
     def search(self, request: SearchRequest) -> SearchResponse:
         if request.query is not None:
             session = self._start_search(request.query)
@@ -337,10 +510,8 @@ class ProductSearchService:
         return self._page(session, offset, request.page_size, cached)
 
     def _start_search(self, query: str) -> SearchSession:
-        started = time.perf_counter()
-        with self._search_slots:
-            result = self.engine.search(query, limit=self.max_results)
-        total_ms = (time.perf_counter() - started) * 1000
+        result = self.run_engine_search(query, limit=self.max_results)
+        total_ms = float(result.get("_service_total_ms", 0.0))
         query_plan = result["query_plan"]
         usage = self._record_usage(result)
         interpreted_query = {
@@ -619,6 +790,10 @@ class TenantServicePool:
                 _evicted_id, evicted = self._services.popitem(last=False)
                 evicted.close()
             return service
+
+    def loaded_services(self) -> dict[str, ProductSearchService]:
+        with self._lock:
+            return dict(self._services)
 
     def _build_service(self, profile: TenantProfile) -> ProductSearchService:
         if profile.planner_adapter != "gainr":
@@ -901,6 +1076,28 @@ def create_app(
             )
         return compatibility_service
 
+    def require_admin_key(admin_key: str | None) -> None:
+        if not application.state.tenant_mode or not API_ADMIN_KEY:
+            raise HTTPException(status_code=404, detail="Not found.")
+        if not admin_key or not hmac.compare_digest(
+            admin_key,
+            API_ADMIN_KEY,
+        ):
+            raise HTTPException(status_code=401, detail="Invalid admin key.")
+
+    def resolve_admin_service(
+        admin_key: str | None,
+        *,
+        company_endpoint: str,
+    ) -> ProductSearchService:
+        require_admin_key(admin_key)
+        profile = application.state.tenant_registry.resolve_endpoint(
+            company_endpoint
+        )
+        if profile is None:
+            raise HTTPException(status_code=404, detail="Unknown company endpoint.")
+        return application.state.tenant_service_pool.get(profile.company_id)
+
     def company_search_request(
         company_endpoint: str,
         payload: dict[str, Any],
@@ -961,7 +1158,23 @@ def create_app(
         except ExpiredCursorError as exc:
             raise HTTPException(status_code=410, detail=str(exc)) from exc
         except RuntimeError as exc:
+            LOGGER.exception(
+                "search_request status=failed company=%s error_type=%s "
+                "query_chars=%d",
+                company_endpoint or "legacy",
+                type(exc).__name__,
+                len(request.query or ""),
+            )
             raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except Exception as exc:
+            LOGGER.exception(
+                "search_request status=failed company=%s error_type=%s "
+                "query_chars=%d",
+                company_endpoint or "legacy",
+                type(exc).__name__,
+                len(request.query or ""),
+            )
+            raise
 
     @application.get("/api/v1/ready", tags=["system"])
     def ready() -> dict[str, Any]:
@@ -1019,6 +1232,78 @@ def create_app(
             ).health()
         except RuntimeError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    @application.get(
+        "/api/v1/admin/status",
+        tags=["admin"],
+    )
+    def admin_status(
+        x_admin_key: str | None = Header(
+            default=None,
+            alias="X-Admin-Key",
+        ),
+    ) -> dict[str, Any]:
+        require_admin_key(x_admin_key)
+        registry = application.state.tenant_registry
+        loaded = application.state.tenant_service_pool.loaded_services()
+        companies = []
+        for company_id, profile in registry.profiles.items():
+            service = loaded.get(company_id)
+            companies.append(
+                {
+                    "company_id": company_id,
+                    "endpoint_slug": (
+                        profile.endpoint_slug or profile.company_id
+                    ),
+                    "loaded": service is not None,
+                    "health": (
+                        service.health().model_dump()
+                        if service is not None
+                        else None
+                    ),
+                    "searches": (
+                        service.monitor_status()
+                        if service is not None
+                        else None
+                    ),
+                }
+            )
+        return {
+            "status": "ok",
+            "process": process_monitor_status(),
+            "configured_companies": len(companies),
+            "loaded_companies": len(loaded),
+            "companies": companies,
+        }
+
+    @application.get(
+        "/api/v1/{company_endpoint}/admin/status",
+        tags=["company-admin"],
+    )
+    def company_admin_status(
+        company_endpoint: str,
+        x_admin_key: str | None = Header(
+            default=None,
+            alias="X-Admin-Key",
+        ),
+    ) -> dict[str, Any]:
+        service = resolve_admin_service(
+            x_admin_key,
+            company_endpoint=company_endpoint,
+        )
+        usage = (
+            service.usage_store.summary(service.company_id or "legacy")
+            if service.usage_store is not None
+            else None
+        )
+        return {
+            "status": "ok",
+            "company_id": service.company_id,
+            "process": process_monitor_status(),
+            "health": service.health().model_dump(),
+            "searches": service.monitor_status(),
+            "usage": usage,
+        }
 
     @application.get(
         "/api/v1/{company_endpoint}/auth/verify",

@@ -772,6 +772,7 @@ class GainrCompatibilityService:
         *,
         user_id: str | None = None,
     ) -> dict[str, Any]:
+        request_started = time.perf_counter()
         planned, effective, meta = self._effective_plan(request)
         page_size = self.profile.compatibility.page_size
         execution_path = planned["query_plan"].get(
@@ -817,7 +818,7 @@ class GainrCompatibilityService:
             }
             window_limited = False
         else:
-            result = self.engine.search(
+            result = self.product_search_service.run_engine_search(
                 request.searchTerm,
                 limit=self.product_search_service.max_results,
                 planned_result=planned,
@@ -862,6 +863,16 @@ class GainrCompatibilityService:
             }
         if request.page == 1 and request.searchTerm:
             self.remember_search(user_id, request.searchTerm)
+        if route == "deterministic":
+            self.product_search_service.record_external_search(
+                request.searchTerm,
+                execution_path="deterministic_filter",
+                duration_ms=(
+                    time.perf_counter() - request_started
+                )
+                * 1000,
+                products=len(cards),
+            )
         return response
 
     @staticmethod

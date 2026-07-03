@@ -321,6 +321,9 @@ API_RATE_LIMIT_ENABLED = _env_bool(
     "API_RATE_LIMIT_ENABLED",
     bool(CONFIG.get("api", {}).get("rate_limit_enabled", True)),
 )
+API_ADMIN_KEY = os.getenv("API_ADMIN_KEY", "").strip()
+if API_ADMIN_KEY and len(API_ADMIN_KEY) < 24:
+    raise ValueError("API_ADMIN_KEY must contain at least 24 characters.")
 API_TENANT_CONFIG_DIR = PROJECT_ROOT / os.getenv(
     "API_TENANT_CONFIG_DIR",
     str(CONFIG.get("api", {}).get("tenant_config_dir", "configs/tenants")),

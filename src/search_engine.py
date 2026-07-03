@@ -628,9 +628,15 @@ class ProductSearchEngine:
             search_id_column=self.search_id_column,
             allowed_ad_types=allowed_ad_types,
         )[:hybrid_top_k]
+        embedding_metrics = (
+            last_ollama_embedding_metrics()
+            if self.embedding_provider is None
+            else {}
+        )
         LOGGER.info(
             "[search:%s] step=retrieve status=complete vector=%d bm25=%d "
-            "merged=%d candidates=%d vector_ms=%.0f bm25_ms=%.0f",
+            "merged=%d candidates=%d vector_ms=%.0f bm25_ms=%.0f "
+            "embed_total_ms=%.0f embed_load_ms=%.0f",
             trace_id,
             len(vector_results),
             len(bm25_results),
@@ -638,6 +644,8 @@ class ProductSearchEngine:
             len(candidates),
             vector_seconds * 1000,
             bm25_seconds * 1000,
+            embedding_metrics.get("total_ms", 0.0),
+            embedding_metrics.get("load_ms", 0.0),
         )
         return {
             "vector_results": vector_results,
@@ -645,11 +653,7 @@ class ProductSearchEngine:
             "candidates": candidates,
             "vector_seconds": vector_seconds,
             "bm25_seconds": bm25_seconds,
-            "embedding_model_metrics": (
-                last_ollama_embedding_metrics()
-                if self.embedding_provider is None
-                else {}
-            ),
+            "embedding_model_metrics": embedding_metrics,
         }
 
     def ensure_reranker(self) -> float:
@@ -881,13 +885,23 @@ class ProductSearchEngine:
         )
         candidates = retrieved["candidates"]
         if candidates:
-            ranked = self.rank(
-                query,
-                candidates,
-                planned["query_plan"],
-                top_k=primary_limit,
-                trace_id=trace_id,
-            )
+            try:
+                ranked = self.rank(
+                    query,
+                    candidates,
+                    planned["query_plan"],
+                    top_k=primary_limit,
+                    trace_id=trace_id,
+                )
+            except Exception as exc:
+                LOGGER.exception(
+                    "[search:%s] step=rerank status=failed "
+                    "error_type=%s candidates=%d",
+                    trace_id,
+                    type(exc).__name__,
+                    len(candidates),
+                )
+                raise
         else:
             LOGGER.info(
                 "[search:%s] step=rerank status=skipped reason=no_candidates",

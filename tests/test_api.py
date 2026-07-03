@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+import api
 from api import (
     ExpiredCursorError,
     ProductSearchService,
@@ -259,6 +260,44 @@ def test_repeated_query_result_cache_is_reported_by_api():
     assert repeated.cached is True
     assert repeated.interpreted_query["result_cache_hit"] is True
     assert repeated.timings_ms["result_cache"] == 2.0
+
+
+def test_search_monitor_reports_safe_success_and_failure_summaries():
+    service = ProductSearchService(FakeEngine(), max_results=20)
+
+    service.search(SearchRequest(query="private customer query", page_size=2))
+
+    status = service.monitor_status()
+    assert status["active"] == 0
+    assert status["started"] == 1
+    assert status["completed"] == 1
+    assert status["failed"] == 0
+    assert status["recent"][0]["status"] == "success"
+    assert status["recent"][0]["query_chars"] == len(
+        "private customer query"
+    )
+    assert "private customer query" not in str(status)
+    assert status["recent"][0]["timings_ms"]["vector_search"] == 20
+
+    class FailingEngine(FakeEngine):
+        def search(self, query, limit=None):
+            raise ValueError("private failure details")
+
+    failing_service = ProductSearchService(FailingEngine(), max_results=20)
+    try:
+        failing_service.search(SearchRequest(query="secret", page_size=2))
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("Expected the fake search to fail")
+
+    failed = failing_service.monitor_status()
+    assert failed["active"] == 0
+    assert failed["started"] == 1
+    assert failed["completed"] == 0
+    assert failed["failed"] == 1
+    assert failed["recent"][0]["error_type"] == "ValueError"
+    assert "private failure details" not in str(failed)
 
 
 def test_api_keeps_wanted_status_two_and_excludes_soft_deleted_products():
@@ -742,3 +781,64 @@ def test_gainr_compatibility_routes_are_enabled_only_by_tenant_config(
     assert recent.json()["data"][0]["value"] == "user-7"
     assert disabled.status_code == 404
     assert mismatched.status_code == 403
+
+
+def test_admin_status_requires_separate_key_and_hides_queries(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setattr(api, "API_ADMIN_KEY", "admin-key-with-at-least-24-chars")
+    gainr = tenant_profile(tmp_path, "gainr")
+    registry = TenantRegistry(
+        {"gainr": gainr},
+        api_keys={"gainr": ["customer-key"]},
+    )
+    app = create_app(
+        tenant_registry=registry,
+        tenant_engine_factory=lambda *_args: FakeEngine(),
+        preload_models=False,
+    )
+
+    with TestClient(app) as client:
+        global_missing = client.get("/api/v1/admin/status")
+        missing = client.get("/api/v1/gainr/admin/status")
+        customer_key = client.get(
+            "/api/v1/gainr/admin/status",
+            headers={"X-Admin-Key": "customer-key"},
+        )
+        client.post(
+            "/api/v1/gainr/search",
+            headers={"X-API-Key": "customer-key"},
+            json={"query": "private customer query", "page_size": 2},
+        )
+        status = client.get(
+            "/api/v1/gainr/admin/status",
+            headers={
+                "X-Admin-Key": "admin-key-with-at-least-24-chars",
+            },
+        )
+        global_status = client.get(
+            "/api/v1/admin/status",
+            headers={
+                "X-Admin-Key": "admin-key-with-at-least-24-chars",
+            },
+        )
+
+    assert global_missing.status_code == 401
+    assert missing.status_code == 401
+    assert customer_key.status_code == 401
+    assert status.status_code == 200
+    payload = status.json()
+    assert payload["status"] == "ok"
+    assert payload["company_id"] == "gainr"
+    assert payload["process"]["cpu_count"] >= 1
+    assert payload["health"]["indexed_products"] == 12
+    assert payload["searches"]["completed"] == 1
+    assert "private customer query" not in status.text
+    assert global_status.status_code == 200
+    global_payload = global_status.json()
+    assert global_payload["configured_companies"] == 1
+    assert global_payload["loaded_companies"] == 1
+    assert global_payload["companies"][0]["company_id"] == "gainr"
+    assert global_payload["companies"][0]["loaded"] is True
+    assert "private customer query" not in global_status.text

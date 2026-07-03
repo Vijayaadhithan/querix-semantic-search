@@ -240,6 +240,9 @@ def test_deterministic_result_uses_full_catalog_pagination(tmp_path):
     assert response["current_page"] == 2
     assert response["last_page"] == 3
     assert response["search_meta"]["total_results"] == 41
+    monitor = adapter.product_search_service.monitor_status()
+    assert monitor["completed"] == 1
+    assert monitor["recent"][0]["execution_path"] == "deterministic_filter"
 
 
 def test_public_filter_result_matches_gainr_response_envelope(tmp_path):

@@ -224,6 +224,25 @@ curl http://127.0.0.1:8000/api/v1/gainr/health \
   -H 'X-API-Key: <GAINR_API_KEY>'
 ```
 
+Configure a separate monitoring key in `.env`:
+
+```env
+API_ADMIN_KEY=<at-least-24-random-characters>
+```
+
+Then poll the general protected live status endpoint:
+
+```bash
+curl http://127.0.0.1:8000/api/v1/admin/status \
+  -H 'X-Admin-Key: <API_ADMIN_KEY>'
+```
+
+Use `/api/v1/gainr/admin/status` for the detailed Gainr view. The general
+endpoint reports process health and summaries for every configured company;
+the company endpoint adds monthly usage and complete company health. Neither
+returns raw queries, API keys, filter values, or product contents. Both are
+unavailable when `API_ADMIN_KEY` is empty.
+
 #### 10. Test deterministic search
 
 ```bash
@@ -342,6 +361,20 @@ The Gainr compatibility endpoints preserve the existing frontend contracts:
 Internal route, model, and usage details remain in server logs and are not
 added to the Gainr response payload.
 
+The intended frontend sequence is:
+
+1. City selection calls `filter-data` once and retains that `city_id`; call it
+   again only when the city changes.
+2. Search typing calls `search-suggestions` after a 250–300 ms debounce,
+   preferably from two characters onward. Cancel or ignore older in-flight
+   suggestion requests.
+3. Enter/search submit or clicking a suggestion calls `filter-result` with the
+   already-selected city and active filters. The browser cannot reliably know
+   when an arbitrary free-text word is "complete", so do not trigger solely
+   because a suggestion response arrived.
+4. Infinite scrolling repeats the same `filter-result` payload with the page
+   incremented.
+
 For infinite scrolling, keep the same `searchTerm` and `filter` object and
 increment `page` from `1` to `2`, `3`, and so on. Stop requesting pages when
 `current_page` equals `last_page`.
@@ -371,10 +404,12 @@ Repeated values move to the front instead of creating duplicates. The list is
 limited to ten entries, and values shaped like a Gainr Prosper ID (for example,
 `AA5160`) use `is_prosper: 1`.
 
-`X-User-ID` is required for user-specific recent searches. If it is absent,
-the endpoint safely returns an empty list rather than sharing searches between
-users. In production, Gainr's backend should set this value from its verified
-user session; do not trust a freely editable browser value.
+`X-User-ID` is optional for search itself. Include it on `filter-result` only
+when Gainr has a verified signed-in user and wants that query recorded in the
+user's recent searches. It is required when reading `recent-search`; if absent,
+that endpoint safely returns an empty list. `local-test-user` is only a local
+example—production must derive the real user ID from a trusted session, not a
+freely editable browser value.
 
 The compatibility adapter is enabled only by
 `compatibility.adapter: gainr_legacy` in `configs/tenants/gainr.yaml`.

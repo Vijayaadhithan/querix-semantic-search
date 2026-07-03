@@ -704,6 +704,17 @@ curl http://127.0.0.1:8000/api/v1/gainr/recent-search \
   -H 'X-User-ID: local-test-user'
 ```
 
+The frontend call sequence is not three new requests after every keystroke:
+
+1. Selecting the city calls `filter-data` once and stores the `city_id`; call
+   it again only when the city changes.
+2. Typing calls `search-suggestions` after a 250–300 ms debounce, normally
+   from two characters onward. Cancel or ignore stale in-flight responses.
+3. Enter/search submit or clicking a suggestion calls `filter-result` using
+   the stored city and filters. Do not call it merely because suggestions
+   returned—the browser cannot reliably infer a complete free-text word.
+4. Scrolling repeats `filter-result` with `page` incremented.
+
 The recent-search response is exactly `status` plus up to ten newest-first
 items containing `id`, `value`, and `is_prosper`. Successful first-page
 `filter-result` requests record the search. Repeated values are moved to the
@@ -717,6 +728,57 @@ details remain in server logs instead of changing the frontend payload.
 The frontend implements infinite scrolling by resending the same search term
 and filters with `page` incremented to `2`, `3`, and so on. It stops when
 `current_page` equals `last_page`.
+
+### 13.7 Protected live admin status
+
+Generate a separate secret and place it in the production `.env`:
+
+```bash
+openssl rand -hex 32
+```
+
+```env
+API_ADMIN_KEY=<generated-value>
+```
+
+Restart the service, then query the general monitor:
+
+```bash
+set -a
+source .env
+curl -sS https://api.querix.co/api/v1/admin/status \
+  -H "X-Admin-Key: $API_ADMIN_KEY" | jq
+```
+
+For full Gainr health, usage, and search detail:
+
+```bash
+curl -sS https://api.querix.co/api/v1/gainr/admin/status \
+  -H "X-Admin-Key: $API_ADMIN_KEY" | jq
+```
+
+For a simple live view:
+
+```bash
+while true; do
+  clear
+  curl -sS https://api.querix.co/api/v1/admin/status \
+    -H "X-Admin-Key: $API_ADMIN_KEY" | jq
+  sleep 5
+done
+```
+
+The general endpoint shows process CPU/load/RSS and loaded-company health. The
+company endpoint additionally shows usage, active searches, and the latest 20
+timing/failure summaries. Search text, filter values, product content, customer
+API keys, and provider keys are never returned. Both endpoints return 404 when
+`API_ADMIN_KEY` is unset. Recent history is in memory and resets on service
+restart; use journald for historical incidents.
+
+`X-User-ID` is unrelated to admin authentication. It is optional on
+`filter-result` and is used only to associate a successful first-page search
+with a verified signed-in user's recent-search history. Omit it for anonymous
+users. Never send the literal `local-test-user` in production.
 
 Rules:
 
@@ -1102,6 +1164,56 @@ city_id=456, 120 candidates: approximately 937 ms
 
 After changing retrieval code, restart the API process; no ingestion or vector
 rebuild is needed for this specific optimization.
+
+For the production systemd service, inspect one failing request without
+printing API keys:
+
+```bash
+sudo systemctl status personal-rag --no-pager -l
+sudo journalctl -u personal-rag -n 200 --no-pager -o short-iso
+sudo journalctl -u personal-rag --since "5 minutes ago" --no-pager -o cat
+```
+
+For an incident spanning 11 PM through 1 AM, first confirm the server timezone,
+then use a range that crosses midnight:
+
+```bash
+timedatectl
+sudo journalctl -u personal-rag \
+  --since "2026-07-02 23:00:00" \
+  --until "2026-07-03 01:00:00" \
+  --no-pager -o short-iso
+```
+
+Replace the dates with the incident dates. `journalctl` interprets them in the
+server timezone shown by `timedatectl`, which may differ from IST.
+
+To reproduce while watching logs, keep this running in one terminal:
+
+```bash
+sudo journalctl -u personal-rag -f -n 0 -o cat
+```
+
+Then send the request from another terminal. Search using the eight-character
+trace suffix shown in the logs, for example:
+
+```bash
+sudo journalctl -u personal-rag --since today --no-pager -o cat \
+  | grep -C 30 '9054b35d'
+```
+
+The retrieval completion line reports both the complete vector-stage duration
+and Ollama's internal `embed_total_ms` / `embed_load_ms`. A large
+`embed_load_ms` means the model was cold; a small embed time with a large
+`vector_ms` points to Chroma filtering/search instead.
+
+After deploying code or environment changes:
+
+```bash
+sudo systemctl restart personal-rag
+sudo systemctl status personal-rag --no-pager -l
+sudo journalctl -u personal-rag --since "2 minutes ago" --no-pager -o cat
+```
 
 ### Google query-planner timeout/503
 
