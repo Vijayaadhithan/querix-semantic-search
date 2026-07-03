@@ -324,7 +324,7 @@ class ProductSearchService:
         self._monitor_started = 0
         self._monitor_completed = 0
         self._monitor_failed = 0
-        self._monitor_events: deque[dict[str, Any]] = deque(maxlen=20)
+        self._monitor_events: deque[dict[str, Any]] = deque(maxlen=100)
 
     def warmup(self) -> float:
         with self._engine_lock:
@@ -366,7 +366,7 @@ class ProductSearchService:
 
     def monitor_status(self) -> dict[str, Any]:
         with self._monitor_lock:
-            events = list(self._monitor_events)
+            events = list(self._monitor_events)[:20]
             return {
                 "active": self._monitor_active,
                 "started": self._monitor_started,
@@ -374,6 +374,196 @@ class ProductSearchService:
                 "failed": self._monitor_failed,
                 "recent": events,
             }
+
+    def monitor_events(
+        self,
+        *,
+        limit: int = 20,
+        event_status: str | None = None,
+    ) -> dict[str, Any]:
+        with self._monitor_lock:
+            events = list(self._monitor_events)
+            active = self._monitor_active
+        if event_status is not None:
+            events = [
+                event
+                for event in events
+                if event.get("status") == event_status
+            ]
+        return {
+            "active": active,
+            "retained": len(events),
+            "events": events[:limit],
+        }
+
+    @staticmethod
+    def _monitor_timeline(
+        result: dict[str, Any],
+        duration_ms: float,
+    ) -> list[dict[str, Any]]:
+        query_plan = result.get("query_plan") or {}
+        query_metrics = result.get("query_model_metrics") or {}
+        embedding = result.get("embedding_model_metrics") or {}
+        execution_path = query_plan.get("execution_path", "semantic")
+        timeline: list[dict[str, Any]] = [
+            {
+                "step": "plan",
+                "status": (
+                    "cache_hit"
+                    if result.get("plan_cache_hit")
+                    else "complete"
+                ),
+                "duration_ms": round(
+                    float(result.get("seconds", 0.0)) * 1000,
+                    3,
+                ),
+                "execution_path": execution_path,
+                "model": query_metrics.get("model") or "none",
+                "resolved_filter_groups": len(
+                    result.get("resolved_filters") or {}
+                ),
+                "unresolved_filters": len(
+                    result.get("unresolved_filters") or {}
+                ),
+            }
+        ]
+        if result.get("result_cache_hit"):
+            timeline.append(
+                {
+                    "step": "result_cache",
+                    "status": "hit",
+                    "duration_ms": round(
+                        float(
+                            result.get("result_cache_seconds", 0.0)
+                        )
+                        * 1000,
+                        3,
+                    ),
+                    "products": len(result.get("products") or []),
+                }
+            )
+        elif execution_path == "deterministic_filter":
+            timeline.append(
+                {
+                    "step": "fast_filter",
+                    "status": "complete",
+                    "duration_ms": round(
+                        float(
+                            result.get("related_tail_seconds", 0.0)
+                        )
+                        * 1000,
+                        3,
+                    ),
+                    "products": len(result.get("products") or []),
+                }
+            )
+        else:
+            vector_results = result.get("vector_results") or []
+            bm25_results = result.get("bm25_results") or []
+            candidates = result.get("candidates") or []
+            timeline.extend(
+                [
+                    {
+                        "step": "retrieve",
+                        "status": "complete",
+                        "duration_ms": round(
+                            max(
+                                float(
+                                    result.get(
+                                        "vector_seconds",
+                                        0.0,
+                                    )
+                                ),
+                                float(
+                                    result.get(
+                                        "bm25_seconds",
+                                        0.0,
+                                    )
+                                ),
+                            )
+                            * 1000,
+                            3,
+                        ),
+                        "vector_ms": round(
+                            float(
+                                result.get("vector_seconds", 0.0)
+                            )
+                            * 1000,
+                            3,
+                        ),
+                        "bm25_ms": round(
+                            float(
+                                result.get("bm25_seconds", 0.0)
+                            )
+                            * 1000,
+                            3,
+                        ),
+                        "embedding_total_ms": round(
+                            float(embedding.get("total_ms", 0.0)),
+                            3,
+                        ),
+                        "embedding_load_ms": round(
+                            float(embedding.get("load_ms", 0.0)),
+                            3,
+                        ),
+                        "vector_results": len(vector_results),
+                        "bm25_results": len(bm25_results),
+                        "candidates": len(candidates),
+                    },
+                    {
+                        "step": "rerank",
+                        "status": (
+                            "complete" if candidates else "skipped"
+                        ),
+                        "duration_ms": round(
+                            float(
+                                result.get("reranker_seconds", 0.0)
+                            )
+                            * 1000,
+                            3,
+                        ),
+                        "provider": result.get(
+                            "reranker_provider",
+                            "none",
+                        ),
+                        "results": len(result.get("reranked") or []),
+                    },
+                    {
+                        "step": "related_tail",
+                        "status": "complete",
+                        "duration_ms": round(
+                            float(
+                                result.get(
+                                    "related_tail_seconds",
+                                    0.0,
+                                )
+                            )
+                            * 1000,
+                            3,
+                        ),
+                        "primary": len(
+                            result.get("primary_product_ids") or []
+                        ),
+                        "related": len(
+                            result.get("related_product_ids") or []
+                        ),
+                    },
+                    {
+                        "step": "database_map",
+                        "status": "complete",
+                        "products": len(result.get("products") or []),
+                    },
+                ]
+            )
+        timeline.append(
+            {
+                "step": "search",
+                "status": "complete",
+                "duration_ms": round(duration_ms, 3),
+                "products": len(result.get("products") or []),
+            }
+        )
+        return timeline
 
     def run_engine_search(self, query: str, **kwargs) -> dict[str, Any]:
         started = time.perf_counter()
@@ -395,6 +585,14 @@ class ProductSearchService:
                         "query_chars": len(query),
                         "duration_ms": round(duration_ms, 3),
                         "error_type": type(exc).__name__,
+                        "timeline": [
+                            {
+                                "step": "search",
+                                "status": "failed",
+                                "duration_ms": round(duration_ms, 3),
+                                "error_type": type(exc).__name__,
+                            }
+                        ],
                     }
                 )
             raise
@@ -404,6 +602,7 @@ class ProductSearchService:
             embedding = result.get("embedding_model_metrics") or {}
             event = {
                 "timestamp_utc": timestamp,
+                "trace_id": result.get("trace_id"),
                 "status": "success",
                 "query_chars": len(query),
                 "duration_ms": round(duration_ms, 3),
@@ -453,6 +652,10 @@ class ProductSearchService:
                         3,
                     ),
                 },
+                "timeline": self._monitor_timeline(
+                    result,
+                    duration_ms,
+                ),
             }
             result["_service_total_ms"] = duration_ms
             with self._monitor_lock:
@@ -470,6 +673,7 @@ class ProductSearchService:
         execution_path: str,
         duration_ms: float,
         products: int,
+        timeline: list[dict[str, Any]] | None = None,
     ) -> None:
         event = {
             "timestamp_utc": datetime.now(timezone.utc).isoformat(),
@@ -490,6 +694,15 @@ class ProductSearchService:
                 "related_tail": 0.0,
                 "result_cache": 0.0,
             },
+            "timeline": timeline
+            or [
+                {
+                    "step": "filter_result",
+                    "status": "complete",
+                    "duration_ms": round(duration_ms, 3),
+                    "products": products,
+                }
+            ],
         }
         with self._monitor_lock:
             self._monitor_started += 1
@@ -1303,6 +1516,36 @@ def create_app(
             "health": service.health().model_dump(),
             "searches": service.monitor_status(),
             "usage": usage,
+        }
+
+    @application.get(
+        "/api/v1/{company_endpoint}/admin/search-events",
+        tags=["company-admin"],
+    )
+    def company_admin_search_events(
+        company_endpoint: str,
+        limit: int = Query(default=20, ge=1, le=100),
+        event_status: str | None = Query(
+            default=None,
+            alias="status",
+            pattern="^(success|failed)$",
+        ),
+        x_admin_key: str | None = Header(
+            default=None,
+            alias="X-Admin-Key",
+        ),
+    ) -> dict[str, Any]:
+        service = resolve_admin_service(
+            x_admin_key,
+            company_endpoint=company_endpoint,
+        )
+        return {
+            "status": "ok",
+            "company_id": service.company_id,
+            **service.monitor_events(
+                limit=limit,
+                event_status=event_status,
+            ),
         }
 
     @application.get(

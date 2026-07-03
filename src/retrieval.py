@@ -12,6 +12,8 @@ from settings import (
     MYSQL_TABLE,
     RRF_CONSTANT,
     SOFT_CATEGORY_BOOST,
+    VECTOR_POST_FILTER_MAX_CANDIDATES,
+    VECTOR_POST_FILTER_OVERFETCH_FACTOR,
     VECTOR_WEIGHT,
 )
 
@@ -126,7 +128,16 @@ def vector_search(
             company_id,
         )
         if where_filter is not None:
-            query_options["where"] = where_filter
+            # Chroma's metadata-filtered query path can take many seconds on
+            # large collections. Tenant collections are already isolated, so
+            # retrieve a bounded HNSW window and enforce the exact same
+            # constraints with metadata_matches_filters below.
+            query_options["n_results"] = min(
+                max(candidate_k, top_k)
+                * VECTOR_POST_FILTER_OVERFETCH_FACTOR,
+                VECTOR_POST_FILTER_MAX_CANDIDATES,
+                collection.count(),
+            )
     try:
         results = collection.query(**query_options)
     except TypeError as exc:

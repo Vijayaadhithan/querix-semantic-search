@@ -149,6 +149,25 @@ if UNPRICED_RENTAL_FEE_CEILING < 0:
 VECTOR_CANDIDATE_K = int(
     CONFIG.get("retrieval", {}).get("vector_candidate_k", 100)
 )
+VECTOR_POST_FILTER_OVERFETCH_FACTOR = int(
+    CONFIG.get("retrieval", {}).get(
+        "vector_post_filter_overfetch_factor",
+        10,
+    )
+)
+VECTOR_POST_FILTER_MAX_CANDIDATES = int(
+    CONFIG.get("retrieval", {}).get(
+        "vector_post_filter_max_candidates",
+        2000,
+    )
+)
+if (
+    VECTOR_POST_FILTER_OVERFETCH_FACTOR <= 0
+    or VECTOR_POST_FILTER_MAX_CANDIDATES <= 0
+):
+    raise ValueError(
+        "Vector post-filter over-fetch settings must be greater than zero."
+    )
 VECTOR_TOP_K = int(CONFIG.get("retrieval", {}).get("vector_top_k", 15))
 BM25_TOP_K = int(CONFIG.get("retrieval", {}).get("bm25_top_k", 15))
 HYBRID_CANDIDATE_K = int(

@@ -103,6 +103,9 @@ compatibility:
   adapter: gainr_legacy
   users_table: users
   page_size: 20
+  # Rerank the first two frontend pages. The remaining semantic result window
+  # is filled by the filtered catalogue tail for infinite scrolling.
+  semantic_ranked_window: 40
   suggestions_limit: 8
   recent_limit: 10
   recent_ttl_seconds: 7776000

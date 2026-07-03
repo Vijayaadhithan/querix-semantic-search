@@ -735,6 +735,15 @@ The frontend implements infinite scrolling by resending the same search term
 and filters with `page` incremented to `2`, `3`, and so on. It stops when
 `current_page` equals `last_page`.
 
+For semantic `filter-result` searches, Gainr reranks two frontend pages
+(`compatibility.semantic_ranked_window: 40`) and fills the remaining bounded
+pagination window from the structured catalogue tail. Vector retrieval uses
+a bounded unfiltered HNSW window followed by the same metadata checks in
+memory; this avoids Chroma's slow metadata-filtered scan while never returning
+a row that violates the selected filters. Exact repeated query/filter
+combinations use the IDs-only Redis result cache and rehydrate current MySQL
+rows.
+
 ### 13.7 Protected live admin status
 
 Generate a separate secret and place it in the production `.env`:
@@ -763,6 +772,30 @@ curl -sS https://api.querix.co/api/v1/gainr/admin/status \
   -H "X-Admin-Key: $API_ADMIN_KEY" | jq
 ```
 
+For the latest structured search execution timelines:
+
+```bash
+curl -sS \
+  "https://api.querix.co/api/v1/gainr/admin/search-events?limit=20" \
+  -H "X-Admin-Key: $API_ADMIN_KEY" | jq
+```
+
+Show only failed searches:
+
+```bash
+curl -sS \
+  "https://api.querix.co/api/v1/gainr/admin/search-events?status=failed" \
+  -H "X-Admin-Key: $API_ADMIN_KEY" | jq
+```
+
+Each completed event includes a trace ID where available and a `timeline`
+covering planning, hybrid retrieval, embedding timing, reranking, related-tail
+selection, database mapping, and total search time. Deterministic
+`filter-result` requests show planning, database filtering/relation hydration,
+response mapping, and total request time. Events store query length, counts,
+model/provider names, timings, and error types—but never the raw query, filters,
+result content, credentials, or exception messages.
+
 For a simple live view:
 
 ```bash
@@ -778,8 +811,9 @@ The general endpoint shows process CPU/load/RSS and loaded-company health. The
 company endpoint additionally shows usage, active searches, and the latest 20
 timing/failure summaries. Search text, filter values, product content, customer
 API keys, and provider keys are never returned. Both endpoints return 404 when
-`API_ADMIN_KEY` is unset. Recent history is in memory and resets on service
-restart; use journald for historical incidents.
+`API_ADMIN_KEY` is unset. Up to 100 structured events are retained in process
+memory and reset on service restart; use journald for durable historical
+incidents.
 
 `X-User-ID` is unrelated to admin authentication. It is optional on
 `filter-result` and is used only to associate a successful first-page search

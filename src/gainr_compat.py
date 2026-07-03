@@ -896,6 +896,7 @@ class GainrCompatibilityService:
     ) -> dict[str, Any]:
         request_started = time.perf_counter()
         planned, effective, meta = self._effective_plan(request)
+        planning_ms = (time.perf_counter() - request_started) * 1000
         page_size = self.profile.compatibility.page_size
         execution_path = planned["query_plan"].get(
             "execution_path",
@@ -911,6 +912,7 @@ class GainrCompatibilityService:
             }
         )
         if execution_path == "deterministic_filter":
+            database_started = time.perf_counter()
             rows, total = self.repository.search_catalog(
                 effective,
                 request.filter,
@@ -920,6 +922,9 @@ class GainrCompatibilityService:
                 sort_order=planned["query_plan"].get("sort_order"),
                 allowed_ad_types=allowed_ad_types,
             )
+            database_ms = (
+                time.perf_counter() - database_started
+            ) * 1000
             route = "deterministic"
             usage_store = self.product_search_service.usage_store
             if usage_store is not None:
@@ -943,6 +948,9 @@ class GainrCompatibilityService:
             result = self.product_search_service.run_engine_search(
                 request.searchTerm,
                 limit=self.product_search_service.max_results,
+                ranking_window=(
+                    self.profile.compatibility.semantic_ranked_window
+                ),
                 planned_result=planned,
                 resolved_filters=effective,
                 allowed_ad_types=allowed_ad_types,
@@ -962,7 +970,11 @@ class GainrCompatibilityService:
             rows = rows[start : start + page_size]
             route = "semantic"
             usage = self.product_search_service._record_usage(result)
+        card_mapping_started = time.perf_counter()
         cards = [self._card(row) for row in rows]
+        card_mapping_ms = (
+            time.perf_counter() - card_mapping_started
+        ) * 1000
         response: dict[str, Any] = {
             "status": True,
             "message": "",
@@ -986,14 +998,41 @@ class GainrCompatibilityService:
         if request.page == 1 and request.searchTerm:
             self.remember_search(user_id, request.searchTerm)
         if route == "deterministic":
+            duration_ms = (
+                time.perf_counter() - request_started
+            ) * 1000
             self.product_search_service.record_external_search(
                 request.searchTerm,
                 execution_path="deterministic_filter",
-                duration_ms=(
-                    time.perf_counter() - request_started
-                )
-                * 1000,
+                duration_ms=duration_ms,
                 products=len(cards),
+                timeline=[
+                    {
+                        "step": "plan",
+                        "status": "complete",
+                        "duration_ms": round(planning_ms, 3),
+                        "execution_path": "deterministic_filter",
+                    },
+                    {
+                        "step": "database_filter",
+                        "status": "complete",
+                        "duration_ms": round(database_ms, 3),
+                        "page_rows": len(rows),
+                        "total_results": total,
+                    },
+                    {
+                        "step": "response_map",
+                        "status": "complete",
+                        "duration_ms": round(card_mapping_ms, 3),
+                        "products": len(cards),
+                    },
+                    {
+                        "step": "filter_result",
+                        "status": "complete",
+                        "duration_ms": round(duration_ms, 3),
+                        "products": len(cards),
+                    },
+                ],
             )
         return response
 

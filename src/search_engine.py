@@ -62,7 +62,7 @@ from settings import (
 )
 
 LOGGER = logging.getLogger("uvicorn.error")
-RESULT_CACHE_SCHEMA_VERSION = "v3"
+RESULT_CACHE_SCHEMA_VERSION = "v5"
 
 
 def active_filter_names(filters: dict) -> list[str]:
@@ -201,6 +201,7 @@ class ProductSearchEngine:
         limit: int | None,
         resolved_filters: dict | None = None,
         allowed_ad_types: set[str] | None = None,
+        ranking_window: int | None = None,
     ) -> str:
         version_parts = (
             RESULT_CACHE_SCHEMA_VERSION,
@@ -208,6 +209,7 @@ class ProductSearchEngine:
             str(self.bm25_index.revision()),
             str(self.bm25_index.count()),
             str(limit),
+            str(ranking_window),
             RERANK_MODEL,
             str(RERANK_CANDIDATE_K),
             str(PRIMARY_RANKED_K),
@@ -231,6 +233,7 @@ class ProductSearchEngine:
         trace_id: str,
         resolved_filters: dict | None = None,
         allowed_ad_types: set[str] | None = None,
+        ranking_window: int | None = None,
     ) -> dict | None:
         if not RESULT_CACHE_ENABLED or self.shared_plan_cache is None:
             return None
@@ -240,6 +243,7 @@ class ProductSearchEngine:
             limit,
             resolved_filters,
             allowed_ad_types,
+            ranking_window,
         )
         cached = self.shared_plan_cache.get_json(
             self._cache_namespace("search_result"),
@@ -340,6 +344,7 @@ class ProductSearchEngine:
         result: dict,
         resolved_filters: dict | None = None,
         allowed_ad_types: set[str] | None = None,
+        ranking_window: int | None = None,
     ) -> None:
         if (
             not RESULT_CACHE_ENABLED
@@ -372,6 +377,7 @@ class ProductSearchEngine:
                 limit,
                 resolved_filters,
                 allowed_ad_types,
+                ranking_window,
             ),
             payload,
             RESULT_CACHE_TTL_SECONDS,
@@ -550,6 +556,7 @@ class ProductSearchEngine:
         candidate_limit: int | None = None,
         trace_id: str = "-",
         allowed_ad_types: set[str] | None = None,
+        strict_candidate_limit: bool = False,
     ) -> dict:
         extended_window = (
             candidate_limit is not None and candidate_limit > RERANK_TOP_K
@@ -566,7 +573,16 @@ class ProductSearchEngine:
         )
         vector_top_k = retrieval_depth or VECTOR_TOP_K
         bm25_top_k = retrieval_depth or BM25_TOP_K
-        hybrid_top_k = max(HYBRID_CANDIDATE_K, requested)
+        hybrid_top_k = (
+            requested
+            if strict_candidate_limit
+            else max(HYBRID_CANDIDATE_K, requested)
+        )
+        vector_candidate_k = (
+            vector_top_k
+            if strict_candidate_limit
+            else max(VECTOR_CANDIDATE_K, vector_top_k)
+        )
         LOGGER.info(
             "[search:%s] step=retrieve status=start embedding_model=%s "
             "vector_k=%d bm25_k=%d hybrid_k=%d filters=%s",
@@ -584,7 +600,7 @@ class ProductSearchEngine:
                 query_plan["semantic_query"],
                 self.collection,
                 vector_top_k,
-                candidate_k=max(VECTOR_CANDIDATE_K, vector_top_k),
+                candidate_k=vector_candidate_k,
                 source_name=self.source_name,
                 resolved_filters=resolved_filters,
                 embedding_provider=self.embedding_provider,
@@ -746,6 +762,7 @@ class ProductSearchEngine:
         trace_id: str,
         search_started: float,
         allowed_ad_types: set[str] | None = None,
+        ranking_window: int | None = None,
     ) -> dict:
         result_limit = limit if limit is not None else RERANK_TOP_K
         browse_started = time.perf_counter()
@@ -809,16 +826,29 @@ class ProductSearchEngine:
         planned_result: dict | None = None,
         resolved_filters: dict | None = None,
         allowed_ad_types: set[str] | None = None,
+        ranking_window: int | None = None,
     ) -> dict:
         if limit is not None and limit <= 0:
             raise ValueError("Search limit must be greater than zero.")
+        if ranking_window is not None and ranking_window <= 0:
+            raise ValueError("Ranking window must be greater than zero.")
+        configured_primary_limit = (
+            min(PRIMARY_RANKED_K, ranking_window)
+            if ranking_window is not None
+            else PRIMARY_RANKED_K
+        )
         primary_limit = (
-            min(PRIMARY_RANKED_K, limit)
+            min(configured_primary_limit, limit)
             if limit is not None
             else RERANK_TOP_K
         )
+        configured_candidate_limit = (
+            min(RERANK_CANDIDATE_K, ranking_window)
+            if ranking_window is not None
+            else RERANK_CANDIDATE_K
+        )
         rerank_candidate_limit = (
-            max(primary_limit, RERANK_CANDIDATE_K)
+            max(primary_limit, configured_candidate_limit)
             if limit is not None
             else None
         )
@@ -838,8 +868,10 @@ class ProductSearchEngine:
             trace_id,
             resolved_filters,
             allowed_ad_types,
+            ranking_window,
         )
         if cached_result is not None:
+            cached_result["trace_id"] = trace_id
             LOGGER.info(
                 "[search:%s] step=search status=complete "
                 "path=result_cache products=%d duration_ms=%.0f",
@@ -868,12 +900,14 @@ class ProductSearchEngine:
             )
             result["result_cache_hit"] = False
             result["result_cache_seconds"] = 0.0
+            result["trace_id"] = trace_id
             self._cache_search_result(
                 query,
                 limit,
                 result,
                 resolved_filters,
                 allowed_ad_types,
+                ranking_window,
             )
             return result
         retrieved = self.retrieve(
@@ -882,6 +916,7 @@ class ProductSearchEngine:
             candidate_limit=rerank_candidate_limit,
             trace_id=trace_id,
             allowed_ad_types=allowed_ad_types,
+            strict_candidate_limit=ranking_window is not None,
         )
         candidates = retrieved["candidates"]
         if candidates:
@@ -1012,6 +1047,7 @@ class ProductSearchEngine:
         result = {
             **planned,
             **retrieved,
+            "trace_id": trace_id,
             "reranked": ranked["results"],
             "reranker_load_seconds": ranked["load_seconds"],
             "reranker_seconds": ranked["seconds"],
@@ -1031,5 +1067,6 @@ class ProductSearchEngine:
             result,
             resolved_filters,
             allowed_ad_types,
+            ranking_window,
         )
         return result

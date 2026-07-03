@@ -209,6 +209,7 @@ def test_explicit_filters_override_only_matching_auto_filters(tmp_path):
     assert effective["min_rental_fee"] == 100
     assert effective["max_rental_fee"] == 1000
     assert search_kwargs["allowed_ad_types"] == {"2"}
+    assert search_kwargs["ranking_window"] == 40
     assert repository.hydrate_call[0] == [1, 2]
     assert response["data"][0]["city"] == {
         "id": 456,
@@ -244,6 +245,14 @@ def test_deterministic_result_uses_full_catalog_pagination(tmp_path):
     monitor = adapter.product_search_service.monitor_status()
     assert monitor["completed"] == 1
     assert monitor["recent"][0]["execution_path"] == "deterministic_filter"
+    assert [
+        event["step"] for event in monitor["recent"][0]["timeline"]
+    ] == [
+        "plan",
+        "database_filter",
+        "response_map",
+        "filter_result",
+    ]
 
 
 def test_public_filter_result_matches_gainr_response_envelope(tmp_path):

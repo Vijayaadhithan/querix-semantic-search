@@ -71,12 +71,13 @@ class FakeEmbeddingProvider:
 
 
 class CapturingVectorCollection:
-    def __init__(self, metadata):
+    def __init__(self, metadata, count=1):
         self.metadata = metadata
+        self.count_value = count
         self.query_options = None
 
     def count(self):
-        return 1
+        return self.count_value
 
     def query(self, **options):
         self.query_options = options
@@ -135,6 +136,32 @@ def test_filtered_vector_query_uses_only_real_search_constraints():
             {"rental_duration": {"$in": ["Per Hour", "Per Day"]}},
         ]
     }
+
+
+def test_filtered_vector_query_uses_bounded_post_filter_window():
+    metadata = {
+        "source_file": "mysql:gainr.ads_search_ready",
+        "company_id": "gainr",
+        "rental_duration": "Per Day",
+    }
+    collection = CapturingVectorCollection(metadata, count=10_000)
+
+    results = vector_search(
+        "comfortable vehicle",
+        collection,
+        top_k=20,
+        candidate_k=40,
+        source_name="mysql:gainr.ads_search_ready",
+        resolved_filters={
+            "categorical": {"rental_duration": ["Per Day"]}
+        },
+        company_id="gainr",
+        embedding_provider=FakeEmbeddingProvider(),
+    )
+
+    assert "where" not in collection.query_options
+    assert collection.query_options["n_results"] == 400
+    assert [result["id"] for result in results] == ["doc-1"]
 
 
 def test_parse_query_plan_normalizes_fields_and_price_range():

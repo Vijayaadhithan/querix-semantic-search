@@ -63,6 +63,7 @@ class TenantCompatibilityConfig:
     adapter: str = ""
     users_table: str = "users"
     page_size: int = 20
+    semantic_ranked_window: int = 40
     suggestions_limit: int = 8
     recent_limit: int = 10
     recent_ttl_seconds: int = 60 * 60 * 24 * 90
@@ -82,6 +83,14 @@ class TenantCompatibilityConfig:
             raise ValueError("Compatibility users_table must not be empty")
         if self.page_size <= 0 or self.page_size > 100:
             raise ValueError("Compatibility page_size must be between 1 and 100")
+        if (
+            self.semantic_ranked_window < self.page_size
+            or self.semantic_ranked_window > 100
+        ):
+            raise ValueError(
+                "Compatibility semantic_ranked_window must be between "
+                "page_size and 100"
+            )
         if self.suggestions_limit <= 0 or self.suggestions_limit > 50:
             raise ValueError(
                 "Compatibility suggestions_limit must be between 1 and 50"
@@ -484,6 +493,9 @@ def load_tenant_profile(path: Path) -> TenantProfile:
             compatibility.get("users_table", "users")
         ).strip(),
         page_size=int(compatibility.get("page_size", 20)),
+        semantic_ranked_window=int(
+            compatibility.get("semantic_ranked_window", 40)
+        ),
         suggestions_limit=int(
             compatibility.get("suggestions_limit", 8)
         ),

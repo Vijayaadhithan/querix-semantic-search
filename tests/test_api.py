@@ -278,6 +278,16 @@ def test_search_monitor_reports_safe_success_and_failure_summaries():
     )
     assert "private customer query" not in str(status)
     assert status["recent"][0]["timings_ms"]["vector_search"] == 20
+    assert [
+        item["step"] for item in status["recent"][0]["timeline"]
+    ] == [
+        "plan",
+        "retrieve",
+        "rerank",
+        "related_tail",
+        "database_map",
+        "search",
+    ]
 
     class FailingEngine(FakeEngine):
         def search(self, query, limit=None):
@@ -297,6 +307,7 @@ def test_search_monitor_reports_safe_success_and_failure_summaries():
     assert failed["completed"] == 0
     assert failed["failed"] == 1
     assert failed["recent"][0]["error_type"] == "ValueError"
+    assert failed["recent"][0]["timeline"][0]["status"] == "failed"
     assert "private failure details" not in str(failed)
 
 
@@ -823,6 +834,18 @@ def test_admin_status_requires_separate_key_and_hides_queries(
                 "X-Admin-Key": "admin-key-with-at-least-24-chars",
             },
         )
+        events = client.get(
+            "/api/v1/gainr/admin/search-events?limit=5",
+            headers={
+                "X-Admin-Key": "admin-key-with-at-least-24-chars",
+            },
+        )
+        failed_events = client.get(
+            "/api/v1/gainr/admin/search-events?status=failed",
+            headers={
+                "X-Admin-Key": "admin-key-with-at-least-24-chars",
+            },
+        )
 
     assert global_missing.status_code == 401
     assert missing.status_code == 401
@@ -842,3 +865,11 @@ def test_admin_status_requires_separate_key_and_hides_queries(
     assert global_payload["companies"][0]["company_id"] == "gainr"
     assert global_payload["companies"][0]["loaded"] is True
     assert "private customer query" not in global_status.text
+    assert events.status_code == 200
+    events_payload = events.json()
+    assert events_payload["company_id"] == "gainr"
+    assert events_payload["retained"] == 1
+    assert events_payload["events"][0]["timeline"][-1]["step"] == "search"
+    assert "private customer query" not in events.text
+    assert failed_events.status_code == 200
+    assert failed_events.json()["events"] == []

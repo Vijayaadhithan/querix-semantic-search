@@ -42,6 +42,11 @@ retrieval:
   # searchable but rank after every genuine price in price-sorted searches.
   unpriced_rental_fee_ceiling: 1
   vector_candidate_k: 100
+  # Chroma's metadata-filtered HNSW path is very slow on the 250k-row Gainr
+  # collection. Retrieve a bounded unfiltered window and enforce the same
+  # metadata constraints in memory.
+  vector_post_filter_overfetch_factor: 10
+  vector_post_filter_max_candidates: 2000
   vector_top_k: 30
   bm25_top_k: 30
   hybrid_candidate_k: 60
