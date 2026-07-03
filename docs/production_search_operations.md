@@ -5,6 +5,20 @@ ingesting, refreshing, running, testing, and troubleshooting the search API.
 It describes the currently implemented Gainr deployment and the tenant-isolation
 contract used when additional companies are onboarded.
 
+Use this document as the command source of truth. Run repository commands from
+the repository root unless a section explicitly changes directory. Replace all
+angle-bracket placeholders; never paste a real secret into a committed file.
+
+Quick navigation:
+
+- installation and dependencies: Sections 5--6
+- environment and tenant database safety: Sections 7--8
+- source publish and index ingestion: Sections 9--10
+- API keys, startup, health, search, and cURL: Sections 11--13
+- load, regression, evaluation, and LaTeX build: Sections 14--15
+- additional companies and scheduled refresh: Sections 16--17
+- troubleshooting and production checklist: Sections 18--20
+
 ## 1. The most important data-flow distinction
 
 The deterministic path does **not** execute its category/location/price filtering
@@ -76,7 +90,7 @@ Redis result-ID cache
                  +-- fetch final canonical rows from company DB
 ```
 
-### Current Gainr storage
+### Current Gainr storage paths
 
 ```text
 configs/tenants/gainr.yaml
@@ -85,8 +99,13 @@ storage/companies/gainr/bm25.sqlite3
 storage/usage.sqlite3
 ```
 
-The completed Gainr indexes contain 250,117 Chroma vectors and 250,117 BM25
-products.
+Counts are deployment state, not documentation constants. Inspect the current
+environment with:
+
+```bash
+.venv/bin/python src/ingest.py --company gainr --list
+.venv/bin/python scripts/doctor.py --company gainr --strict
+```
 
 ## 3. Query-routing behavior
 
@@ -846,7 +865,7 @@ numeric ID columns are populated:
 
 This command does not call the embedding model and does not modify Chroma.
 
-### 13.7 Compatibility and regression verification
+### 13.8 Compatibility and regression verification
 
 Verify that enabling the frontend-compatible adapter did not change Gainr's
 existing generic company endpoint:
@@ -866,16 +885,15 @@ Run the complete local verification:
 git diff --check
 ```
 
-Current verified local state:
+Repository regression baseline verified on 2026-07-03:
 
 ```text
-ads_search_ready rows:   250117
-ads rows:                250117
-Chroma vectors:          250117
-BM25 products:           250117
-tests:                   123 passed
-strict doctor:           8 passed, 0 failed
+tests: 137 passed
 ```
+
+Database and index counts are environment-specific. Use `src/ingest.py --list`
+and the strict doctor instead of copying a historical snapshot into an
+operational decision.
 
 The compatibility routes are created only when a tenant profile explicitly
 sets:
@@ -984,6 +1002,77 @@ pdflatex -interaction=nonstopmode -halt-on-error \
 ```
 
 The second pass resolves the table of contents and internal references.
+
+### 15.7 Complete project CLI index
+
+Use `--help` for the authoritative option set:
+
+```bash
+.venv/bin/python src/ingest.py --help
+.venv/bin/python src/chat.py --help
+.venv/bin/python src/evaluate_queries.py --help
+.venv/bin/python src/evaluate_retrieval.py --help
+.venv/bin/python scripts/doctor.py --help
+.venv/bin/python scripts/load_test.py --help
+.venv/bin/python scripts/generate_company_api_key.py --help
+```
+
+Common commands:
+
+| Goal | Command |
+|---|---|
+| Validate company source, no index writes | `.venv/bin/python src/ingest.py --company gainr --mysql --check --limit 10` |
+| Incremental DB ingestion | `.venv/bin/python src/ingest.py --company gainr --mysql` |
+| Incremental ingestion plus stale-ID removal | `.venv/bin/python src/ingest.py --company gainr --mysql --mysql-reconcile-deletions` |
+| BM25-only rebuild | `.venv/bin/python src/ingest.py --company gainr --mysql-bm25-only` |
+| Force re-embedding | `.venv/bin/python src/ingest.py --company gainr --mysql --mysql-force-reembed` |
+| Authoritative tenant index rebuild | `.venv/bin/python src/ingest.py --company gainr --mysql --mysql-replace-source` |
+| List indexed sources/counts | `.venv/bin/python src/ingest.py --company gainr --list` |
+| One CLI search | `.venv/bin/python src/chat.py --company gainr --query "portable camera" --limit 10` |
+| Interactive CLI search | `.venv/bin/python src/chat.py --company gainr` |
+| Start HTTP API | `.venv/bin/python src/run_api.py` |
+| Generate one company key | `.venv/bin/python scripts/generate_company_api_key.py --company gainr` |
+| Strict dependency/index check | `.venv/bin/python scripts/doctor.py --company gainr --strict` |
+| Run tests | `.venv/bin/python -m pytest -q` |
+| Compile/import check | `.venv/bin/python -m compileall -q src scripts tests` |
+| Query-plan evaluation | `.venv/bin/python src/evaluate_queries.py --company gainr` |
+| Retrieval evaluation | `.venv/bin/python src/evaluate_retrieval.py --company gainr` |
+
+Legacy local-file mode uses `data/raw_docs`:
+
+```bash
+.venv/bin/python src/ingest.py --check
+.venv/bin/python src/ingest.py
+.venv/bin/python src/ingest.py --list
+.venv/bin/python src/ingest.py --delete '<source-name>'
+.venv/bin/python src/ingest.py --clear
+```
+
+`--delete` and `--clear` are destructive to the selected local retrieval index
+and request confirmation unless `--yes` is explicitly supplied.
+
+### 15.8 HTTP endpoint and authentication index
+
+| Method and path | Header | Purpose |
+|---|---|---|
+| `GET /api/v1/ready` | none | Process readiness and configured-company count |
+| `GET /api/v1/health` | `X-API-Key` when auth is enabled | Generic/legacy health |
+| `POST /api/v1/search` | `X-API-Key` when auth is enabled | Generic/legacy search |
+| `GET /api/v1/{company}/auth/verify` | `X-API-Key` | Verify endpoint/key binding |
+| `GET /api/v1/{company}/health` | `X-API-Key` | Company dependency/index health |
+| `POST /api/v1/{company}/search` | `X-API-Key` | Company search and cursor paging |
+| `GET /api/v1/{company}/usage` | `X-API-Key` | Monthly company model usage |
+| `GET /api/v1/admin/status` | `X-Admin-Key` | Protected process/company overview |
+| `GET /api/v1/{company}/admin/status` | `X-Admin-Key` | Protected detailed company status |
+| `GET /api/v1/{company}/admin/search-events` | `X-Admin-Key` | Recent privacy-safe timelines |
+| `POST /api/v1/gainr/search-suggestions` | `X-API-Key` | Gainr autocomplete |
+| `POST /api/v1/gainr/filter-data` | `X-API-Key` | Gainr filter choices |
+| `POST /api/v1/gainr/filter-result` | `X-API-Key`; optional trusted `X-User-ID` | Gainr cards and page pagination |
+| `GET /api/v1/gainr/recent-search` | `X-API-Key`; trusted `X-User-ID` | Gainr user's recent searches |
+
+Interactive OpenAPI documentation is available from the running FastAPI
+service at `/docs`; the machine-readable schema is `/openapi.json`. Disable or
+protect those routes at the reverse proxy if the deployment policy requires it.
 
 ## 16. Add another company
 
