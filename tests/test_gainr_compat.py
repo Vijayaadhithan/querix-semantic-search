@@ -242,6 +242,67 @@ def test_deterministic_result_uses_full_catalog_pagination(tmp_path):
     assert response["search_meta"]["total_results"] == 41
 
 
+def test_public_filter_result_matches_gainr_response_envelope(tmp_path):
+    adapter, _, _ = service(
+        tmp_path,
+        execution_path="deterministic_filter",
+        emit_search_meta=False,
+        image_path="https://gainr.in/uploads/post/",
+    )
+    request = GainrFilterResultRequest.model_validate(
+        {"searchTerm": "Bike", "filter": {}, "page": 1}
+    )
+
+    response = adapter.filter_results(request)
+
+    assert list(response) == [
+        "status",
+        "message",
+        "data",
+        "current_page",
+        "last_page",
+        "image_path",
+    ]
+    assert response["image_path"] == "https://gainr.in/uploads/post/"
+    assert "search_meta" not in response
+
+
+def test_card_emits_minimal_numeric_attribute_contract(tmp_path):
+    adapter, _, _ = service(tmp_path)
+
+    card = adapter._card(
+        {
+            "id": "235255",
+            "user_id": "297587",
+            "service_ad_count": "1",
+            "city_id": "456",
+            "locality_id": "167889",
+            "__city_name": "Mumbai",
+            "__locality_name": "City",
+            "__ads_attributes": [
+                {
+                    "id": "999",
+                    "ads_id": "235255",
+                    "attribute_id": "959",
+                    "value": "12121",
+                    "created_at": "ignored",
+                }
+            ],
+        }
+    )
+
+    assert card["service_ad_count"] == 1
+    assert card["ads_attributes"] == [
+        {
+            "ads_id": 235255,
+            "attribute_id": 959,
+            "value": 12121,
+        }
+    ]
+    assert card["city"] == {"id": 456, "city": "Mumbai"}
+    assert card["locality"] == {"id": 167889, "area": "City"}
+
+
 def test_fee_range_keys_can_be_changed_per_gainr_config(tmp_path):
     adapter, _, _ = service(
         tmp_path,
@@ -291,3 +352,37 @@ def test_recent_searches_are_isolated_by_user(tmp_path):
         for item in adapter.recent_searches("user-b")["data"]
     ] == ["camera"]
     assert adapter.recent_searches(None)["data"] == []
+
+
+def test_recent_search_response_matches_gainr_contract(tmp_path, monkeypatch):
+    adapter, _, _ = service(tmp_path)
+    monkeypatch.setattr("gainr_compat.time.time", lambda: 3951.953)
+    expected = [
+        ("bike", 0),
+        ("AA5160", 1),
+        ("bike cargo rider", 0),
+        ("CB7873", 1),
+        ("Mumbai", 0),
+        ("car", 0),
+        ("Editor", 0),
+        ("AY2381", 1),
+        ("CB6514", 1),
+        ("CA3614", 1),
+    ]
+    for value, _ in reversed(expected):
+        adapter.remember_search("user-a", value)
+
+    response = adapter.recent_searches("user-a")
+
+    assert list(response) == ["status", "data"]
+    assert response["status"] is True
+    assert [
+        (item["value"], item["is_prosper"])
+        for item in response["data"]
+    ] == expected
+    assert all(
+        list(item) == ["id", "value", "is_prosper"]
+        for item in response["data"]
+    )
+    assert all(isinstance(item["id"], int) for item in response["data"])
+    assert len({item["id"] for item in response["data"]}) == 10

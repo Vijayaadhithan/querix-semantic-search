@@ -704,10 +704,19 @@ curl http://127.0.0.1:8000/api/v1/gainr/recent-search \
   -H 'X-User-ID: local-test-user'
 ```
 
+The recent-search response is exactly `status` plus up to ten newest-first
+items containing `id`, `value`, and `is_prosper`. Successful first-page
+`filter-result` requests record the search. Repeated values are moved to the
+front, and Prosper IDs such as `AA5160` use `is_prosper: 1`.
+
 The `filter-result` response keeps Gainr's `status`, `message`, `data`,
-`current_page`, and `last_page` fields. `search_meta` additionally reports the
-chosen route, automatic filters, explicit filters, effective filters, ignored
-automatic filters, result-window status, and usage.
+`current_page`, `last_page`, and `image_path` fields and returns 20 cards per
+page. Internal route, model, filter-resolution, result-window, and usage
+details remain in server logs instead of changing the frontend payload.
+
+The frontend implements infinite scrolling by resending the same search term
+and filters with `page` incremented to `2`, `3`, and so on. It stops when
+`current_page` equals `last_page`.
 
 Rules:
 

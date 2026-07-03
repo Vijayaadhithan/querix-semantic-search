@@ -189,32 +189,24 @@ class GainrDatabaseRepository:
 
     def suggestions(self, term: str, limit: int) -> list[str]:
         prefix = f"{term}%"
-        contains = f"%{term}%"
         query = f"""
-            SELECT value
-            FROM (
-                SELECT DISTINCT title AS value
-                FROM {self.search_table}
-                WHERE title IS NOT NULL AND TRIM(title) <> ''
-                  AND title LIKE %s
-                UNION
-                SELECT DISTINCT subcategory_name AS value
-                FROM {self.search_table}
-                WHERE subcategory_name IS NOT NULL
-                  AND TRIM(subcategory_name) <> ''
-                  AND subcategory_name LIKE %s
-            ) AS suggestions
+            SELECT DISTINCT name AS value
+            FROM {quote_mysql_identifier('sub_categories')}
+            WHERE name IS NOT NULL
+              AND TRIM(name) <> ''
+              AND name LIKE %s
+              AND status = 1
+              AND (deleted_at IS NULL OR TRIM(deleted_at) = '')
             ORDER BY
-                CASE WHEN value LIKE %s THEN 0 ELSE 1 END,
-                CHAR_LENGTH(value),
-                value
+                CASE WHEN LOWER(name) = LOWER(%s) THEN 0 ELSE 1 END,
+                name
             LIMIT %s
         """
         with self.connection() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(
                     query,
-                    (contains, contains, prefix, limit),
+                    (prefix, term, limit),
                 )
                 return [
                     str(row["value"])
@@ -241,13 +233,15 @@ class GainrDatabaseRepository:
                 ]
                 cursor.execute(
                     f"""
-                    SELECT DISTINCT locality_id, locality_name
-                    FROM {self.search_table}
+                    SELECT DISTINCT id AS locality_id,
+                                    area AS locality_name
+                    FROM {quote_mysql_identifier('locations')}
                     WHERE city_id = %s
-                      AND locality_id IS NOT NULL
-                      AND locality_name IS NOT NULL
-                      AND TRIM(locality_name) <> ''
-                    ORDER BY locality_name
+                      AND id IS NOT NULL
+                      AND area IS NOT NULL
+                      AND TRIM(area) <> ''
+                      AND (deleted_at IS NULL OR TRIM(deleted_at) = '')
+                    ORDER BY area
                     """,
                     (city_id,),
                 )
@@ -479,31 +473,69 @@ class GainrDatabaseRepository:
         if not product_ids:
             return
         placeholders = ", ".join("%s" for _ in product_ids)
+        attributes = []
+        service_counts = []
         try:
             with self.connection() as connection:
                 with connection.cursor() as cursor:
                     cursor.execute(
                         f"""
-                        SELECT *
+                        SELECT ads_id, attribute_id, value
                         FROM {quote_mysql_identifier('ads_attributes')}
                         WHERE ads_id IN ({placeholders})
                           AND (deleted_at IS NULL OR TRIM(deleted_at) = '')
+                        ORDER BY id
                         """,
                         product_ids,
                     )
                     attributes = cursor.fetchall()
+                    user_ids = _unique(
+                        [
+                            row.get("user_id")
+                            for row in rows
+                            if row.get("user_id") not in (None, "")
+                        ]
+                    )
+                    if user_ids:
+                        user_placeholders = ", ".join(
+                            "%s" for _ in user_ids
+                        )
+                        cursor.execute(
+                            f"""
+                            SELECT user_id, COUNT(*) AS service_ad_count
+                            FROM {self.result_table}
+                            WHERE user_id IN ({user_placeholders})
+                              AND category_type = 2
+                              AND status = 1
+                              AND (
+                                  deleted_at IS NULL
+                                  OR TRIM(deleted_at) = ''
+                              )
+                            GROUP BY user_id
+                            """,
+                            user_ids,
+                        )
+                        service_counts = cursor.fetchall()
         except Exception:
-            attributes = []
+            pass
         by_product: dict[str, list[dict]] = {}
         for attribute in attributes:
             by_product.setdefault(
                 str(attribute.get("ads_id")),
                 [],
             ).append(dict(attribute))
+        counts_by_user = {
+            str(item.get("user_id")): item.get("service_ad_count", 0)
+            for item in service_counts
+        }
         for row in rows:
             row["__ads_attributes"] = by_product.get(
                 str(row.get(self.config.result_id_column)),
                 [],
+            )
+            row["service_ad_count"] = counts_by_user.get(
+                str(row.get("user_id")),
+                0,
             )
 
 
@@ -814,6 +846,7 @@ class GainrCompatibilityService:
             "data": cards,
             "current_page": request.page,
             "last_page": max(1, math.ceil(total / page_size)),
+            "image_path": self.profile.compatibility.image_path,
         }
         if self.profile.compatibility.emit_search_meta:
             response["search_meta"] = {
@@ -892,9 +925,19 @@ class GainrCompatibilityService:
         locality_id = card.get("locality_id")
         city_name = row.get("__city_name")
         locality_name = row.get("__locality_name")
+        attributes = [
+            {
+                "ads_id": self._integer(attribute.get("ads_id")),
+                "attribute_id": self._integer(
+                    attribute.get("attribute_id")
+                ),
+                "value": self._integer(attribute.get("value")),
+            }
+            for attribute in row.get("__ads_attributes", [])
+        ]
         card.update(
             {
-                "ads_attributes": row.get("__ads_attributes", []),
+                "ads_attributes": attributes,
                 "city": (
                     {"id": city_id, "city": city_name}
                     if city_id is not None and city_name
@@ -941,10 +984,18 @@ class GainrCompatibilityService:
             for item in items
             if str(item.get("value", "")).casefold() != value.casefold()
         ]
+        item_id = int(time.time() * 1000)
+        existing_ids = {
+            int(item["id"])
+            for item in items
+            if str(item.get("id", "")).isdigit()
+        }
+        while item_id in existing_ids:
+            item_id += 1
         items.insert(
             0,
             {
-                "id": int(time.time() * 1000),
+                "id": item_id,
                 "value": value,
                 "is_prosper": int(
                     bool(re.fullmatch(r"[A-Za-z]{2}\d+", value))

@@ -331,6 +331,21 @@ curl -X POST http://127.0.0.1:8000/api/v1/gainr/filter-result \
   }'
 ```
 
+The Gainr compatibility endpoints preserve the existing frontend contracts:
+
+- `search-suggestions` returns `status` plus eight active subcategory values;
+- `filter-data` returns the fixed filter groups and all active localities for
+  the selected city;
+- `filter-result` returns `status`, `message`, `data`, `current_page`,
+  `last_page`, and `image_path`, using 20 cards per page.
+
+Internal route, model, and usage details remain in server logs and are not
+added to the Gainr response payload.
+
+For infinite scrolling, keep the same `searchTerm` and `filter` object and
+increment `page` from `1` to `2`, `3`, and so on. Stop requesting pages when
+`current_page` equals `last_page`.
+
 Recent searches for the same authenticated Gainr user:
 
 ```bash
@@ -338,6 +353,23 @@ curl http://127.0.0.1:8000/api/v1/gainr/recent-search \
   -H 'X-API-Key: <GAINR_API_KEY>' \
   -H 'X-User-ID: <GAINR_USER_ID>'
 ```
+
+Response:
+
+```json
+{
+  "status": true,
+  "data": [
+    {"id": 3951953, "value": "bike", "is_prosper": 0},
+    {"id": 3950986, "value": "AA5160", "is_prosper": 1}
+  ]
+}
+```
+
+Successful first-page `filter-result` searches are recorded newest-first.
+Repeated values move to the front instead of creating duplicates. The list is
+limited to ten entries, and values shaped like a Gainr Prosper ID (for example,
+`AA5160`) use `is_prosper: 1`.
 
 `X-User-ID` is required for user-specific recent searches. If it is absent,
 the endpoint safely returns an empty list rather than sharing searches between

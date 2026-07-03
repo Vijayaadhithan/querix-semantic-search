@@ -113,4 +113,7 @@ compatibility:
   # ads.is_rent_negotiable values 0 and 1 respectively.
   fixed_fee_id: 1
   negotiable_fee_id: 0
-  emit_search_meta: true
+  # Keep internal routing and usage detail in server logs, not in Gainr's
+  # legacy frontend response contract.
+  emit_search_meta: false
+  image_path: https://gainr.in/uploads/post/

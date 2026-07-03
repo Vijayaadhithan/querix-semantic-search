@@ -70,6 +70,7 @@ class TenantCompatibilityConfig:
     fixed_fee_id: int = 1
     negotiable_fee_id: int = 0
     emit_search_meta: bool = True
+    image_path: str = ""
 
     def __post_init__(self) -> None:
         if self.adapter not in {"", "gainr_legacy"}:
@@ -96,6 +97,8 @@ class TenantCompatibilityConfig:
             raise ValueError("Compatibility fee field names must be different")
         if self.fixed_fee_id == self.negotiable_fee_id:
             raise ValueError("Fixed and negotiable fee IDs must be different")
+        if self.image_path and not self.image_path.endswith("/"):
+            raise ValueError("Compatibility image_path must end with '/'")
 
 
 @dataclass(frozen=True)
@@ -498,6 +501,7 @@ def load_tenant_profile(path: Path) -> TenantProfile:
         emit_search_meta=bool(
             compatibility.get("emit_search_meta", True)
         ),
+        image_path=str(compatibility.get("image_path", "")).strip(),
     )
 
     return TenantProfile(
