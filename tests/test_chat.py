@@ -112,6 +112,7 @@ def test_unfiltered_vector_query_skips_redundant_tenant_metadata_where():
         resolved_filters={"categorical": {}},
         company_id="gainr",
         embedding_provider=FakeEmbeddingProvider(),
+        post_filter_metadata=True,
     )
 
     assert "where" not in collection.query_options
@@ -138,6 +139,26 @@ def test_filtered_vector_query_uses_only_real_search_constraints():
     }
 
 
+def test_filtered_vector_query_keeps_database_filter_by_default():
+    metadata = {
+        "source_file": "mysql:other.ads_search_ready",
+        "company_id": "other",
+        "city_id": 456,
+    }
+    collection = CapturingVectorCollection(metadata, count=10_000)
+
+    vector_search(
+        "camera",
+        collection,
+        source_name="mysql:other.ads_search_ready",
+        resolved_filters={"categorical": {"city_id": 456}},
+        company_id="other",
+        embedding_provider=FakeEmbeddingProvider(),
+    )
+
+    assert collection.query_options["where"] == {"city_id": 456}
+
+
 def test_filtered_vector_query_uses_bounded_post_filter_window():
     metadata = {
         "source_file": "mysql:gainr.ads_search_ready",
@@ -157,6 +178,7 @@ def test_filtered_vector_query_uses_bounded_post_filter_window():
         },
         company_id="gainr",
         embedding_provider=FakeEmbeddingProvider(),
+        post_filter_metadata=True,
     )
 
     assert "where" not in collection.query_options

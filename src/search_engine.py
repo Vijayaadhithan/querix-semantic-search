@@ -94,6 +94,7 @@ class ProductSearchEngine:
         close_bm25_index: bool = False,
         planner_enabled: bool = True,
         planner_prompt_context: str = "",
+        vector_post_filter_metadata: bool = False,
     ):
         self.collection = collection or load_collection()
         self._owns_bm25_index = bm25_index is None or close_bm25_index
@@ -106,6 +107,7 @@ class ProductSearchEngine:
         self.company_id = company_id
         self.planner_enabled = planner_enabled
         self.planner_prompt_context = planner_prompt_context
+        self.vector_post_filter_metadata = vector_post_filter_metadata
         self.mysql_config = mysql_config
         self.database_pool = create_database_pool(mysql_config)
         self.source_name = database_source_name(mysql_config)
@@ -605,6 +607,7 @@ class ProductSearchEngine:
                 resolved_filters=resolved_filters,
                 embedding_provider=self.embedding_provider,
                 company_id=self.company_id,
+                post_filter_metadata=self.vector_post_filter_metadata,
             )
             return results, time.perf_counter() - started
 

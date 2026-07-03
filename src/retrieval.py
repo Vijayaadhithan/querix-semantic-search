@@ -107,6 +107,7 @@ def vector_search(
     resolved_filters=None,
     embedding_provider=None,
     company_id=None,
+    post_filter_metadata=False,
 ):
     if collection.count() <= 0:
         return []
@@ -127,7 +128,7 @@ def vector_search(
             resolved_filters,
             company_id,
         )
-        if where_filter is not None:
+        if where_filter is not None and post_filter_metadata:
             # Chroma's metadata-filtered query path can take many seconds on
             # large collections. Tenant collections are already isolated, so
             # retrieve a bounded HNSW window and enforce the exact same
@@ -138,6 +139,8 @@ def vector_search(
                 VECTOR_POST_FILTER_MAX_CANDIDATES,
                 collection.count(),
             )
+        elif where_filter is not None:
+            query_options["where"] = where_filter
     try:
         results = collection.query(**query_options)
     except TypeError as exc:

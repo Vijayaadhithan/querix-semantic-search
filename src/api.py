@@ -1030,6 +1030,9 @@ class TenantServicePool:
                 close_bm25_index=True,
                 planner_enabled=profile.planner_enabled,
                 planner_prompt_context=profile.planner_prompt_context,
+                vector_post_filter_metadata=(
+                    profile.compatibility.adapter == "gainr_legacy"
+                ),
             )
         else:
             engine = self.engine_factory(
