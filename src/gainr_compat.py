@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import logging
 import math
 import re
 import threading
@@ -26,6 +27,8 @@ from mysql_store import (
 from tenant_config import TenantProfile
 
 
+logger = logging.getLogger(__name__)
+
 DURATION_ORDER = {
     value: index
     for index, value in enumerate(
@@ -48,6 +51,84 @@ GAINR_CARD_INTEGER_FIELDS = (
     "service_ad_count",
     "boost_ad_count",
     "is_aadhar_gst_verified_count",
+)
+GAINR_USER_FIELDS = (
+    "id",
+    "prosper_id",
+    "name",
+    "photo",
+    "email",
+    "available_credit",
+    "provider",
+    "provider_id",
+    "phone",
+    "state_id",
+    "city_id",
+    "gender",
+    "location",
+    "availability",
+    "role",
+    "email_verified_at",
+    "mobile_verified_at",
+    "privacy_enabled",
+    "fwd_otp",
+    "fwd_is_verified",
+    "valid_till",
+    "is_verified",
+    "gst",
+    "aadhar",
+    "platform",
+    "fcm_token",
+    "device_platform",
+    "created_at",
+    "updated_at",
+    "status",
+    "prosper_page_view_count",
+    "edit_photo",
+    "profile_communication",
+    "contact_view_count",
+    "reg_geo_city",
+    "reg_geo_latitude",
+    "reg_geo_longitude",
+    "reg_device_details",
+    "last_geo_city",
+    "last_geo_latitude",
+    "last_geo_longitude",
+    "last_device_details",
+    "user_type",
+    "deleted_at",
+    "is_aadhaar_gst_verified",
+    "upi_id",
+    "survey_language_id",
+    "is_survey_personal_completed",
+    "delete_user_remark",
+    "trip_flag",
+    "contact_view_plan_id",
+    "contact_views_count",
+    "free_contact_start_date",
+    "contact_plan_start_date",
+)
+GAINR_USER_INTEGER_FIELDS = (
+    "id",
+    "phone",
+    "state_id",
+    "city_id",
+    "gender",
+    "privacy_enabled",
+    "fwd_is_verified",
+    "is_verified",
+    "platform",
+    "device_platform",
+    "status",
+    "prosper_page_view_count",
+    "contact_view_count",
+    "user_type",
+    "is_aadhaar_gst_verified",
+    "survey_language_id",
+    "is_survey_personal_completed",
+    "trip_flag",
+    "contact_view_plan_id",
+    "contact_views_count",
 )
 
 
@@ -173,6 +254,10 @@ class GainrDatabaseRepository:
         self.result_table = quote_mysql_identifier(
             self.config.result_table
         )
+        self.users_table = quote_mysql_identifier(
+            self.profile.compatibility.users_table
+        )
+        self._users_table_available: bool | None = None
 
     @contextmanager
     def connection(self):
@@ -475,6 +560,14 @@ class GainrDatabaseRepository:
         placeholders = ", ".join("%s" for _ in product_ids)
         attributes = []
         service_counts = []
+        users = []
+        user_ids = _unique(
+            [
+                row.get("user_id")
+                for row in rows
+                if row.get("user_id") not in (None, "")
+            ]
+        )
         try:
             with self.connection() as connection:
                 with connection.cursor() as cursor:
@@ -489,13 +582,6 @@ class GainrDatabaseRepository:
                         product_ids,
                     )
                     attributes = cursor.fetchall()
-                    user_ids = _unique(
-                        [
-                            row.get("user_id")
-                            for row in rows
-                            if row.get("user_id") not in (None, "")
-                        ]
-                    )
                     if user_ids:
                         user_placeholders = ", ".join(
                             "%s" for _ in user_ids
@@ -517,7 +603,37 @@ class GainrDatabaseRepository:
                         )
                         service_counts = cursor.fetchall()
         except Exception:
-            pass
+            logger.exception("Gainr ad relation hydration failed")
+        if user_ids and self._users_table_available is not False:
+            user_placeholders = ", ".join("%s" for _ in user_ids)
+            selected_fields = ", ".join(
+                quote_mysql_identifier(field)
+                for field in GAINR_USER_FIELDS
+            )
+            try:
+                with self.connection() as connection:
+                    with connection.cursor() as cursor:
+                        cursor.execute(
+                            f"""
+                            SELECT {selected_fields}
+                            FROM {self.users_table}
+                            WHERE id IN ({user_placeholders})
+                            """,
+                            user_ids,
+                        )
+                        users = list(cursor.fetchall())
+                self._users_table_available = True
+            except Exception as exc:
+                if exc.args and exc.args[0] == 1146:
+                    self._users_table_available = False
+                    logger.warning(
+                        "Gainr users table %s is missing; user fields "
+                        "will remain null until it is imported and the "
+                        "API is restarted",
+                        self.profile.compatibility.users_table,
+                    )
+                else:
+                    logger.exception("Gainr user hydration failed")
         by_product: dict[str, list[dict]] = {}
         for attribute in attributes:
             by_product.setdefault(
@@ -528,6 +644,11 @@ class GainrDatabaseRepository:
             str(item.get("user_id")): item.get("service_ad_count", 0)
             for item in service_counts
         }
+        users_by_id = {
+            str(item.get("id")): dict(item)
+            for item in users
+            if item.get("id") not in (None, "")
+        }
         for row in rows:
             row["__ads_attributes"] = by_product.get(
                 str(row.get(self.config.result_id_column)),
@@ -537,6 +658,7 @@ class GainrDatabaseRepository:
                 str(row.get("user_id")),
                 0,
             )
+            row["__user"] = users_by_id.get(str(row.get("user_id")))
 
 
 class GainrCompatibilityService:
@@ -894,6 +1016,24 @@ class GainrCompatibilityService:
             return value
         return int(number) if number.is_integer() else number
 
+    def _user_payload(
+        self,
+        raw_user: dict[str, Any] | None,
+    ) -> dict[str, Any] | None:
+        if not raw_user:
+            return None
+        user = {}
+        for field in GAINR_USER_FIELDS:
+            value = raw_user.get(field)
+            if isinstance(value, str) and value.strip().upper() == "NULL":
+                value = None
+            if field in GAINR_USER_INTEGER_FIELDS:
+                value = self._integer(value)
+            elif field == "available_credit":
+                value = self._number(value)
+            user[field] = value
+        return user
+
     def _card(self, row: dict[str, Any]) -> dict[str, Any]:
         card = {
             field: row.get(field)
@@ -946,6 +1086,26 @@ class GainrCompatibilityService:
             }
             for attribute in row.get("__ads_attributes", [])
         ]
+        verified_user = self._user_payload(row.get("__user"))
+        compact_user = None
+        is_verified = False
+        if verified_user is not None:
+            is_verified = (
+                self._integer(
+                    verified_user.get("is_aadhaar_gst_verified")
+                )
+                == 1
+            )
+            compact_user = {
+                "prosper_id": verified_user.get("prosper_id"),
+                "id": verified_user.get("id"),
+                "is_aadhaar_gst_verified": (
+                    verified_user.get("is_aadhaar_gst_verified")
+                ),
+            }
+            card["is_aadhar_gst_verified_count"] = (
+                1 if is_verified else 0
+            )
         card.update(
             {
                 "ads_attributes": attributes,
@@ -961,12 +1121,11 @@ class GainrCompatibilityService:
                 ),
                 "favorites": None,
                 "ads_likes": None,
-                # The local search snapshot has no users/favourites/boost
-                # tables. Production can hydrate these later without changing
-                # the endpoint contract.
-                "user": None,
+                "user": compact_user,
                 "boost_ad": None,
-                "is_aadhar_gst_verified": None,
+                "is_aadhar_gst_verified": (
+                    verified_user if is_verified else None
+                ),
             }
         )
         return card

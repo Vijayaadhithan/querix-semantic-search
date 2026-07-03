@@ -61,6 +61,7 @@ class TenantPayloadConfig:
 @dataclass(frozen=True)
 class TenantCompatibilityConfig:
     adapter: str = ""
+    users_table: str = "users"
     page_size: int = 20
     suggestions_limit: int = 8
     recent_limit: int = 10
@@ -77,6 +78,8 @@ class TenantCompatibilityConfig:
             raise ValueError(
                 f"Unsupported compatibility adapter {self.adapter!r}"
             )
+        if not self.users_table:
+            raise ValueError("Compatibility users_table must not be empty")
         if self.page_size <= 0 or self.page_size > 100:
             raise ValueError("Compatibility page_size must be between 1 and 100")
         if self.suggestions_limit <= 0 or self.suggestions_limit > 50:
@@ -477,6 +480,9 @@ def load_tenant_profile(path: Path) -> TenantProfile:
     compatibility = dict(raw.get("compatibility", {}))
     compatibility_config = TenantCompatibilityConfig(
         adapter=str(compatibility.get("adapter", "")).strip().casefold(),
+        users_table=str(
+            compatibility.get("users_table", "users")
+        ).strip(),
         page_size=int(compatibility.get("page_size", 20)),
         suggestions_limit=int(
             compatibility.get("suggestions_limit", 8)

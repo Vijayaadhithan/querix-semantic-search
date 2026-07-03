@@ -725,6 +725,12 @@ The `filter-result` response keeps Gainr's `status`, `message`, `data`,
 page. Internal route, model, filter-resolution, result-window, and usage
 details remain in server logs instead of changing the frontend payload.
 
+Gainr cards preserve the source `ads.status` value without adding an API-side
+status restriction. Each card's compact `user` object is hydrated from the
+configured compatibility `users_table`. Verified users also populate the legacy
+`is_aadhar_gst_verified` object; ordinary users keep that field `null`.
+Passwords and remember tokens are never selected.
+
 The frontend implements infinite scrolling by resending the same search term
 and filters with `page` incremented to `2`, `3`, and so on. It stops when
 `current_page` equals `last_page`.

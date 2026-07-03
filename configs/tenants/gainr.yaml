@@ -101,6 +101,7 @@ rate_limit:
 # generic configurable /search contract.
 compatibility:
   adapter: gainr_legacy
+  users_table: users
   page_size: 20
   suggestions_limit: 8
   recent_limit: 10

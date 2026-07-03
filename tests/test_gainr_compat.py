@@ -8,6 +8,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from api import ProductSearchService
 from gainr_compat import (
     GainrCompatibilityService,
+    GainrDatabaseRepository,
     GainrFilterResultRequest,
 )
 from mysql_store import MySQLRuntimeConfig
@@ -304,6 +305,74 @@ def test_card_emits_minimal_numeric_attribute_contract(tmp_path):
     ]
     assert card["city"] == {"id": 456, "city": "Mumbai"}
     assert card["locality"] == {"id": 167889, "area": "City"}
+
+
+def test_card_hydrates_compact_and_verified_user_contract(tmp_path):
+    adapter, _, _ = service(tmp_path)
+
+    card = adapter._card(
+        {
+            "id": "235570",
+            "user_id": "297952",
+            "is_aadhar_gst_verified_count": "0",
+            "__user": {
+                "id": "297952",
+                "prosper_id": "BT6310",
+                "name": "Verified User",
+                "available_credit": "0.00",
+                "city_id": "456",
+                "status": "1",
+                "is_aadhaar_gst_verified": "1",
+            },
+        }
+    )
+
+    assert card["user"] == {
+        "prosper_id": "BT6310",
+        "id": 297952,
+        "is_aadhaar_gst_verified": 1,
+    }
+    assert card["is_aadhar_gst_verified_count"] == 1
+    assert card["is_aadhar_gst_verified"]["id"] == 297952
+    assert card["is_aadhar_gst_verified"]["available_credit"] == 0
+    assert card["is_aadhar_gst_verified"]["name"] == "Verified User"
+
+
+def test_card_keeps_full_verification_null_for_ordinary_user(tmp_path):
+    adapter, _, _ = service(tmp_path)
+
+    card = adapter._card(
+        {
+            "id": "15145",
+            "user_id": "4643",
+            "__user": {
+                "id": "4643",
+                "prosper_id": "AA6934",
+                "is_aadhaar_gst_verified": "0",
+            },
+        }
+    )
+
+    assert card["user"] == {
+        "prosper_id": "AA6934",
+        "id": 4643,
+        "is_aadhaar_gst_verified": 0,
+    }
+    assert card["is_aadhar_gst_verified_count"] == 0
+    assert card["is_aadhar_gst_verified"] is None
+
+
+def test_gainr_repository_does_not_filter_ad_status(tmp_path):
+    repository = GainrDatabaseRepository(profile(tmp_path))
+
+    where_clause, params = repository._where_clause(
+        {"categorical": {}},
+        GainrFilterResultRequest().filter,
+        allowed_ad_types={"1"},
+    )
+
+    assert "a.status" not in where_clause
+    assert params == ["1"]
 
 
 def test_fee_range_keys_can_be_changed_per_gainr_config(tmp_path):
