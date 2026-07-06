@@ -672,3 +672,136 @@ def test_semantic_vector_and_bm25_retrieval_start_in_parallel(
     assert result["vector_results"] == []
     assert result["bm25_results"] == []
     index.close()
+
+
+def test_tenant_reranker_policy_prunes_weak_semantic_results(tmp_path):
+    index = build_index(tmp_path / "relevance-floor.sqlite3")
+
+    class ScoredRanker:
+        model_label = "test-reranker"
+        last_provider = "jina"
+        last_attempts = []
+
+        def compute_score(self, _pairs, **_kwargs):
+            return [1.0, 0.29, 0.06]
+
+    engine = ProductSearchEngine(
+        collection=FakeCollection(),
+        bm25_index=index,
+        ranker=ScoredRanker(),
+        reranker_relative_score_floor=0.30,
+        reranker_min_score_by_provider={"jina": 0.05},
+    )
+    candidates = [
+        {
+            "id": str(number),
+            "text": f"candidate {number}",
+            "metadata": {"content_title": f"Candidate {number}"},
+        }
+        for number in range(3)
+    ]
+
+    result = engine.rank("test query", candidates, top_k=3)
+
+    assert [item["id"] for item in result["results"]] == ["0"]
+    index.close()
+
+
+def test_tenant_can_disable_unscored_semantic_tail(tmp_path, monkeypatch):
+    index = build_index(tmp_path / "no-related-tail.sqlite3")
+    engine = ProductSearchEngine(
+        collection=FakeCollection(),
+        bm25_index=index,
+        semantic_related_tail_enabled=False,
+    )
+    candidate = {
+        "id": "doc-1",
+        "text": "relevant bike",
+        "metadata": {
+            "source_type": "mysql",
+            "source_table": engine.search_table,
+            engine.search_id_column: 101,
+        },
+    }
+    planned = {
+        "query_plan": {
+            "semantic_query": "red bike",
+            "keyword_query": "red bike",
+            "target_ad_type": "offer",
+            "inferred_categories": {},
+            "execution_path": "semantic",
+            "sort_order": None,
+        },
+        "resolved_filters": {"categorical": {}},
+        "unresolved_filters": {},
+    }
+    monkeypatch.setattr(
+        engine,
+        "retrieve",
+        lambda *_args, **_kwargs: {
+            "vector_results": [candidate],
+            "bm25_results": [],
+            "candidates": [candidate],
+            "vector_seconds": 0.0,
+            "bm25_seconds": 0.0,
+            "embedding_model_metrics": {},
+        },
+    )
+    monkeypatch.setattr(
+        engine,
+        "rank",
+        lambda *_args, **_kwargs: {
+            "results": [candidate],
+            "load_seconds": 0.0,
+            "seconds": 0.0,
+            "provider": "test",
+            "attempts": [],
+        },
+    )
+    monkeypatch.setattr(
+        search_engine,
+        "related_tail_product_ids",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("Semantic related tail must be disabled.")
+        ),
+    )
+    monkeypatch.setattr(
+        engine,
+        "_fetch_products",
+        lambda ids: [{"id": product_id} for product_id in ids],
+    )
+
+    result = engine.search(
+        "red bike",
+        limit=20,
+        planned_result=planned,
+    )
+
+    assert result["primary_product_ids"] == [101]
+    assert result["related_product_ids"] == []
+    assert result["product_ids"] == [101]
+    index.close()
+
+
+def test_semantic_tail_can_require_an_explicit_category(tmp_path):
+    index = build_index(tmp_path / "conditional-related-tail.sqlite3")
+    engine = ProductSearchEngine(
+        collection=FakeCollection(),
+        bm25_index=index,
+        semantic_related_tail_enabled=True,
+        semantic_related_tail_requires_explicit_category=True,
+    )
+
+    assert not engine._semantic_related_tail_allowed(
+        {"categorical": {"city_name": "Chennai"}}
+    )
+    assert not engine._semantic_related_tail_allowed(
+        {"categorical": {}, "max_rental_fee": 1000}
+    )
+    assert engine._semantic_related_tail_allowed(
+        {"categorical": {"main_category_name": "Automobiles"}}
+    )
+    assert engine._semantic_related_tail_allowed(
+        {"categorical": {"subcategory_name": "Bike"}}
+    )
+    index.close()

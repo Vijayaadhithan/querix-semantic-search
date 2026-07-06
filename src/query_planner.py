@@ -75,6 +75,25 @@ GENERIC_CATEGORY_HINT_TOKENS = {
     "thing",
     "vehicle",
 }
+CATEGORY_ATTRIBUTE_PREFIXES = {
+    "beige",
+    "black",
+    "blue",
+    "brown",
+    "electric",
+    "gold",
+    "gray",
+    "green",
+    "grey",
+    "orange",
+    "pink",
+    "portable",
+    "purple",
+    "red",
+    "silver",
+    "white",
+    "yellow",
+}
 FAST_PATH_FILLER_TOKENS = {
     "a",
     "ad",
@@ -347,6 +366,14 @@ def category_term_pattern(value: str) -> str:
 def is_explicit_category_request(query: str, value: str) -> bool:
     normalized_query = normalize_filter_value(query)
     term = category_term_pattern(value)
+    attribute = (
+        "(?:"
+        + "|".join(
+            re.escape(prefix)
+            for prefix in sorted(CATEGORY_ATTRIBUTE_PREFIXES)
+        )
+        + ")"
+    )
     article = r"(?:a|an|the|some)?\s*"
     request = (
         r"(?:need|want|require|rent|hire|find|show\s+me|"
@@ -357,6 +384,8 @@ def is_explicit_category_request(query: str, value: str) -> bool:
         rf"\b{request}\s+{article}{term}(?!\w)",
         rf"\b(?:wanted|request)\s+ads?\s+for\s+{article}{term}(?!\w)",
         rf"\b(?:rental|hire)\s+{term}(?!\w)",
+        rf"(?<!\w){attribute}\s+{term}(?!\w)",
+        rf"(?<!\w){term}\s+(?:with|without|having|equipped\s+with)\b",
         rf"(?<!\w){term}\s+(?:rent|hire|for\s+(?:rent|hire)|rental|"
         rf"in|near|at|under|below|within|between|per\s+hour|"
         rf"per\s+day|per\s+week|per\s+month)\b",
@@ -364,6 +393,26 @@ def is_explicit_category_request(query: str, value: str) -> bool:
         rf"(?<!\w){term}\s+\d+(?:\.\d+)?\b",
     )
     return any(re.search(pattern, normalized_query) for pattern in patterns)
+
+
+def is_category_attribute_usage(
+    query: str,
+    value: str,
+    value_index: dict,
+) -> bool:
+    normalized_value = normalize_filter_value(value)
+    if normalized_value not in CATEGORY_ATTRIBUTE_PREFIXES:
+        return False
+    normalized_query = normalize_filter_value(query)
+    for key in ("main_category", "subcategory"):
+        for category in value_index.get(key, {}).values():
+            term = category_term_pattern(category)
+            if re.search(
+                rf"(?<!\w){re.escape(normalized_value)}\s+{term}(?!\w)",
+                normalized_query,
+            ):
+                return True
+    return False
 
 
 def parse_query_plan(content: str, original_query: str) -> dict:
@@ -929,6 +978,27 @@ def expand_functional_keyword_query(query: str, keyword_query: str) -> str:
     return keyword_query
 
 
+def infer_functional_subcategory(query: str, values: dict) -> str | None:
+    normalized = normalize_filter_value(query)
+    is_rough_terrain = bool(
+        re.search(r"\brough\s+terrain\b", normalized)
+        or re.search(r"\boff[\s-]?road\b", normalized)
+    )
+    has_vehicle_context = bool(
+        re.search(
+            r"\b(?:vehicle|driv(?:e|ing)|recreational)\b",
+            normalized,
+        )
+    )
+    if not (is_rough_terrain and has_vehicle_context):
+        return None
+    for preferred in ("atv bike", "quad bike", "dirt bike"):
+        actual = values.get(preferred)
+        if actual is not None:
+            return actual
+    return None
+
+
 def enrich_query_plan(query: str, plan: dict, value_index: dict) -> dict:
     plan["keyword_query"] = expand_functional_keyword_query(
         query,
@@ -951,6 +1021,17 @@ def enrich_query_plan(query: str, plan: dict, value_index: dict) -> dict:
         )
         if exact_value is None:
             exact_value = find_catalog_alias(query, key, value_index[key])
+        if (
+            key in {"state", "city", "locality"}
+            and exact_value is not None
+            and is_category_attribute_usage(
+                query,
+                exact_value,
+                value_index,
+            )
+        ):
+            exact_value = None
+            filters[key] = None
         category_is_explicit = (
             key not in inferred_categories
             or exact_value is None
@@ -985,6 +1066,15 @@ def enrich_query_plan(query: str, plan: dict, value_index: dict) -> dict:
 
     if not any(filters.get(key) for key in ("state", "city", "locality")):
         fuzzy_location = find_fuzzy_location(query, value_index)
+        if (
+            fuzzy_location is not None
+            and is_category_attribute_usage(
+                query,
+                fuzzy_location[1],
+                value_index,
+            )
+        ):
+            fuzzy_location = None
         if fuzzy_location is not None:
             key, actual = fuzzy_location
             filters[key] = actual
@@ -1001,9 +1091,15 @@ def enrich_query_plan(query: str, plan: dict, value_index: dict) -> dict:
         filters.get("subcategory") is None
         and inferred_categories.get("subcategory") is None
     ):
-        inferred_categories["subcategory"] = infer_keyword_subcategory(
-            plan["keyword_query"],
-            value_index["subcategory"],
+        inferred_categories["subcategory"] = (
+            infer_functional_subcategory(
+                query,
+                value_index["subcategory"],
+            )
+            or infer_keyword_subcategory(
+                plan["keyword_query"],
+                value_index["subcategory"],
+            )
         )
 
     filters["rental_duration"] = extract_duration_filter(

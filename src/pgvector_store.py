@@ -104,6 +104,25 @@ class PgVectorCollection:
                 )
                 return int(cursor.fetchone()["row_count"])
 
+    def source_counts(self) -> tuple[int, dict[str, int]]:
+        with postgres_connection(self.config, dict_rows=True) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    f"""
+                    SELECT COALESCE(metadata ->> 'source_file', 'unknown')
+                               AS source,
+                           COUNT(*) AS vector_count
+                    FROM {self._qualified()}
+                    GROUP BY source
+                    """
+                )
+                rows = cursor.fetchall()
+        counts = {
+            str(row["source"]): int(row["vector_count"])
+            for row in rows
+        }
+        return sum(counts.values()), counts
+
     def upsert(
         self,
         *,
@@ -161,8 +180,14 @@ class PgVectorCollection:
         ids: list[str] | None = None,
         where: dict[str, Any] | None = None,
         include: list[str] | None = None,
+        limit: int | None = None,
+        offset: int | None = None,
     ) -> dict[str, list]:
         include = include or []
+        if limit is not None and limit <= 0:
+            raise ValueError("get limit must be greater than zero")
+        if offset is not None and offset < 0:
+            raise ValueError("get offset must not be negative")
         conditions = []
         params: list[Any] = []
         if ids is not None:
@@ -186,8 +211,14 @@ class PgVectorCollection:
             with connection.cursor() as cursor:
                 cursor.execute(
                     f"SELECT {', '.join(selected)} FROM {self._qualified()} "
-                    f"{where_clause}",
-                    params,
+                    f"{where_clause} ORDER BY id"
+                    + (" LIMIT %s" if limit is not None else "")
+                    + (" OFFSET %s" if offset is not None else ""),
+                    (
+                        *params,
+                        *((limit,) if limit is not None else ()),
+                        *((offset,) if offset is not None else ()),
+                    ),
                 )
                 rows = cursor.fetchall()
         rows_by_id = {str(row["id"]): row for row in rows}

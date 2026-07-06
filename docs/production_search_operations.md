@@ -534,6 +534,10 @@ swap, so normal refreshes should prefer incremental reconciliation.
 .venv/bin/python scripts/doctor.py --company gainr --strict
 ```
 
+The list operation is read-only and uses a metadata-database aggregate. It does
+not materialize all vector metadata or load the HNSW index, which keeps it safe
+on low-memory production hosts.
+
 The doctor verifies:
 
 - company API key
@@ -754,14 +758,17 @@ The frontend implements infinite scrolling by resending the same search term
 and filters with `page` incremented to `2`, `3`, and so on. It stops when
 `current_page` equals `last_page`.
 
-For semantic `filter-result` searches, Gainr reranks two frontend pages
-(`compatibility.semantic_ranked_window: 40`) and fills the remaining bounded
-pagination window from the structured catalogue tail. Vector retrieval uses
-a bounded unfiltered HNSW window followed by the same metadata checks in
-memory; this avoids Chroma's slow metadata-filtered scan while never returning
-a row that violates the selected filters. Exact repeated query/filter
-combinations use the IDs-only Redis result cache and rehydrate current MySQL
-rows.
+For semantic `filter-result` searches, Gainr reranks at most two frontend pages
+(`compatibility.semantic_ranked_window: 40`). Its tenant retrieval policy then
+removes scores below the configured absolute/relative relevance floor and does
+not add an unscored catalogue tail unless an explicit category or subcategory
+was resolved. When one was resolved, later pages are filled only from that
+same category constraint. Otherwise the result can have fewer than 40 ads.
+Vector retrieval uses a bounded unfiltered HNSW window followed by the same
+metadata checks in memory; this avoids Chroma's slow metadata-filtered scan
+while never returning a row that violates the selected filters. Exact repeated
+query/filter combinations use the IDs-only Redis result cache and rehydrate
+current MySQL rows.
 
 ### 13.7 Protected live admin status
 
@@ -846,7 +853,8 @@ Rules:
 - automatic query filters fill only missing fields;
 - values inside one multi-select use OR, while different filter groups use AND;
 - deterministic catalogue queries use complete page-number pagination;
-- semantic queries use the configured bounded ranked window;
+- semantic queries use the configured bounded ranked window and tenant
+  relevance floor;
 - recent searches are isolated by company and verified Gainr user ID;
 - `type` and `is_rent_negotiable` are present in `ads_search_ready` and in the
   rebuilt Gainr BM25 index;

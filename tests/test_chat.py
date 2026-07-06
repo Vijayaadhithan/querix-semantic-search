@@ -299,6 +299,93 @@ def test_functional_category_word_does_not_become_hard_filter():
     assert enriched["inferred_categories"]["subcategory"] is None
 
 
+def test_descriptive_query_keeps_explicit_category_as_hard_filter():
+    plan = {
+        "semantic_query": "red bike with ABS",
+        "keyword_query": "red bike ABS",
+        "target_ad_type": "offer",
+        "filters": {
+            "main_category": None,
+            "subcategory": None,
+            "state": None,
+            "city": None,
+            "locality": None,
+            "rental_duration": None,
+            "min_rental_fee": None,
+            "max_rental_fee": None,
+        },
+        "inferred_categories": {
+            "main_category": None,
+            "subcategory": None,
+        },
+        "fallback_reason": None,
+    }
+    value_index = {
+        "main_category": {"automobiles": "Automobiles"},
+        "subcategory": {
+            "bike": "Bike",
+            "dirt bike": "Dirt Bike",
+        },
+        "state": {},
+        "city": {},
+        "locality": {"red": "Red"},
+        "rental_duration": {},
+        "_subcategory_main_category": {"bike": "Automobiles"},
+        "_city_state": {},
+        "_locality_location": {
+            "red": {"city": "Sangli", "state": "Maharashtra"}
+        },
+    }
+
+    enriched = enrich_query_plan("red bike with ABS", plan, value_index)
+
+    assert enriched["filters"]["subcategory"] == "Bike"
+    assert enriched["filters"]["main_category"] == "Automobiles"
+    assert enriched["filters"]["state"] is None
+    assert enriched["filters"]["city"] is None
+    assert enriched["filters"]["locality"] is None
+    assert enriched["inferred_categories"]["subcategory"] is None
+
+
+def test_color_prefixed_category_is_an_explicit_hard_filter():
+    plan = {
+        "semantic_query": "red bike",
+        "keyword_query": "red bike",
+        "target_ad_type": "offer",
+        "filters": {
+            "main_category": None,
+            "subcategory": None,
+            "state": None,
+            "city": None,
+            "locality": None,
+            "rental_duration": None,
+            "min_rental_fee": None,
+            "max_rental_fee": None,
+        },
+        "inferred_categories": {
+            "main_category": None,
+            "subcategory": None,
+        },
+        "fallback_reason": None,
+    }
+    value_index = {
+        "main_category": {"automobiles": "Automobiles"},
+        "subcategory": {"bike": "Bike", "dirt bike": "Dirt Bike"},
+        "state": {},
+        "city": {},
+        "locality": {},
+        "rental_duration": {},
+        "_subcategory_main_category": {"bike": "Automobiles"},
+        "_city_state": {},
+        "_locality_location": {},
+    }
+
+    enriched = enrich_query_plan("red bike", plan, value_index)
+
+    assert enriched["filters"]["subcategory"] == "Bike"
+    assert enriched["filters"]["main_category"] == "Automobiles"
+
+
 def test_unique_keyword_concept_becomes_soft_subcategory_hint():
     plan = {
         "semantic_query": "vehicle for rough terrain",
@@ -373,6 +460,7 @@ def test_rough_terrain_query_gets_deterministic_atv_expansion():
         "subcategory": {
             "atv bike": "ATV Bike",
             "quad bike": "Quad Bike",
+            "dirt bike": "Dirt Bike",
         },
         "state": {},
         "city": {},

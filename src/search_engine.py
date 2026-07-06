@@ -62,7 +62,7 @@ from settings import (
 )
 
 LOGGER = logging.getLogger("uvicorn.error")
-RESULT_CACHE_SCHEMA_VERSION = "v5"
+RESULT_CACHE_SCHEMA_VERSION = "v7"
 
 
 def active_filter_names(filters: dict) -> list[str]:
@@ -95,6 +95,10 @@ class ProductSearchEngine:
         planner_enabled: bool = True,
         planner_prompt_context: str = "",
         vector_post_filter_metadata: bool = False,
+        semantic_related_tail_enabled: bool = RELATED_TAIL_ENABLED,
+        semantic_related_tail_requires_explicit_category: bool = False,
+        reranker_relative_score_floor: float = 0.0,
+        reranker_min_score_by_provider: dict[str, float] | None = None,
     ):
         self.collection = collection or load_collection()
         self._owns_bm25_index = bm25_index is None or close_bm25_index
@@ -108,6 +112,19 @@ class ProductSearchEngine:
         self.planner_enabled = planner_enabled
         self.planner_prompt_context = planner_prompt_context
         self.vector_post_filter_metadata = vector_post_filter_metadata
+        self.semantic_related_tail_enabled = semantic_related_tail_enabled
+        self.semantic_related_tail_requires_explicit_category = (
+            semantic_related_tail_requires_explicit_category
+        )
+        self.reranker_relative_score_floor = (
+            reranker_relative_score_floor
+        )
+        self.reranker_min_score_by_provider = {
+            str(provider).casefold(): float(score)
+            for provider, score in (
+                reranker_min_score_by_provider or {}
+            ).items()
+        }
         self.mysql_config = mysql_config
         self.database_pool = create_database_pool(mysql_config)
         self.source_name = database_source_name(mysql_config)
@@ -685,6 +702,17 @@ class ProductSearchEngine:
         self.ranker = load_reranker()
         return time.perf_counter() - started
 
+    def _semantic_related_tail_allowed(self, resolved_filters: dict) -> bool:
+        if not self.semantic_related_tail_enabled:
+            return False
+        if not self.semantic_related_tail_requires_explicit_category:
+            return True
+        categorical = resolved_filters.get("categorical", {})
+        return any(
+            key in categorical
+            for key in ("main_category_name", "subcategory_name")
+        )
+
     def rank(
         self,
         query: str,
@@ -724,13 +752,15 @@ class ProductSearchEngine:
             len(candidates),
             RERANK_TOP_K if top_k is None else top_k,
         )
+        effective_top_k = RERANK_TOP_K if top_k is None else top_k
+
         def run_rerank():
             return rerank(
                 ranking_query,
                 candidates,
                 self.ranker,
-                RERANK_TOP_K if top_k is None else top_k,
-                diversity_top_k=RERANK_TOP_K,
+                effective_top_k,
+                diversity_top_k=effective_top_k,
             )
 
         if self.shared_reranker is not None:
@@ -741,12 +771,38 @@ class ProductSearchEngine:
         elapsed = time.perf_counter() - started
         provider = getattr(self.ranker, "last_provider", "local")
         attempts = list(getattr(self.ranker, "last_attempts", []))
+        unfiltered_count = len(results)
+        cutoff = None
+        if results:
+            top_score = float(results[0]["score"])
+            cutoffs = []
+            provider_floor = self.reranker_min_score_by_provider.get(
+                str(provider).casefold()
+            )
+            if provider_floor is not None:
+                cutoffs.append(provider_floor)
+            if (
+                self.reranker_relative_score_floor > 0
+                and top_score > 0
+            ):
+                cutoffs.append(
+                    top_score * self.reranker_relative_score_floor
+                )
+            if cutoffs:
+                cutoff = max(cutoffs)
+                results = [
+                    result
+                    for result in results
+                    if float(result["score"]) >= cutoff
+                ]
         LOGGER.info(
             "[search:%s] step=rerank status=complete provider=%s results=%d "
-            "load_ms=%.0f duration_ms=%.0f",
+            "pruned=%d cutoff=%s load_ms=%.0f duration_ms=%.0f",
             trace_id,
             provider,
             len(results),
+            unfiltered_count - len(results),
+            f"{cutoff:.6f}" if cutoff is not None else "none",
             load_seconds * 1000,
             elapsed * 1000,
         )
@@ -964,7 +1020,10 @@ class ProductSearchEngine:
         )
         tail_started = time.perf_counter()
         related_product_ids = []
-        if RELATED_TAIL_ENABLED and tail_limit:
+        tail_allowed = self._semantic_related_tail_allowed(
+            planned["resolved_filters"]
+        )
+        if tail_allowed and tail_limit:
             related_product_ids = related_tail_product_ids(
                 self.bm25_index,
                 planned["resolved_filters"],

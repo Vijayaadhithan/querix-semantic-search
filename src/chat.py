@@ -72,6 +72,21 @@ def build_engine(company: str | None = None) -> ProductSearchEngine:
         company_id=profile.company_id,
         mysql_config=profile.database,
         close_bm25_index=True,
+        planner_enabled=profile.planner_enabled,
+        planner_prompt_context=profile.planner_prompt_context,
+        semantic_related_tail_enabled=(
+            profile.retrieval.semantic_related_tail_enabled
+        ),
+        semantic_related_tail_requires_explicit_category=(
+            profile.retrieval
+            .semantic_related_tail_requires_explicit_category
+        ),
+        reranker_relative_score_floor=(
+            profile.retrieval.reranker_relative_score_floor
+        ),
+        reranker_min_score_by_provider=(
+            profile.retrieval.reranker_min_score_by_provider
+        ),
     )
     engine.chat_public_fields = profile.payload.public_fields
     engine.chat_field_mapping = profile.payload.field_mapping

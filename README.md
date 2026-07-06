@@ -79,7 +79,8 @@ IDs-only Redis result cache
              +-- Reciprocal Rank Fusion
              +-- current offer/wanted validation
              +-- Jina -> Voyage 2.5 -> Voyage 2.5 Lite rerank
-             +-- related filtered tail
+             +-- tenant relevance cutoff
+             +-- optional related filtered tail
              +-- canonical DB hydration
 ```
 
@@ -107,6 +108,10 @@ the semantic path.
 Explicit category/location/price/duration values become hard filters. A
 category inferred only from the described function is a soft ranking hint, so
 the system preserves recall instead of eliminating plausible alternatives.
+Each tenant can independently configure reranker score floors and whether
+semantic results may include an unscored related catalogue tail. Gainr uses
+strict score pruning and permits the tail only when an explicit category or
+subcategory constrains every appended result.
 
 ## Technology
 
@@ -246,6 +251,9 @@ columns without writing indexes or changing the company database.
 
 Ingestion reads the company database and writes only the configured vector and
 BM25 indexes. It never updates or deletes company database rows.
+The `--list` command is also read-only and aggregates Chroma's metadata SQLite
+tables directly, so it does not load the HNSW index or all vector metadata into
+process memory.
 
 ### 5. Start the API
 

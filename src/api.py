@@ -1033,6 +1033,19 @@ class TenantServicePool:
                 vector_post_filter_metadata=(
                     profile.compatibility.adapter == "gainr_legacy"
                 ),
+                semantic_related_tail_enabled=(
+                    profile.retrieval.semantic_related_tail_enabled
+                ),
+                semantic_related_tail_requires_explicit_category=(
+                    profile.retrieval
+                    .semantic_related_tail_requires_explicit_category
+                ),
+                reranker_relative_score_floor=(
+                    profile.retrieval.reranker_relative_score_floor
+                ),
+                reranker_min_score_by_provider=(
+                    profile.retrieval.reranker_min_score_by_provider
+                ),
             )
         else:
             engine = self.engine_factory(

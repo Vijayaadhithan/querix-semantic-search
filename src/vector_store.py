@@ -1,6 +1,4 @@
-from collections import Counter
-
-from chroma_store import get_collection
+from chroma_store import chroma_source_counts, get_collection
 from pgvector_store import PgVectorCollection
 from tenant_config import TenantProfile
 
@@ -36,15 +34,17 @@ def get_tenant_vector_collection(
 
 
 def list_tenant_vectors(profile: TenantProfile) -> None:
-    collection = get_tenant_vector_collection(profile)
-    data = collection.get(include=["metadatas"])
-    counts = Counter(
-        metadata.get("source_file", "unknown")
-        for metadata in data.get("metadatas", [])
-    )
+    if profile.storage.vector_backend == "chroma":
+        total, counts = chroma_source_counts(
+            chroma_dir=profile.storage.chroma_dir,
+            collection_name=profile.storage.collection_name,
+        )
+    else:
+        collection = get_tenant_vector_collection(profile)
+        total, counts = collection.source_counts()
     print(
         f"Company: {profile.company_id} | backend: "
-        f"{profile.storage.vector_backend} | vectors: {collection.count()}"
+        f"{profile.storage.vector_backend} | vectors: {total}"
     )
     for source, count in sorted(counts.items()):
         print(f"{count:>7} vectors  {source}")

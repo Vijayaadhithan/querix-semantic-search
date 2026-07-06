@@ -1,3 +1,4 @@
+import sqlite3
 import sys
 from datetime import date
 from decimal import Decimal
@@ -22,10 +23,61 @@ from ingest import (
     source_is_current,
 )
 from bm25_index import PersistentBM25Index
+from chroma_store import chroma_source_counts
 from ingestion_service import (
     ingest_mysql_source,
     reconcile_deleted_documents,
 )
+
+
+def test_chroma_source_counts_aggregates_metadata_without_loading_vectors(
+    tmp_path,
+):
+    database_path = tmp_path / "chroma.sqlite3"
+    with sqlite3.connect(database_path) as connection:
+        connection.executescript(
+            """
+            CREATE TABLE collections (id TEXT PRIMARY KEY, name TEXT);
+            CREATE TABLE segments (
+                id TEXT PRIMARY KEY,
+                scope TEXT,
+                collection TEXT
+            );
+            CREATE TABLE embeddings (
+                id INTEGER PRIMARY KEY,
+                segment_id TEXT
+            );
+            CREATE TABLE embedding_metadata (
+                id INTEGER,
+                key TEXT,
+                string_value TEXT
+            );
+            INSERT INTO collections VALUES ('collection-1', 'company_test');
+            INSERT INTO segments VALUES (
+                'metadata-segment',
+                'METADATA',
+                'collection-1'
+            );
+            INSERT INTO embeddings VALUES (1, 'metadata-segment');
+            INSERT INTO embeddings VALUES (2, 'metadata-segment');
+            INSERT INTO embeddings VALUES (3, 'metadata-segment');
+            INSERT INTO embeddings VALUES (4, 'metadata-segment');
+            INSERT INTO embeddings VALUES (5, 'metadata-segment');
+            INSERT INTO embedding_metadata VALUES (1, 'source_file', 'mysql:a');
+            INSERT INTO embedding_metadata VALUES (2, 'source_file', 'mysql:a');
+            INSERT INTO embedding_metadata VALUES (3, 'source_file', 'mysql:b');
+            INSERT INTO embedding_metadata VALUES (4, 'source_file', 'mysql:a');
+            INSERT INTO embedding_metadata VALUES (5, 'source_file', 'mysql:b');
+            """
+        )
+
+    total, counts = chroma_source_counts(
+        chroma_dir=tmp_path,
+        collection_name="company_test",
+    )
+
+    assert total == 5
+    assert counts == {"mysql:a": 3, "mysql:b": 2}
 
 
 def test_chunk_text_uses_overlap():

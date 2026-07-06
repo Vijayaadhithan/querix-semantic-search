@@ -282,11 +282,13 @@ improve visible diversity.
 Responses label results:
 
 - `ranked`: primary cross-encoder-ranked result
-- `related`: structured tail after the primary semantic window
+- `related`: optional structured tail after the primary semantic window
 - `filtered`: deterministic browse/filter result
 
-The related tail is not presented as equally semantically scored. The tier
-makes that distinction explicit.
+The related tail is controlled per tenant and is not presented as equally
+semantically scored. Gainr allows it only when an explicit category or
+subcategory was resolved, preventing location-only or guessed categories from
+padding semantic pages.
 
 ## 11. Broad Queries and Pagination
 

@@ -13,6 +13,13 @@ planner:
     rental fee "price". Only extract filters represented by this company's
     canonical adapter.
 
+retrieval:
+  # Each company can tune semantic precision independently.
+  semantic_related_tail_enabled: true
+  semantic_related_tail_requires_explicit_category: false
+  reranker_relative_score_floor: 0.0
+  reranker_min_score_by_provider: {}
+
 api:
   # Produces /api/v1/acme/search and /api/v1/acme/health.
   endpoint_slug: acme

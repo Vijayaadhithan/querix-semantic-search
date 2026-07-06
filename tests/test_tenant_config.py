@@ -131,9 +131,54 @@ def test_tenant_profiles_resolve_separate_storage_and_api_keys(
     assert profiles["alpha"].database.pool_max_size == 3
     assert profiles["alpha"].database.pool_timeout_seconds == 2.5
     assert profiles["alpha"].database.tls_mode == "disable"
+    assert profiles["alpha"].retrieval.semantic_related_tail_enabled is True
+    assert (
+        profiles["alpha"]
+        .retrieval.semantic_related_tail_requires_explicit_category
+        is False
+    )
+    assert profiles["alpha"].retrieval.reranker_relative_score_floor == 0.0
+    assert profiles["alpha"].retrieval.reranker_min_score_by_provider == {}
     assert registry.resolve_api_key("alpha-key").company_id == "alpha"
     assert registry.resolve_api_key("beta-key").company_id == "beta"
     assert registry.resolve_api_key("wrong") is None
+
+
+def test_tenant_profile_loads_company_specific_retrieval_policy(
+    tmp_path,
+    monkeypatch,
+):
+    write_profile(tmp_path, "alpha")
+    set_database_environment(monkeypatch, "alpha")
+    path = tmp_path / "alpha.yaml"
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            "api:\n",
+            (
+                "retrieval:\n"
+                "  semantic_related_tail_enabled: false\n"
+                "  semantic_related_tail_requires_explicit_category: true\n"
+                "  reranker_relative_score_floor: 0.3\n"
+                "  reranker_min_score_by_provider:\n"
+                "    jina: 0.05\n"
+                "api:\n"
+            ),
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    profile = discover_tenant_profiles(tmp_path)["alpha"]
+
+    assert profile.retrieval.semantic_related_tail_enabled is False
+    assert (
+        profile.retrieval.semantic_related_tail_requires_explicit_category
+        is True
+    )
+    assert profile.retrieval.reranker_relative_score_floor == 0.3
+    assert profile.retrieval.reranker_min_score_by_provider == {
+        "jina": 0.05
+    }
 
 
 def test_tenant_registry_rejects_shared_api_key(tmp_path, monkeypatch):

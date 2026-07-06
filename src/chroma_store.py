@@ -1,4 +1,6 @@
+import sqlite3
 from collections import Counter
+from pathlib import Path
 
 import chromadb
 
@@ -32,16 +34,66 @@ def list_indexed_documents(
     chroma_dir=CHROMA_DIR,
     collection_name=COLLECTION_NAME,
 ) -> None:
-    _, collection = get_collection(
+    total, counts = chroma_source_counts(
         chroma_dir=chroma_dir,
         collection_name=collection_name,
     )
-    data = collection.get(include=["metadatas"])
-    counts = Counter(metadata["source_file"] for metadata in data["metadatas"])
 
-    print(f"Collection: {collection_name} ({collection.count()} chunks)\n")
+    print(f"Collection: {collection_name} ({total} chunks)\n")
     for filename, count in sorted(counts.items(), key=lambda item: item[0].lower()):
         print(f"{count:>5} chunks  {filename}")
+
+
+def chroma_source_counts(
+    *,
+    chroma_dir=CHROMA_DIR,
+    collection_name=COLLECTION_NAME,
+) -> tuple[int, Counter]:
+    """Read source counts from Chroma metadata without loading vector rows."""
+    database_path = Path(chroma_dir) / "chroma.sqlite3"
+    if not database_path.is_file():
+        raise RuntimeError(
+            f"No Chroma metadata database found at {database_path}. "
+            "Run the tenant ingestion job first."
+        )
+    try:
+        with sqlite3.connect(
+            f"file:{database_path}?mode=ro",
+            uri=True,
+        ) as connection:
+            collection = connection.execute(
+                "SELECT id FROM collections WHERE name = ? LIMIT 1",
+                (collection_name,),
+            ).fetchone()
+            if collection is None:
+                raise RuntimeError(
+                    f"No vector collection {collection_name!r} found. "
+                    "Run the tenant ingestion job first."
+                )
+            rows = connection.execute(
+                """
+                SELECT COALESCE(metadata.string_value, 'unknown') AS source,
+                       COUNT(*) AS vector_count
+                FROM embeddings
+                JOIN segments
+                  ON segments.id = embeddings.segment_id
+                LEFT JOIN embedding_metadata AS metadata
+                  ON metadata.id = embeddings.id
+                 AND metadata.key = 'source_file'
+                WHERE segments.collection = ?
+                  AND segments.scope = 'METADATA'
+                GROUP BY source
+                """,
+                (collection[0],),
+            ).fetchall()
+    except sqlite3.Error as exc:
+        raise RuntimeError(
+            "Unable to read Chroma metadata for the list operation. "
+            "Verify that this deployment uses the supported Chroma 1.x "
+            "persistent schema."
+        ) from exc
+    counts = Counter({str(source): int(count) for source, count in rows})
+    return sum(counts.values()), counts
 
 
 def confirm(message: str, assume_yes: bool = False) -> bool:

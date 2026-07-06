@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import math
 import os
 import re
 from dataclasses import dataclass, field
@@ -48,6 +49,31 @@ class TenantRateLimit:
             raise ValueError("requests_per_minute must be greater than zero")
         if self.burst <= 0:
             raise ValueError("rate-limit burst must be greater than zero")
+
+
+@dataclass(frozen=True)
+class TenantRetrievalConfig:
+    semantic_related_tail_enabled: bool = True
+    semantic_related_tail_requires_explicit_category: bool = False
+    reranker_relative_score_floor: float = 0.0
+    reranker_min_score_by_provider: dict[str, float] = field(
+        default_factory=dict
+    )
+
+    def __post_init__(self) -> None:
+        if not 0 <= self.reranker_relative_score_floor <= 1:
+            raise ValueError(
+                "reranker_relative_score_floor must be between 0 and 1"
+            )
+        for provider, score in self.reranker_min_score_by_provider.items():
+            if not provider:
+                raise ValueError(
+                    "reranker_min_score_by_provider keys must not be empty"
+                )
+            if not math.isfinite(score):
+                raise ValueError(
+                    "reranker_min_score_by_provider values must be finite"
+                )
 
 
 @dataclass(frozen=True)
@@ -126,6 +152,9 @@ class TenantProfile:
     endpoint_slug: str = ""
     planner_enabled: bool = True
     planner_prompt_context: str = ""
+    retrieval: TenantRetrievalConfig = field(
+        default_factory=TenantRetrievalConfig
+    )
     compatibility: TenantCompatibilityConfig = field(
         default_factory=TenantCompatibilityConfig
     )
@@ -475,6 +504,31 @@ def load_tenant_profile(path: Path) -> TenantProfile:
         requests_per_minute=int(rate.get("requests_per_minute", 60)),
         burst=int(rate.get("burst", 10)),
     )
+    retrieval = dict(raw.get("retrieval", {}))
+    min_scores = retrieval.get("reranker_min_score_by_provider", {})
+    if not isinstance(min_scores, dict):
+        raise ValueError(
+            f"Tenant {company_id!r} reranker_min_score_by_provider "
+            "must be a mapping"
+        )
+    retrieval_config = TenantRetrievalConfig(
+        semantic_related_tail_enabled=bool(
+            retrieval.get("semantic_related_tail_enabled", True)
+        ),
+        semantic_related_tail_requires_explicit_category=bool(
+            retrieval.get(
+                "semantic_related_tail_requires_explicit_category",
+                False,
+            )
+        ),
+        reranker_relative_score_floor=float(
+            retrieval.get("reranker_relative_score_floor", 0.0)
+        ),
+        reranker_min_score_by_provider={
+            str(provider).strip().casefold(): float(score)
+            for provider, score in min_scores.items()
+        },
+    )
     api = dict(raw.get("api", {}))
     endpoint_slug = validate_tenant_id(
         str(api.get("endpoint_slug", company_id))
@@ -539,6 +593,7 @@ def load_tenant_profile(path: Path) -> TenantProfile:
         endpoint_slug=endpoint_slug,
         planner_enabled=planner_enabled,
         planner_prompt_context=planner_prompt_context,
+        retrieval=retrieval_config,
         compatibility=compatibility_config,
     )
 
