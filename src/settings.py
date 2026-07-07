@@ -244,14 +244,34 @@ RERANK_API_TIMEOUT_SECONDS = float(
         str(RERANK_PROVIDER_CONFIG.get("timeout_seconds", 5)),
     )
 )
+RERANK_FAILURE_COOLDOWN_SECONDS = float(
+    os.getenv(
+        "RERANK_FAILURE_COOLDOWN_SECONDS",
+        str(RERANK_PROVIDER_CONFIG.get("failure_cooldown_seconds", 15)),
+    )
+)
+RERANK_RATE_LIMIT_COOLDOWN_SECONDS = float(
+    os.getenv(
+        "RERANK_RATE_LIMIT_COOLDOWN_SECONDS",
+        str(RERANK_PROVIDER_CONFIG.get("rate_limit_cooldown_seconds", 60)),
+    )
+)
 RERANK_MAX_DOCUMENT_CHARS = int(
     os.getenv(
         "RERANK_MAX_DOCUMENT_CHARS",
         str(RERANK_PROVIDER_CONFIG.get("max_document_chars", 4000)),
     )
 )
-if RERANK_API_TIMEOUT_SECONDS <= 0 or RERANK_MAX_DOCUMENT_CHARS <= 0:
-    raise ValueError("Reranker timeout and document character limit must be positive.")
+if (
+    RERANK_API_TIMEOUT_SECONDS <= 0
+    or RERANK_FAILURE_COOLDOWN_SECONDS < 0
+    or RERANK_RATE_LIMIT_COOLDOWN_SECONDS < 0
+    or RERANK_MAX_DOCUMENT_CHARS <= 0
+):
+    raise ValueError(
+        "Reranker timeout and document character limit must be positive; "
+        "cooldowns must be zero or greater."
+    )
 VOYAGE_API_KEY = os.getenv("VOYAGE_API_KEY", "")
 VOYAGE_RERANK_URL = os.getenv(
     "VOYAGE_RERANK_URL",

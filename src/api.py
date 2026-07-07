@@ -513,7 +513,11 @@ class ProductSearchService:
                     {
                         "step": "rerank",
                         "status": (
-                            "complete" if candidates else "skipped"
+                            "degraded"
+                            if result.get("reranker_degraded")
+                            else "complete"
+                            if candidates
+                            else "skipped"
                         ),
                         "duration_ms": round(
                             float(
@@ -527,6 +531,7 @@ class ProductSearchService:
                             "none",
                         ),
                         "results": len(result.get("reranked") or []),
+                        "error_type": result.get("reranker_error_type"),
                     },
                     {
                         "step": "related_tail",

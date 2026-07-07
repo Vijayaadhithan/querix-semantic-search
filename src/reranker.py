@@ -12,10 +12,12 @@ from settings import (
     JINA_RERANK_URL,
     RERANK_API_TIMEOUT_SECONDS,
     RERANK_BATCH_SIZE,
+    RERANK_FAILURE_COOLDOWN_SECONDS,
     RERANK_MAX_DOCUMENT_CHARS,
     RERANK_MAX_LENGTH,
     RERANK_MODEL,
     RERANK_PROVIDER_ORDER,
+    RERANK_RATE_LIMIT_COOLDOWN_SECONDS,
     RERANK_USE_FP16,
     VOYAGE_API_KEY,
     VOYAGE_RERANK_LITE_MODEL,
@@ -178,6 +180,9 @@ class HostedReranker:
             if requests_per_minute is not None
             else None
         )
+        self.clock = clock
+        self._cooldown_lock = threading.Lock()
+        self._unavailable_until = 0.0
         self._state = threading.local()
 
     @property
@@ -201,10 +206,45 @@ class HostedReranker:
             "return_documents": False,
         }
 
+    def _cooldown_retry_after(self) -> float:
+        now = self.clock()
+        with self._cooldown_lock:
+            return max(self._unavailable_until - now, 0.0)
+
+    def _set_cooldown(self, seconds: float) -> None:
+        if seconds <= 0:
+            return
+        with self._cooldown_lock:
+            self._unavailable_until = max(
+                self._unavailable_until,
+                self.clock() + seconds,
+            )
+
+    @staticmethod
+    def _retry_after_seconds(response) -> float | None:
+        if response is None:
+            return None
+        try:
+            retry_after = response.headers.get("Retry-After")
+        except AttributeError:
+            return None
+        if retry_after is None:
+            return None
+        try:
+            return max(float(retry_after), 0.0)
+        except ValueError:
+            return None
+
     def compute_score(self, pairs, batch_size=None, max_length=None):
         self._state.last_usage = {}
         if not pairs:
             return []
+        retry_after = self._cooldown_retry_after()
+        if retry_after > 0:
+            raise RuntimeError(
+                f"{self.name} provider cooldown active; "
+                f"retry_after={retry_after:.1f}s"
+            )
         queries = {str(pair[0]) for pair in pairs}
         if len(queries) != 1:
             raise RuntimeError(
@@ -242,8 +282,16 @@ class HostedReranker:
                 "total_tokens": total_tokens,
             }
         except requests.RequestException as exc:
-            status = getattr(getattr(exc, "response", None), "status_code", None)
+            response = getattr(exc, "response", None)
+            status = getattr(response, "status_code", None)
             reason = f"http_{status}" if status else type(exc).__name__
+            if status == 429:
+                self._set_cooldown(
+                    self._retry_after_seconds(response)
+                    or RERANK_RATE_LIMIT_COOLDOWN_SECONDS
+                )
+            elif isinstance(exc, (requests.Timeout, requests.ConnectionError)):
+                self._set_cooldown(RERANK_FAILURE_COOLDOWN_SECONDS)
             raise RuntimeError(
                 f"{self.name} reranker unavailable: {reason}"
             ) from exc

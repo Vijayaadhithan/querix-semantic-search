@@ -62,7 +62,7 @@ from settings import (
 )
 
 LOGGER = logging.getLogger("uvicorn.error")
-RESULT_CACHE_SCHEMA_VERSION = "v7"
+RESULT_CACHE_SCHEMA_VERSION = "v8"
 
 
 def active_filter_names(filters: dict) -> list[str]:
@@ -369,6 +369,7 @@ class ProductSearchEngine:
             not RESULT_CACHE_ENABLED
             or self.shared_plan_cache is None
             or result["query_plan"].get("fallback_reason")
+            or result.get("reranker_degraded")
         ):
             return
         payload = {
@@ -713,6 +714,27 @@ class ProductSearchEngine:
             for key in ("main_category_name", "subcategory_name")
         )
 
+    @staticmethod
+    def _fusion_fallback_results(
+        candidates: list[dict],
+        top_k: int,
+    ) -> list[dict]:
+        results = []
+        for position, candidate in enumerate(candidates[:top_k], start=1):
+            try:
+                score = float(candidate.get("fusion_score"))
+            except (TypeError, ValueError):
+                score = 1.0 / position
+            results.append(
+                {
+                    "id": candidate["id"],
+                    "text": candidate["text"],
+                    "metadata": candidate["metadata"],
+                    "score": score,
+                }
+            )
+        return results
+
     def rank(
         self,
         query: str,
@@ -763,11 +785,46 @@ class ProductSearchEngine:
                 diversity_top_k=effective_top_k,
             )
 
+        def fallback_rank(exc: Exception) -> dict:
+            elapsed = time.perf_counter() - started
+            attempts = list(getattr(self.ranker, "last_attempts", []))
+            results = self._fusion_fallback_results(
+                candidates,
+                effective_top_k,
+            )
+            LOGGER.warning(
+                "[search:%s] step=rerank status=degraded "
+                "provider=fusion_fallback error_type=%s "
+                "candidates=%d results=%d load_ms=%.0f duration_ms=%.0f",
+                trace_id,
+                type(exc).__name__,
+                len(candidates),
+                len(results),
+                load_seconds * 1000,
+                elapsed * 1000,
+            )
+            return {
+                "results": results,
+                "load_seconds": load_seconds,
+                "seconds": elapsed,
+                "provider": "fusion_fallback",
+                "attempts": attempts,
+                "degraded": True,
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+            }
+
         if self.shared_reranker is not None:
             with self.shared_reranker.inference_guard():
-                results = run_rerank()
+                try:
+                    results = run_rerank()
+                except Exception as exc:
+                    return fallback_rank(exc)
         else:
-            results = run_rerank()
+            try:
+                results = run_rerank()
+            except Exception as exc:
+                return fallback_rank(exc)
         elapsed = time.perf_counter() - started
         provider = getattr(self.ranker, "last_provider", "local")
         attempts = list(getattr(self.ranker, "last_attempts", []))
@@ -812,6 +869,7 @@ class ProductSearchEngine:
             "seconds": elapsed,
             "provider": provider,
             "attempts": attempts,
+            "degraded": False,
         }
 
     def _filtered_search(
@@ -1115,6 +1173,8 @@ class ProductSearchEngine:
             "reranker_seconds": ranked["seconds"],
             "reranker_provider": ranked["provider"],
             "reranker_attempts": ranked["attempts"],
+            "reranker_degraded": bool(ranked.get("degraded")),
+            "reranker_error_type": ranked.get("error_type"),
             "related_tail_seconds": related_tail_seconds,
             "primary_product_ids": primary_product_ids,
             "related_product_ids": related_product_ids,

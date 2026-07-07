@@ -707,6 +707,57 @@ def test_tenant_reranker_policy_prunes_weak_semantic_results(tmp_path):
     index.close()
 
 
+def test_reranker_failure_falls_back_to_fusion_order(tmp_path):
+    index = build_index(tmp_path / "fusion-fallback.sqlite3")
+
+    class FailingRanker:
+        model_label = "hosted-rerankers"
+        last_provider = ""
+        last_attempts = [
+            {
+                "provider": "jina",
+                "status": "fallback",
+                "reason": "ReadTimeout",
+            }
+        ]
+
+        def compute_score(self, _pairs, **_kwargs):
+            raise RuntimeError("All reranker providers failed: jina=ReadTimeout")
+
+    engine = ProductSearchEngine(
+        collection=FakeCollection(),
+        bm25_index=index,
+        ranker=FailingRanker(),
+    )
+    candidates = [
+        {
+            "id": "first",
+            "text": "best hybrid match",
+            "metadata": {"content_title": "Best"},
+            "fusion_score": 0.42,
+        },
+        {
+            "id": "second",
+            "text": "second hybrid match",
+            "metadata": {"content_title": "Second"},
+            "fusion_score": 0.21,
+        },
+    ]
+
+    result = engine.rank("test query", candidates, top_k=2)
+
+    assert result["provider"] == "fusion_fallback"
+    assert result["degraded"] is True
+    assert result["error_type"] == "RuntimeError"
+    assert result["attempts"] == FailingRanker.last_attempts
+    assert [item["id"] for item in result["results"]] == [
+        "first",
+        "second",
+    ]
+    assert [item["score"] for item in result["results"]] == [0.42, 0.21]
+    index.close()
+
+
 def test_tenant_can_disable_unscored_semantic_tail(tmp_path, monkeypatch):
     index = build_index(tmp_path / "no-related-tail.sqlite3")
     engine = ProductSearchEngine(

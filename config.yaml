@@ -73,7 +73,7 @@ retrieval:
       - jina
       - voyage-2.5
       - voyage-2.5-lite
-    timeout_seconds: 5
+    timeout_seconds: 3
     # Reranking 60 full 1.5K-character documents consumed roughly 20K+ tokens
     # per search. The leading 800 characters retain the most useful labelled
     # title/category/description content while reducing API usage.

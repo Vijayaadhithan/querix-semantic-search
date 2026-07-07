@@ -107,6 +107,49 @@ def test_reranker_chain_uses_next_provider_after_failure():
     ]
 
 
+def test_hosted_reranker_cools_down_after_rate_limit(monkeypatch):
+    now = [100.0]
+    calls = []
+
+    class RateLimitedResponse:
+        status_code = 429
+        headers = {"Retry-After": "12"}
+
+        def raise_for_status(self):
+            raise reranker.requests.HTTPError(response=self)
+
+    def post(*_args, **_kwargs):
+        calls.append("post")
+        return RateLimitedResponse()
+
+    monkeypatch.setattr(reranker.requests, "post", post)
+    provider = HostedReranker(
+        name="jina",
+        url="https://jina.example/rerank",
+        api_key="test-key",
+        model="test-model",
+        timeout_seconds=1,
+        clock=lambda: now[0],
+    )
+
+    try:
+        provider.compute_score([["query", "doc"]])
+    except RuntimeError as exc:
+        assert "http_429" in str(exc)
+    else:
+        raise AssertionError("Expected first request to fail with http_429.")
+
+    try:
+        provider.compute_score([["query", "doc"]])
+    except RuntimeError as exc:
+        assert "cooldown active" in str(exc)
+        assert "retry_after=12.0s" in str(exc)
+    else:
+        raise AssertionError("Expected second request to use cooldown.")
+
+    assert calls == ["post"]
+
+
 def test_request_window_limiter_enforces_per_model_budget():
     now = [100.0]
     limiter = RequestWindowLimiter(3, clock=lambda: now[0])
