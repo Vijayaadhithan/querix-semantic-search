@@ -365,6 +365,9 @@ All payloads, cURL examples, pagination behavior, and frontend call sequencing
 are documented in
 [`docs/production_search_operations.md`](docs/production_search_operations.md).
 
+Company-facing integration documentation is available in
+[`docs/company_api_integration.md`](docs/company_api_integration.md).
+
 ## Ingestion Modes
 
 | Command option | Effect |
