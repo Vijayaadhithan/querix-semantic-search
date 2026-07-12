@@ -230,6 +230,9 @@ docker compose exec pgvector psql -U "$POSTGRES_USER" -d "$PGVECTOR_DATABASE" \
   -c "CREATE EXTENSION IF NOT EXISTS vector;"
 ```
 
+For the local start/stop/resume sequence, see
+[`docs/local_pgvector_workflow.md`](docs/local_pgvector_workflow.md).
+
 If Ollama should run inside Compose instead of on the host:
 
 ```bash
