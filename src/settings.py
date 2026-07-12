@@ -8,6 +8,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 CONFIG_PATH = PROJECT_ROOT / "config.yaml"
 
 load_dotenv(PROJECT_ROOT / ".env")
+load_dotenv(PROJECT_ROOT / ".env.keys", override=True)
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -168,16 +169,35 @@ if (
     raise ValueError(
         "Vector post-filter over-fetch settings must be greater than zero."
     )
-VECTOR_TOP_K = int(CONFIG.get("retrieval", {}).get("vector_top_k", 15))
-BM25_TOP_K = int(CONFIG.get("retrieval", {}).get("bm25_top_k", 15))
+VECTOR_TOP_K = int(
+    os.getenv(
+        "VECTOR_TOP_K",
+        str(CONFIG.get("retrieval", {}).get("vector_top_k", 15)),
+    )
+)
+BM25_TOP_K = int(
+    os.getenv(
+        "BM25_TOP_K",
+        str(CONFIG.get("retrieval", {}).get("bm25_top_k", 15)),
+    )
+)
 HYBRID_CANDIDATE_K = int(
-    CONFIG.get("retrieval", {}).get("hybrid_candidate_k", 60)
+    os.getenv(
+        "HYBRID_CANDIDATE_K",
+        str(CONFIG.get("retrieval", {}).get("hybrid_candidate_k", 60)),
+    )
 )
 RERANK_CANDIDATE_K = int(
-    CONFIG.get("retrieval", {}).get("rerank_candidate_k", 60)
+    os.getenv(
+        "RERANK_CANDIDATE_K",
+        str(CONFIG.get("retrieval", {}).get("rerank_candidate_k", 60)),
+    )
 )
 PRIMARY_RANKED_K = int(
-    CONFIG.get("retrieval", {}).get("primary_ranked_k", 60)
+    os.getenv(
+        "PRIMARY_RANKED_K",
+        str(CONFIG.get("retrieval", {}).get("primary_ranked_k", 60)),
+    )
 )
 RELATED_TAIL_ENABLED = bool(
     CONFIG.get("retrieval", {}).get("related_tail_enabled", True)
@@ -194,6 +214,27 @@ SOFT_CATEGORY_BOOST = float(
 RERANK_TOP_K = int(CONFIG.get("retrieval", {}).get("final_top_k", 6))
 RERANK_MODEL = CONFIG.get("retrieval", {}).get(
     "reranker_model", "Alibaba-NLP/gte-reranker-modernbert-base"
+)
+RERANK_LOCAL_MODEL = os.getenv(
+    "RERANK_LOCAL_MODEL",
+    str(CONFIG.get("retrieval", {}).get("reranker_local_model", RERANK_MODEL)),
+)
+RERANK_LOCAL_ADAPTER = os.getenv(
+    "RERANK_LOCAL_ADAPTER",
+    str(
+        CONFIG.get("retrieval", {}).get(
+            "reranker_local_adapter",
+            "cross-encoder",
+        )
+    ),
+).strip().casefold()
+if RERANK_LOCAL_ADAPTER not in {"cross-encoder", "jina-listwise"}:
+    raise ValueError(
+        "RERANK_LOCAL_ADAPTER must be one of cross-encoder or jina-listwise."
+    )
+RERANK_LOCAL_TRUST_REMOTE_CODE = _env_bool(
+    "RERANK_LOCAL_TRUST_REMOTE_CODE",
+    bool(CONFIG.get("retrieval", {}).get("reranker_local_trust_remote_code", False)),
 )
 RERANK_BATCH_SIZE = int(
     CONFIG.get("retrieval", {}).get("reranker_batch_size", 4)

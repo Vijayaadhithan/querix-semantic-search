@@ -25,6 +25,9 @@ def get_tenant_vector_collection(
             storage.pgvector_database,
             storage.pgvector_table,
             storage.vector_dimensions,
+            hnsw_m=storage.pgvector_hnsw_m,
+            hnsw_ef_construction=storage.pgvector_hnsw_ef_construction,
+            hnsw_ef_search=storage.pgvector_hnsw_ef_search,
             create=create,
         )
     raise RuntimeError(

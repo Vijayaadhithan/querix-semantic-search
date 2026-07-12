@@ -56,12 +56,29 @@ database:
   # with a CA path supplied through ca_file_env.
   tls:
     mode: disable
+    mode_env: GAINR_DB_TLS_MODE
     ca_file_env: GAINR_DB_TLS_CA_FILE
     cert_file_env: GAINR_DB_TLS_CERT_FILE
     key_file_env: GAINR_DB_TLS_KEY_FILE
 
 storage:
-  vector_backend: chroma
+  vector_backend: pgvector
+  vector_dimensions: 768
+  pgvector:
+    use_company_database: false
+    host_env: PGVECTOR_HOST
+    port_env: PGVECTOR_PORT
+    database_env: PGVECTOR_DATABASE
+    user_env: PGVECTOR_USER
+    password_env: PGVECTOR_PASSWORD
+    schema: public
+    table: gainr_search_vectors
+    hnsw:
+      # HNSW is the pgvector ANN index. Higher ef_search improves recall but
+      # costs CPU per query.
+      m: 16
+      ef_construction: 64
+      ef_search: 100
   chroma_dir: storage/companies/gainr/chroma
   collection_name: company_gainr
   bm25_path: storage/companies/gainr/bm25.sqlite3

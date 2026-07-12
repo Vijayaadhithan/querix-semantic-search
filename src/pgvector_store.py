@@ -20,11 +20,17 @@ class PgVectorCollection:
         table: str,
         dimensions: int,
         *,
+        hnsw_m: int = 16,
+        hnsw_ef_construction: int = 64,
+        hnsw_ef_search: int = 100,
         create: bool = False,
     ):
         self.config = config
         self.table = table
         self.dimensions = dimensions
+        self.hnsw_m = hnsw_m
+        self.hnsw_ef_construction = hnsw_ef_construction
+        self.hnsw_ef_search = hnsw_ef_search
         if create:
             self.initialize()
         else:
@@ -81,7 +87,10 @@ class PgVectorCollection:
                     {quote_postgres_identifier(index_name)}
                     ON {self._qualified()}
                     USING hnsw (embedding vector_cosine_ops)
-                    WITH (m = 16, ef_construction = 64)
+                    WITH (
+                        m = {int(self.hnsw_m)},
+                        ef_construction = {int(self.hnsw_ef_construction)}
+                    )
                     """
                 )
                 cursor.execute(
@@ -95,6 +104,53 @@ class PgVectorCollection:
     @staticmethod
     def _vector_literal(vector: list[float]) -> str:
         return json.dumps([float(value) for value in vector], separators=(",", ":"))
+
+    @classmethod
+    def _metadata_filter_sql(cls, where: dict[str, Any] | None) -> tuple[str, list[Any]]:
+        if not where:
+            return "", []
+        if "$and" in where:
+            clauses = []
+            params: list[Any] = []
+            for child in where["$and"]:
+                clause, child_params = cls._metadata_filter_sql(child)
+                if clause:
+                    clauses.append(f"({clause})")
+                    params.extend(child_params)
+            return " AND ".join(clauses), params
+        clauses = []
+        params: list[Any] = []
+        for key, expected in where.items():
+            if not isinstance(expected, dict):
+                clauses.append("metadata ->> %s = %s")
+                params.extend((str(key), str(expected)))
+                continue
+            for operator, value in expected.items():
+                if operator == "$in":
+                    values = [str(item) for item in value]
+                    if not values:
+                        clauses.append("FALSE")
+                    else:
+                        placeholders = ", ".join(["%s"] * len(values))
+                        clauses.append(f"metadata ->> %s IN ({placeholders})")
+                        params.extend((str(key), *values))
+                elif operator in {"$gte", "$lte"}:
+                    comparator = ">=" if operator == "$gte" else "<="
+                    clauses.append(
+                        "(metadata ->> %s) ~ %s "
+                        f"AND (metadata ->> %s)::double precision {comparator} %s"
+                    )
+                    params.extend(
+                        (
+                            str(key),
+                            r"^-?[0-9]+(\.[0-9]+)?$",
+                            str(key),
+                            float(value),
+                        )
+                    )
+                else:
+                    raise ValueError(f"Unsupported pgvector metadata operator {operator!r}")
+        return " AND ".join(clauses), params
 
     def count(self) -> int:
         with postgres_connection(self.config, dict_rows=True) as connection:
@@ -239,6 +295,7 @@ class PgVectorCollection:
         *,
         query_embeddings: list[list[float]],
         n_results: int,
+        where: dict[str, Any] | None = None,
         include: list[str] | None = None,
     ) -> dict[str, list[list]]:
         include = include or []
@@ -249,6 +306,9 @@ class PgVectorCollection:
         with postgres_connection(self.config, dict_rows=True) as connection:
             with connection.cursor() as cursor:
                 cursor.execute("SET hnsw.iterative_scan = strict_order")
+                cursor.execute(f"SET hnsw.ef_search = {int(self.hnsw_ef_search)}")
+                filter_clause, filter_params = self._metadata_filter_sql(where)
+                where_clause = f"WHERE {filter_clause}" if filter_clause else ""
                 for embedding in query_embeddings:
                     if len(embedding) != self.dimensions:
                         raise ValueError(
@@ -260,11 +320,13 @@ class PgVectorCollection:
                         SELECT id, document, metadata,
                                embedding <=> %s::vector AS distance
                         FROM {self._qualified()}
+                        {where_clause}
                         ORDER BY embedding <=> %s::vector
                         LIMIT %s
                         """,
                         (
                             self._vector_literal(embedding),
+                            *filter_params,
                             self._vector_literal(embedding),
                             n_results,
                         ),

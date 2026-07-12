@@ -1,0 +1,16 @@
+.git
+.venv
+__pycache__
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.env
+.env.*
+storage
+data/raw_docs
+benchmark-results
+output
+*.pyc
+*.pyo
+*.pyd
+*.sqlite3

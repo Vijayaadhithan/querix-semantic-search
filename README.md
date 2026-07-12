@@ -38,7 +38,8 @@ shortest safe path to understand and run the project.
 - A conservative deterministic path that avoids model calls for fully
   structured catalogue queries.
 - Parallel vector and BM25 retrieval followed by Reciprocal Rank Fusion.
-- Hosted reranking through Jina, Voyage 2.5, and Voyage 2.5 Lite fallback.
+- Local transformer reranking by default, with optional hosted Jina/Voyage
+  fallback when enabled in `RERANK_PROVIDER_ORDER`.
 - IDs-only Redis result caching with fresh canonical row hydration.
 - Cursor pagination for the generic API and page pagination for Gainr's
   compatibility API.
@@ -78,7 +79,7 @@ IDs-only Redis result cache
              +-- vector retrieval || BM25 retrieval
              +-- Reciprocal Rank Fusion
              +-- current offer/wanted validation
-             +-- Jina -> Voyage 2.5 -> Voyage 2.5 Lite rerank
+             +-- local transformer rerank
              +-- tenant relevance cutoff
              +-- optional related filtered tail
              +-- canonical DB hydration
@@ -124,9 +125,17 @@ subcategory constrains every appended result.
 | Embeddings | Ollama `embeddinggemma:latest` |
 | Query planning | Gemini API fallback chain with JSON schema |
 | Fusion | Weighted Reciprocal Rank Fusion |
-| Reranking | Jina, Voyage 2.5, Voyage 2.5 Lite; optional local transformer |
+| Reranking | Local transformer by default; optional Jina/Voyage fallback |
 | Shared state | Redis |
 | Evaluation | Pytest plus labelled query-plan and retrieval cases |
+
+## Production Defaults
+
+For the current one-company 8 GB Hostinger server, keep one API worker, Redis
+enabled, Ollama embeddings warm, local reranking preloaded, and Gainr vectors
+in PostgreSQL/pgvector with HNSW. The runtime already uses bounded semantic
+windows and request coalescing so concurrent identical queries wait for the
+first request and then reuse the result cache.
 
 ## Repository Layout
 
@@ -155,11 +164,12 @@ tests/                              unit and integration-style tests
 - Redis
 - Ollama with `embeddinggemma:latest`
 - MySQL or PostgreSQL containing the configured search-ready and result tables
+- PostgreSQL with the pgvector extension for tenants using pgvector storage
 - Gemini API key for semantic query planning
-- Jina and/or Voyage API key for hosted reranking
+- No hosted reranker key is required when `RERANK_PROVIDER_ORDER=local`
 
-OpenSearch is not required. pgvector is required only for tenants configured
-with `storage.vector_backend: pgvector`.
+OpenSearch is not required. BM25 is not stored in Chroma or pgvector; it is the
+separate SQLite lexical index configured by each tenant's `bm25_path`.
 
 ## Quick Start
 
@@ -192,32 +202,60 @@ python3 -m venv .venv
 .venv/bin/python -m pip install --upgrade pip
 .venv/bin/python -m pip install -r requirements-dev.txt
 cp .env.example .env
+cp .env.keys.example .env.keys
 ollama pull embeddinggemma:latest
 ```
 
+Docker setup:
+
+```bash
+cp .env.example .env
+cp .env.keys.example .env.keys
+docker compose up --build -d redis api
+```
+
+If Ollama should run inside Compose instead of on the host:
+
+```bash
+docker compose --profile ollama up --build -d
+docker compose exec ollama ollama pull embeddinggemma:latest
+```
+
+The API container runs as a non-root user and mounts `storage/` plus tenant
+configuration. Keep `API_TENANT_ENGINE_CACHE_SIZE=1` and
+`API_TENANT_MAX_CONCURRENT_SEARCHES=2` on the 8 GB test server.
+
 ### 2. Configure
 
-Keep secrets only in `.env` or a production secret manager:
+Keep runtime settings in `.env` and real secrets in `.env.keys`. The app loads
+`.env` first, then `.env.keys`, so the secrets file overrides empty placeholders.
+Both real files are ignored by Git.
 
 ```env
-GEMINI_API_KEY=<secret>
-JINA_API_KEY=<secret>
-VOYAGE_API_KEY=<secret>
-
+# .env
+API_AUTH_ENABLED=true
+API_CORS_ORIGINS=https://gainr.in,https://www.gainr.in
+REDIS_URL=redis://127.0.0.1:6379/0
 MYSQL_HOST=localhost
 MYSQL_PORT=3306
 MYSQL_DATABASE=<database>
+```
+
+```env
+# .env.keys
+GEMINI_API_KEY=<secret>
+JINA_API_KEY=<secret>
+VOYAGE_API_KEY=<secret>
 MYSQL_USER=<read-only-user>
 MYSQL_PASSWORD=<secret>
-
-REDIS_URL=redis://127.0.0.1:6379/0
 GAINR_API_KEY=<company-api-key>
-API_AUTH_ENABLED=true
 API_ADMIN_KEY=<separate-monitoring-key>
 ```
 
 Review `configs/tenants/gainr.yaml` before ingestion. Company profiles define
 the database contract, storage paths, endpoint slug, API-key environment
+names, request field mapping, public response fields, filter schema, rate
+limits, and planner prompt context.
 variables, request mapping, public response fields, and rate policy.
 
 ### 3. Validate Dependencies and Source
@@ -252,8 +290,8 @@ columns without writing indexes or changing the company database.
 Ingestion reads the company database and writes only the configured vector and
 BM25 indexes. It never updates or deletes company database rows.
 The `--list` command is also read-only and aggregates Chroma's metadata SQLite
-tables directly, so it does not load the HNSW index or all vector metadata into
-process memory.
+tables directly for Chroma tenants or `source_counts()` for pgvector tenants,
+so it does not load all vector metadata into process memory.
 
 ### 5. Start the API
 
@@ -262,7 +300,7 @@ process memory.
 ```
 
 The service binds to `API_HOST:API_PORT` and intentionally starts one Uvicorn
-worker for the default single-host Chroma/provider-rate-limit deployment.
+worker for the default single-host local-model deployment.
 
 ### 6. Verify
 
@@ -429,6 +467,10 @@ when `API_ADMIN_KEY` is empty.
 .venv/bin/python -m compileall -q src scripts tests
 .venv/bin/python src/evaluate_queries.py --company gainr
 .venv/bin/python src/evaluate_retrieval.py --company gainr
+.venv/bin/python scripts/generate_semantic_cases.py --company gainr
+.venv/bin/python src/evaluate_retrieval.py \
+  --company gainr \
+  --cases eval/gainr_semantic_cases.generated.json
 .venv/bin/python scripts/doctor.py --company gainr --strict
 ```
 

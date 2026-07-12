@@ -262,6 +262,70 @@ def test_repeated_query_result_cache_is_reported_by_api():
     assert repeated.timings_ms["result_cache"] == 2.0
 
 
+def test_concurrent_identical_queries_wait_for_first_search():
+    class CoalescingEngine(FakeEngine):
+        def __init__(self):
+            super().__init__()
+            self.lock = threading.Lock()
+            self.first_entered = threading.Event()
+            self.release_first = threading.Event()
+            self.first_finished = threading.Event()
+
+        def search(self, query, limit=None):
+            with self.lock:
+                call_number = len(self.calls) + 1
+                self.calls.append((query, limit))
+            if call_number == 1:
+                self.first_entered.set()
+                self.release_first.wait(timeout=2)
+                self.first_finished.set()
+                return self._result(query, result_cache_hit=False)
+            assert self.first_finished.is_set()
+            return self._result(query, result_cache_hit=True)
+
+        @staticmethod
+        def _result(query, *, result_cache_hit):
+            return {
+                "query_plan": {
+                    "semantic_query": query,
+                    "keyword_query": query,
+                    "target_ad_type": "offer",
+                },
+                "resolved_filters": {"categorical": {}},
+                "unresolved_filters": {},
+                "seconds": 0.0,
+                "vector_seconds": 0.0,
+                "bm25_seconds": 0.0,
+                "reranker_load_seconds": 0.0,
+                "reranker_seconds": 0.0,
+                "related_tail_seconds": 0.0,
+                "result_cache_seconds": 0.001 if result_cache_hit else 0.0,
+                "result_cache_hit": result_cache_hit,
+                "products": [{"id": 1, "title": "Product 1"}],
+            }
+
+    engine = CoalescingEngine()
+    service = ProductSearchService(engine, max_results=20)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first = executor.submit(
+            service.search,
+            SearchRequest(query="camera in Chennai", page_size=2),
+        )
+        assert engine.first_entered.wait(timeout=1)
+        second = executor.submit(
+            service.search,
+            SearchRequest(query="camera in Chennai", page_size=2),
+        )
+        assert len(engine.calls) == 1
+        engine.release_first.set()
+        futures = [first, second]
+        responses = [future.result() for future in futures]
+
+    assert len(engine.calls) == 2
+    assert any(response.cached for response in responses)
+
+
 def test_search_monitor_reports_safe_success_and_failure_summaries():
     service = ProductSearchService(FakeEngine(), max_results=20)
 

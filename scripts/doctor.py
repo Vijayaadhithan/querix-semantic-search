@@ -17,7 +17,11 @@ from postgres_store import (
     qualified_table,
 )
 from settings import (
+    API_ADMIN_KEY,
     API_AUTH_ENABLED,
+    API_CORS_ORIGINS,
+    API_TENANT_ENGINE_CACHE_SIZE,
+    API_TENANT_MAX_CONCURRENT_SEARCHES,
     BM25_INDEX_PATH,
     CHROMA_DIR,
     COLLECTION_NAME,
@@ -166,6 +170,64 @@ def check_bm25(profile=None) -> bool:
     return report("BM25 index", count > 0, f"{count} indexed products")
 
 
+def check_production_security(profile=None) -> list[bool]:
+    config = profile.database if profile else None
+    cors_ok = bool(API_CORS_ORIGINS) and "*" not in API_CORS_ORIGINS
+    checks = [
+        report(
+            "Production auth",
+            API_AUTH_ENABLED,
+            "enabled" if API_AUTH_ENABLED else "API_AUTH_ENABLED=false",
+        ),
+        report(
+            "Admin API key",
+            bool(API_ADMIN_KEY),
+            "configured" if API_ADMIN_KEY else "missing API_ADMIN_KEY",
+        ),
+        report(
+            "CORS origins",
+            cors_ok,
+            (
+                ",".join(API_CORS_ORIGINS)
+                if API_CORS_ORIGINS
+                else "missing API_CORS_ORIGINS"
+            ),
+        ),
+        report(
+            "Redis production mode",
+            REDIS_ENABLED,
+            "enabled" if REDIS_ENABLED else "REDIS_ENABLED=false",
+        ),
+        report(
+            "8 GB tenant cache limit",
+            API_TENANT_ENGINE_CACHE_SIZE == 1,
+            f"API_TENANT_ENGINE_CACHE_SIZE={API_TENANT_ENGINE_CACHE_SIZE}",
+        ),
+        report(
+            "8 GB search concurrency limit",
+            API_TENANT_MAX_CONCURRENT_SEARCHES <= 2,
+            (
+                "API_TENANT_MAX_CONCURRENT_SEARCHES="
+                f"{API_TENANT_MAX_CONCURRENT_SEARCHES}"
+            ),
+        ),
+    ]
+    if config is not None:
+        tls_ok = config.tls_mode == "verify-full"
+        checks.append(
+            report(
+                "Company database TLS",
+                tls_ok,
+                (
+                    "verify-full"
+                    if tls_ok
+                    else f"tls.mode={config.tls_mode!r}; expected verify-full"
+                ),
+            )
+        )
+    return checks
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Check local search infrastructure without exposing secrets."
@@ -178,6 +240,14 @@ def main() -> int:
         "--strict",
         action="store_true",
         help="exit non-zero when any check fails",
+    )
+    parser.add_argument(
+        "--production",
+        action="store_true",
+        help=(
+            "also verify production auth, admin key, CORS, Redis, TLS, "
+            "and 8 GB single-host guardrails"
+        ),
     )
     args = parser.parse_args()
     profile = None
@@ -227,6 +297,8 @@ def main() -> int:
         check_vectors(profile),
         check_bm25(profile),
     ]
+    if args.production:
+        checks.extend(check_production_security(profile))
     failed = checks.count(False)
     print(f"Doctor summary: {len(checks) - failed} passed, {failed} failed.")
     return 1 if args.strict and failed else 0

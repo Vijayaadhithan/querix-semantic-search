@@ -54,15 +54,18 @@ from settings import (
     RESULT_CACHE_ENABLED,
     RESULT_CACHE_TTL_SECONDS,
     RERANK_CANDIDATE_K,
+    RERANK_LOCAL_ADAPTER,
+    RERANK_LOCAL_MODEL,
     RETRIEVAL_OVERFETCH_FACTOR,
     RERANK_MODEL,
+    RERANK_PROVIDER_ORDER,
     RERANK_TOP_K,
     VECTOR_CANDIDATE_K,
     VECTOR_TOP_K,
 )
 
 LOGGER = logging.getLogger("uvicorn.error")
-RESULT_CACHE_SCHEMA_VERSION = "v8"
+RESULT_CACHE_SCHEMA_VERSION = "v9"
 
 
 def active_filter_names(filters: dict) -> list[str]:
@@ -230,6 +233,9 @@ class ProductSearchEngine:
             str(limit),
             str(ranking_window),
             RERANK_MODEL,
+            RERANK_LOCAL_MODEL,
+            RERANK_LOCAL_ADAPTER,
+            ",".join(RERANK_PROVIDER_ORDER),
             str(RERANK_CANDIDATE_K),
             str(PRIMARY_RANKED_K),
             json.dumps(

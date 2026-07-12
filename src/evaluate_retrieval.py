@@ -3,6 +3,13 @@ import json
 from pathlib import Path
 
 from bm25_index import PersistentBM25Index
+from mysql_store import mysql_connection, quote_mysql_identifier
+from postgres_store import (
+    PostgresRuntimeConfig,
+    postgres_connection,
+    qualified_table,
+    quote_postgres_identifier,
+)
 from search_engine import ProductSearchEngine
 from settings import PROJECT_ROOT
 from tenant_config import discover_tenant_profiles
@@ -16,6 +23,68 @@ def reciprocal_rank(result_ids: list[str], relevant_ids: set[str]) -> float:
         if product_id in relevant_ids:
             return 1.0 / rank
     return 0.0
+
+
+def filter_reciprocal_rank(products: list[dict], filters: dict) -> tuple[float, list[str]]:
+    matches = []
+    for rank, product in enumerate(products, start=1):
+        if all(product.get(key) == expected for key, expected in filters.items()):
+            product_id = product.get("id")
+            if product_id is not None:
+                matches.append(str(product_id))
+            if len(matches) == 1:
+                reciprocal = 1.0 / rank
+    return (reciprocal if matches else 0.0), matches
+
+
+def quote_identifier(config, value: str) -> str:
+    if isinstance(config, PostgresRuntimeConfig):
+        return quote_postgres_identifier(value)
+    return quote_mysql_identifier(value)
+
+
+def matching_ids_from_search_table(config, result_ids: list[str], filters: dict) -> set[str]:
+    if not result_ids:
+        return set()
+    table = (
+        qualified_table(config, config.search_table)
+        if isinstance(config, PostgresRuntimeConfig)
+        else quote_mysql_identifier(config.search_table)
+    )
+    placeholders = ", ".join(["%s"] * len(result_ids))
+    clauses = [f"{quote_identifier(config, config.search_id_column)} IN ({placeholders})"]
+    params: list = list(result_ids)
+    for column, expected in filters.items():
+        clauses.append(f"{quote_identifier(config, column)} = %s")
+        params.append(expected)
+    context = (
+        postgres_connection(config)
+        if isinstance(config, PostgresRuntimeConfig)
+        else mysql_connection(config=config)
+    )
+    with context as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                f"""
+                SELECT {quote_identifier(config, config.search_id_column)}
+                FROM {table}
+                WHERE {' AND '.join(clauses)}
+                """,
+                params,
+            )
+            return {str(row[0]) for row in cursor.fetchall()}
+
+
+def matching_ids_from_filter_groups(
+    config,
+    result_ids: list[str],
+    filter_groups: list[dict],
+) -> tuple[set[str], int | None]:
+    for index, filters in enumerate(filter_groups):
+        matching = matching_ids_from_search_table(config, result_ids, filters)
+        if matching:
+            return matching, index
+    return set(), None
 
 
 def main() -> None:
@@ -82,6 +151,32 @@ def main() -> None:
             if case.get("expected_empty"):
                 success = not result_ids
                 rr = 1.0 if success else 0.0
+            elif (
+                case.get("acceptable_filters")
+                or case.get("expected_filters")
+                or case.get("source_filters")
+            ):
+                filter_groups = case.get("acceptable_filters")
+                if not filter_groups:
+                    filter_groups = [
+                        case.get("expected_filters") or case.get("source_filters")
+                    ]
+                if profile is not None:
+                    matching, matched_group = matching_ids_from_filter_groups(
+                        profile.database,
+                        result_ids,
+                        filter_groups,
+                    )
+                    rr = reciprocal_rank(result_ids, matching)
+                    matching_ids = [value for value in result_ids if value in matching]
+                else:
+                    matched_group = None
+                    expected_filters = filter_groups[0]
+                    rr, matching_ids = filter_reciprocal_rank(
+                        result.get("products", []),
+                        expected_filters,
+                    )
+                success = rr > 0
             else:
                 relevant_ids = {str(value) for value in case["relevant_ids"]}
                 rr = reciprocal_rank(result_ids, relevant_ids)
@@ -89,7 +184,18 @@ def main() -> None:
             reciprocal_ranks.append(rr)
             passed += int(success)
             label = "PASS" if success else "FAIL"
-            print(f"{label} {case['name']}: {result_ids}")
+            if (
+                case.get("acceptable_filters")
+                or case.get("expected_filters")
+                or case.get("source_filters")
+            ):
+                print(
+                    f"{label} {case['name']}: {result_ids} "
+                    f"matched={matching_ids if success else []} "
+                    f"group={matched_group if success else 'none'}"
+                )
+            else:
+                print(f"{label} {case['name']}: {result_ids}")
     finally:
         engine.close()
 

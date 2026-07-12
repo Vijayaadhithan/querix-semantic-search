@@ -29,14 +29,16 @@ For each authenticated company:
 | Stage | Deterministic search | Semantic search |
 |---|---|---|
 | Interpret query | Local deterministic rules | Rules, then hosted query planner when required |
-| Candidate lookup | Company's local BM25/SQLite index | Company's Chroma vector collection and BM25 index in parallel |
+| Candidate lookup | Company's local BM25/SQLite index | Company's vector backend and BM25 index in parallel |
 | Offer/wanted validation | Current type values fetched from company's configured DB | Current type values fetched from company's configured DB |
-| Ranking | Stable filtered ordering | Reciprocal-rank fusion, Jina/Voyage reranking, then related tail |
+| Ranking | Stable filtered ordering | Reciprocal-rank fusion, local reranking, then related tail |
 | Final returned rows | Fetched from company's configured result table | Fetched from company's configured result table |
 
 Therefore:
 
-- Chroma and BM25 hold searchable text, metadata, IDs, and embeddings.
+- pgvector holds searchable vectors and metadata. BM25 holds the separate
+  SQLite lexical index. Chroma remains supported for older tenants, but Gainr
+  is configured for pgvector.
 - The company database remains the canonical source for the returned product
   rows and current offer/wanted type.
 - In local testing, the configured company database happens to be the local
@@ -81,11 +83,11 @@ Redis result-ID cache
           |
           +-- semantic
                  |
-                 +-- vector search in company Chroma collection
+                 +-- vector search in company pgvector table
                  +-- keyword search in company BM25 index
                  +-- reciprocal-rank fusion
                  +-- current offer/wanted validation from company DB
-                 +-- Jina -> Voyage 2.5 -> Voyage 2.5 Lite reranking
+                 +-- local transformer reranking
                  +-- related filtered tail
                  +-- fetch final canonical rows from company DB
 ```
@@ -177,11 +179,10 @@ The path:
 1. Checks the normalized query-plan cache.
 2. Runs the hosted Google query-planner fallback chain when needed.
 3. Runs local Ollama `embeddinggemma:latest` query embedding.
-4. Runs Chroma vector retrieval and BM25 lexical retrieval concurrently.
+4. Runs pgvector retrieval and BM25 lexical retrieval concurrently.
 5. Fuses the two ranked lists using reciprocal-rank fusion.
 6. Validates offer/wanted intent using current values from the company DB.
-7. Sends the bounded candidate text to:
-   `Jina -> Voyage rerank-2.5 -> Voyage rerank-2.5-lite`.
+7. Sends the bounded candidate text to the local transformer reranker.
 8. Appends a stable related filtered tail when applicable.
 9. Fetches current canonical rows from the company's result table.
 10. Stores ordered IDs, tiers, and interpretation metadata in Redis for five
@@ -223,9 +224,18 @@ Every tenant profile owns:
 - its own public response-field mapping
 - its own request-field mapping
 - its own usage accounting
+- its own planner prompt context
+- its own filter schema
 
 Startup fails if two profiles share an endpoint slug, API key, Chroma
 collection, pgvector table, or BM25 file.
+
+For a new company, copy `configs/tenants/example-company.yaml.example` to
+`configs/tenants/<company>.yaml`. The profile controls
+`/api/v1/<endpoint>/...`, frontend request field names, public response fields,
+DB table/column names, allowed filters, storage backend, rate limits, and the
+company-specific planner prompt. Secrets referenced by `api.key_envs` and
+`database.*_env` belong in `.env.keys` or the deployment secret manager.
 
 Use a separate Chroma directory per company:
 
@@ -315,39 +325,71 @@ Expected Redis response:
 PONG
 ```
 
+### 6.5 Docker deployment
+
+The repository includes a production-oriented `Dockerfile` and
+`docker-compose.yml`. The API container runs as a non-root user, keeps one
+Uvicorn worker, mounts `storage/`, and uses Redis as a separate service.
+
+```bash
+cd /path/to/Peronsal_rag
+cp .env.example .env
+docker compose up --build -d redis api
+```
+
+If Ollama should run inside Compose:
+
+```bash
+docker compose --profile ollama up --build -d
+docker compose exec ollama ollama pull embeddinggemma:latest
+```
+
+For HTTPS, run Nginx or Caddy in front of the API and keep the application
+bound to the private Docker or loopback network.
+
 ## 7. Environment configuration
 
 Create the local file only if it does not already exist:
 
 ```bash
 cp .env.example .env
+cp .env.keys.example .env.keys
 ```
 
-Required groups:
+Keep non-secret runtime settings in `.env`:
 
 ```env
-# Company database
+# Company database host and runtime settings
 MYSQL_HOST=localhost
 MYSQL_PORT=3306
 MYSQL_DATABASE=<database>
-MYSQL_USER=<read-only-user>
-MYSQL_PASSWORD=<secret>
 
-# Company API authentication
 API_AUTH_ENABLED=true
-GAINR_API_KEY=<generated-company-key>
+API_CORS_ORIGINS=https://gainr.in,https://www.gainr.in
 
 # Shared state
 REDIS_ENABLED=true
 REDIS_URL=redis://127.0.0.1:6379/0
 REDIS_RESULT_CACHE_ENABLED=true
 REDIS_RESULT_CACHE_TTL_SECONDS=300
+```
 
-# Hosted query planning and reranking
+Keep real secrets in `.env.keys`, which is loaded after `.env` and ignored by
+Git:
+
+```env
 GEMINI_API_KEY=<secret>
 JINA_API_KEY=<secret>
 VOYAGE_API_KEY=<secret>
+MYSQL_USER=<read-only-user>
+MYSQL_PASSWORD=<secret>
+GAINR_API_KEY=<generated-company-key>
+API_ADMIN_KEY=<separate-monitoring-key>
+```
 
+8 GB one-company testing limits:
+
+```env
 # 8 GB one-company testing limits
 API_TENANT_ENGINE_CACHE_SIZE=1
 API_TENANT_MAX_CONCURRENT_SEARCHES=2
@@ -355,6 +397,7 @@ API_TENANT_MAX_CONCURRENT_SEARCHES=2
 
 Never commit `.env`. Rotate credentials that have appeared in chat, terminal
 history, screenshots, or logs before public deployment.
+Never commit `.env.keys`; use a production secret manager when available.
 
 ## 8. Per-company database safety configuration
 
@@ -467,7 +510,7 @@ The command:
 - upserts BM25 rows
 - compares stable content hashes
 - embeds only changed/new documents
-- writes only Gainr's Chroma collection and BM25 file
+- writes only Gainr's pgvector table and BM25 file
 - never updates or deletes company DB rows
 
 This paging boundary is important on CPU-only hosts: Ollama may spend minutes
@@ -533,6 +576,15 @@ swap, so normal refreshes should prefer incremental reconciliation.
 .venv/bin/python src/ingest.py --company gainr --list
 .venv/bin/python scripts/doctor.py --company gainr --strict
 ```
+
+Production gate:
+
+```bash
+.venv/bin/python scripts/doctor.py --company gainr --strict --production
+```
+
+`--production` also checks API auth, the admin key, CORS, Redis, database TLS,
+and the 8 GB tenant/concurrency guardrails.
 
 The list operation is read-only and uses a metadata-database aggregate. It does
 not materialize all vector metadata or load the HNSW index, which keeps it safe
@@ -963,6 +1015,101 @@ Do not interpret a cached-query test as full semantic throughput. Production
 load testing should use a representative set of unique deterministic, semantic,
 cached, and provider-fallback queries.
 
+### 14.1 Rerank-window benchmark
+
+Benchmark 30, 40, and 60 candidate windows before changing production defaults.
+Set these values in `.env`, restart the API, then run the query/retrieval evals
+and mixed load test:
+
+```env
+RERANK_CANDIDATE_K=40
+PRIMARY_RANKED_K=40
+HYBRID_CANDIDATE_K=40
+```
+
+Only keep a smaller window if p95 latency improves without lowering labelled
+retrieval quality.
+
+### 14.2 Local reranker benchmark
+
+Local reranking is the default. Hosted Jina/Voyage can be kept as fallback by
+adding them after `local` in `RERANK_PROVIDER_ORDER`.
+
+Default local reranker:
+
+```env
+RERANK_PROVIDER_ORDER=local
+RERANK_LOCAL_MODEL=Alibaba-NLP/gte-reranker-modernbert-base
+RERANK_LOCAL_ADAPTER=cross-encoder
+RERANK_LOCAL_TRUST_REMOTE_CODE=false
+```
+
+Fastest lower-quality fallback if CPU latency is still too high:
+
+```env
+RERANK_PROVIDER_ORDER=local
+RERANK_LOCAL_MODEL=cross-encoder/ms-marco-MiniLM-L6-v2
+RERANK_LOCAL_ADAPTER=cross-encoder
+RERANK_LOCAL_TRUST_REMOTE_CODE=false
+```
+
+Multilingual quality benchmark:
+
+```env
+RERANK_PROVIDER_ORDER=local
+RERANK_LOCAL_MODEL=BAAI/bge-reranker-v2-m3
+RERANK_LOCAL_ADAPTER=cross-encoder
+RERANK_LOCAL_TRUST_REMOTE_CODE=false
+```
+
+Hosted fallback mode:
+
+```env
+RERANK_PROVIDER_ORDER=local,jina,voyage-2.5,voyage-2.5-lite
+```
+
+Jina v3 listwise benchmark, only after reviewing the HF code/license:
+
+```env
+RERANK_PROVIDER_ORDER=local,jina,voyage-2.5,voyage-2.5-lite
+RERANK_LOCAL_MODEL=jinaai/jina-reranker-v3
+RERANK_LOCAL_ADAPTER=jina-listwise
+RERANK_LOCAL_TRUST_REMOTE_CODE=true
+```
+
+If local reranking increases p95 latency or pushes the host into swap, switch
+temporarily to the hosted chain or to the MiniLM local model.
+
+### 14.3 pgvector and ANN
+
+Gainr is configured for pgvector. The pgvector table uses an HNSW approximate
+nearest-neighbor index:
+
+```yaml
+storage:
+  vector_backend: pgvector
+  pgvector:
+    table: gainr_search_vectors
+    hnsw:
+      m: 16
+      ef_construction: 64
+      ef_search: 100
+```
+
+`m` and `ef_construction` affect index size/build quality. `ef_search` affects
+query recall and CPU cost; raise it when relevance drops, lower it when CPU
+latency is too high. Compare:
+
+- unfiltered semantic query
+- city-filtered semantic query
+- price-filtered semantic query
+- mixed text plus filters
+- repeated cached query
+
+The pgvector adapter supports SQL-side metadata filtering for Chroma-style
+`where` filters. BM25 remains the local SQLite lexical index and is not stored
+inside pgvector.
+
 ## 15. Automated tests
 
 ### 15.1 Complete unit/integration-style suite
@@ -988,6 +1135,20 @@ python3 -m compileall -q src scripts tests
 ```bash
 .venv/bin/python src/evaluate_retrieval.py --company gainr
 ```
+
+Generate DB-backed semantic cases from current Gainr rows:
+
+```bash
+.venv/bin/python scripts/generate_semantic_cases.py --company gainr
+.venv/bin/python src/evaluate_retrieval.py \
+  --company gainr \
+  --cases eval/gainr_semantic_cases.generated.json
+```
+
+Generated cases validate returned IDs against `ads_search_ready` filters such
+as category, city, duration, and ad type. They are useful for broad regression
+coverage. Hand-labelled cases in `eval/retrieval_cases.json` remain stricter
+exact-ID relevance checks.
 
 ### 15.5 Strict environment doctor
 

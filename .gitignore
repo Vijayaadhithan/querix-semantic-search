@@ -2,6 +2,7 @@
 .env
 .env.*
 !.env.example
+!.env.keys.example
 
 # Python
 .venv/
@@ -24,4 +25,3 @@ data/raw_docs/*
 .idea/
 .vscode/
 *.swp
-

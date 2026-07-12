@@ -43,6 +43,8 @@ database:
     timeout_seconds: 2.5
   tls:
     mode: disable
+    mode_env: {prefix}_DB_TLS_MODE
+    ca_file_env: {prefix}_DB_TLS_CA_FILE
 storage:
   chroma_dir: {chroma_dir}
   collection_name: company_{company}
@@ -81,6 +83,10 @@ def write_profile(
                     "  pgvector:\n"
                     "    use_company_database: true\n"
                     "    table: alpha_vectors\n"
+                    "    hnsw:\n"
+                    "      m: 12\n"
+                    "      ef_construction: 48\n"
+                    "      ef_search: 80\n"
                     if vector_backend == "pgvector"
                     else ""
                 )
@@ -142,6 +148,18 @@ def test_tenant_profiles_resolve_separate_storage_and_api_keys(
     assert registry.resolve_api_key("alpha-key").company_id == "alpha"
     assert registry.resolve_api_key("beta-key").company_id == "beta"
     assert registry.resolve_api_key("wrong") is None
+
+
+def test_tenant_profile_allows_tls_env_override(tmp_path, monkeypatch):
+    write_profile(tmp_path, "alpha")
+    set_database_environment(monkeypatch, "alpha")
+    monkeypatch.setenv("ALPHA_DB_TLS_MODE", "verify-full")
+    monkeypatch.setenv("ALPHA_DB_TLS_CA_FILE", "/run/secrets/alpha-ca.pem")
+
+    profile = discover_tenant_profiles(tmp_path)["alpha"]
+
+    assert profile.database.tls_mode == "verify-full"
+    assert profile.database.tls_ca_file == "/run/secrets/alpha-ca.pem"
 
 
 def test_tenant_profile_loads_company_specific_retrieval_policy(
@@ -213,6 +231,9 @@ def test_postgres_company_profile_is_supported(tmp_path, monkeypatch):
     assert profile.storage.vector_backend == "pgvector"
     assert profile.storage.pgvector_database is profile.database
     assert profile.storage.pgvector_table == "alpha_vectors"
+    assert profile.storage.pgvector_hnsw_m == 12
+    assert profile.storage.pgvector_hnsw_ef_construction == 48
+    assert profile.storage.pgvector_hnsw_ef_search == 80
 
 
 def test_pgvector_profile_selects_pgvector_collection(
@@ -231,11 +252,24 @@ def test_pgvector_profile_selects_pgvector_collection(
     captured = {}
 
     class FakePgVectorCollection:
-        def __init__(self, database, table, dimensions, *, create=False):
+        def __init__(
+            self,
+            database,
+            table,
+            dimensions,
+            *,
+            hnsw_m=16,
+            hnsw_ef_construction=64,
+            hnsw_ef_search=100,
+            create=False,
+        ):
             captured.update(
                 database=database,
                 table=table,
                 dimensions=dimensions,
+                hnsw_m=hnsw_m,
+                hnsw_ef_construction=hnsw_ef_construction,
+                hnsw_ef_search=hnsw_ef_search,
                 create=create,
             )
 
@@ -251,4 +285,7 @@ def test_pgvector_profile_selects_pgvector_collection(
     assert captured["database"] is profile.database
     assert captured["table"] == "alpha_vectors"
     assert captured["dimensions"] == 768
+    assert captured["hnsw_m"] == 12
+    assert captured["hnsw_ef_construction"] == 48
+    assert captured["hnsw_ef_search"] == 80
     assert captured["create"] is True

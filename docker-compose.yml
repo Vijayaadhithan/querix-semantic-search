@@ -1,0 +1,66 @@
+services:
+  api:
+    build:
+      context: .
+    env_file:
+      - path: .env
+        required: true
+      - path: .env.keys
+        required: false
+    environment:
+      API_HOST: 0.0.0.0
+      API_PORT: 8000
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      PGVECTOR_HOST: pgvector
+      PGVECTOR_PORT: 5432
+      API_TENANT_ENGINE_CACHE_SIZE: ${API_TENANT_ENGINE_CACHE_SIZE:-1}
+      API_TENANT_MAX_CONCURRENT_SEARCHES: ${API_TENANT_MAX_CONCURRENT_SEARCHES:-2}
+    ports:
+      - "${API_PORT:-8000}:8000"
+    volumes:
+      - ./storage:/app/storage
+      - ./configs/tenants:/app/configs/tenants:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      - redis
+      - pgvector
+    restart: unless-stopped
+
+  pgvector:
+    image: pgvector/pgvector:pg16
+    env_file:
+      - path: .env
+        required: true
+      - path: .env.keys
+        required: false
+    environment:
+      POSTGRES_DB: ${PGVECTOR_DATABASE:?set PGVECTOR_DATABASE}
+    volumes:
+      - pgvector-data:/var/lib/postgresql/data
+    ports:
+      - "${PGVECTOR_PORT:-5432}:5432"
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    restart: unless-stopped
+
+  ollama:
+    image: ollama/ollama:latest
+    profiles:
+      - ollama
+    volumes:
+      - ollama-data:/root/.ollama
+    ports:
+      - "11434:11434"
+    restart: unless-stopped
+
+volumes:
+  redis-data:
+  pgvector-data:
+  ollama-data:

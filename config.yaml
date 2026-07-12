@@ -63,16 +63,17 @@ retrieval:
   soft_category_boost: 0.005
   final_top_k: 10
   reranker_model: Alibaba-NLP/gte-reranker-modernbert-base
+  # Local reranking is the default for the 8 GB Hostinger test host. Keep
+  # concurrency low because every local model stays resident in process memory.
+  reranker_local_model: Alibaba-NLP/gte-reranker-modernbert-base
+  reranker_local_adapter: cross-encoder
+  reranker_local_trust_remote_code: false
   reranker_batch_size: 4
   reranker_max_length: 512
   reranker_use_fp16: false
   reranker_providers:
-    # Jina handles normal traffic. Each Voyage model has an independent,
-    # deliberately conservative request budget for this account.
     order:
-      - jina
-      - voyage-2.5
-      - voyage-2.5-lite
+      - local
     timeout_seconds: 3
     # Reranking 60 full 1.5K-character documents consumed roughly 20K+ tokens
     # per search. The leading 800 characters retain the most useful labelled

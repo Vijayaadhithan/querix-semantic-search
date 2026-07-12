@@ -53,6 +53,7 @@ database:
     timeout_seconds: 5
   tls:
     mode: verify-full
+    mode_env: ACME_POSTGRES_TLS_MODE
     ca_file_env: ACME_POSTGRES_TLS_CA_FILE
     cert_file_env: ACME_POSTGRES_TLS_CERT_FILE
     key_file_env: ACME_POSTGRES_TLS_KEY_FILE
@@ -64,6 +65,10 @@ storage:
     use_company_database: true
     schema: public
     table: acme_search_vectors
+    hnsw:
+      m: 16
+      ef_construction: 64
+      ef_search: 100
   chroma_dir: storage/companies/acme/chroma
   collection_name: company_acme
   bm25_path: storage/companies/acme/bm25.sqlite3

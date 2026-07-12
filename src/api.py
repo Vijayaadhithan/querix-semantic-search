@@ -2,6 +2,7 @@ import base64
 import binascii
 import hashlib
 import hmac
+import json
 import logging
 import os
 import resource
@@ -325,6 +326,8 @@ class ProductSearchService:
         self._monitor_completed = 0
         self._monitor_failed = 0
         self._monitor_events: deque[dict[str, Any]] = deque(maxlen=100)
+        self._coalesce_lock = threading.Lock()
+        self._inflight_searches: dict[str, threading.Event] = {}
 
     def warmup(self) -> float:
         with self._engine_lock:
@@ -576,7 +579,26 @@ class ProductSearchService:
         with self._monitor_lock:
             self._monitor_active += 1
             self._monitor_started += 1
+        coalesce_key = self._coalesce_key(query, kwargs)
+        owner = False
+        inflight: threading.Event | None = None
+        with self._coalesce_lock:
+            inflight = self._inflight_searches.get(coalesce_key)
+            if inflight is None:
+                inflight = threading.Event()
+                self._inflight_searches[coalesce_key] = inflight
+                owner = True
         try:
+            if not owner:
+                wait_started = time.perf_counter()
+                inflight.wait()
+                LOGGER.info(
+                    "step=request_coalesce status=waited company=%s "
+                    "query_chars=%d duration_ms=%.0f",
+                    self.company_id or "legacy",
+                    len(query),
+                    (time.perf_counter() - wait_started) * 1000,
+                )
             with self._search_slots:
                 result = self.engine.search(query, **kwargs)
         except Exception as exc:
@@ -668,8 +690,26 @@ class ProductSearchService:
                 self._monitor_events.appendleft(event)
             return result
         finally:
+            if owner and inflight is not None:
+                with self._coalesce_lock:
+                    current = self._inflight_searches.get(coalesce_key)
+                    if current is inflight:
+                        del self._inflight_searches[coalesce_key]
+                    inflight.set()
             with self._monitor_lock:
                 self._monitor_active -= 1
+
+    @staticmethod
+    def _coalesce_key(query: str, kwargs: dict[str, Any]) -> str:
+        return json.dumps(
+            {
+                "query": " ".join(query.split()).casefold(),
+                "kwargs": kwargs,
+            },
+            sort_keys=True,
+            default=str,
+            separators=(",", ":"),
+        )
 
     def record_external_search(
         self,
@@ -1286,7 +1326,10 @@ def create_app(
                     detail="Company rate limit exceeded.",
                     headers={"Retry-After": "1"},
                 )
-        return application.state.tenant_service_pool.get(profile.company_id)
+        try:
+            return application.state.tenant_service_pool.get(profile.company_id)
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     def resolve_compatibility_service(
         api_key: str | None,

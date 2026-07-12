@@ -1,0 +1,256 @@
+[
+  {
+    "name": "daily_car_chennai",
+    "query": "comfortable car for a day in Chennai",
+    "relevant_ids": [
+      "230214",
+      "220495",
+      "233061",
+      "209646",
+      "208573",
+      "220464",
+      "230020",
+      "217449",
+      "230079",
+      "252790",
+      "235206",
+      "101538"
+    ],
+    "source_filters": {
+      "main_category_name": "Automobiles",
+      "subcategory_name": "Car",
+      "city_name": "Chennai",
+      "rental_duration": "Per Day",
+      "type": 1
+    }
+  },
+  {
+    "name": "hourly_driver_chennai",
+    "query": "acting driver for a few hours in Chennai",
+    "relevant_ids": [
+      "178804",
+      "254944",
+      "231112",
+      "255826",
+      "255797",
+      "250689",
+      "255465",
+      "255725",
+      "255726",
+      "255644",
+      "255647",
+      "241744"
+    ],
+    "source_filters": {
+      "main_category_name": "Automotive Professionals",
+      "subcategory_name": "Acting Driver",
+      "city_name": "Chennai",
+      "rental_duration": "Per Hour",
+      "type": 1
+    }
+  },
+  {
+    "name": "electrician_hourly_chennai",
+    "query": "person to fix electrical wiring in Chennai by the hour",
+    "relevant_ids": [
+      "108388",
+      "112358",
+      "154239",
+      "108746",
+      "244265",
+      "238447",
+      "237828",
+      "255646",
+      "114338",
+      "114373",
+      "227269",
+      "250401"
+    ],
+    "source_filters": {
+      "main_category_name": "Personal & Home Services",
+      "subcategory_name": "Electrician",
+      "city_name": "Chennai",
+      "rental_duration": "Per Hour",
+      "type": 1
+    }
+  },
+  {
+    "name": "hourly_tutor_chennai",
+    "query": "teacher for home lessons in Chennai for one hour",
+    "relevant_ids": [
+      "255719",
+      "160739",
+      "234983",
+      "235715",
+      "244120",
+      "240287",
+      "235390",
+      "253205",
+      "253215",
+      "234541",
+      "140662",
+      "239611"
+    ],
+    "source_filters": {
+      "main_category_name": "Education Field",
+      "subcategory_name": "Tutor",
+      "city_name": "Chennai",
+      "rental_duration": "Per Hour",
+      "type": 1
+    },
+    "acceptable_filters": [
+      {
+        "main_category_name": "Education Field",
+        "subcategory_name": "Tutor",
+        "city_name": "Chennai",
+        "rental_duration": "Per Hour",
+        "type": 1
+      },
+      {
+        "main_category_name": "Education Field",
+        "subcategory_name": "Teacher",
+        "city_name": "Chennai",
+        "rental_duration": "Per Hour",
+        "type": 1
+      }
+    ]
+  },
+  {
+    "name": "technician_hourly_chennai",
+    "query": "technical support person in Chennai for hourly hire",
+    "relevant_ids": [
+      "234460",
+      "236304",
+      "73914",
+      "242233",
+      "230092",
+      "233786",
+      "253313",
+      "117906",
+      "108514",
+      "253389",
+      "252407",
+      "252362"
+    ],
+    "source_filters": {
+      "main_category_name": "IT & ITES Services",
+      "subcategory_name": "Technician",
+      "city_name": "Chennai",
+      "rental_duration": "Per Hour",
+      "type": 1
+    }
+  },
+  {
+    "name": "monthly_fiction_books_mumbai",
+    "query": "fiction books available monthly in Mumbai",
+    "relevant_ids": [
+      "47960",
+      "45386",
+      "49143",
+      "49049",
+      "49129",
+      "45133",
+      "46234",
+      "44944",
+      "44584",
+      "44889",
+      "47844",
+      "47536"
+    ],
+    "source_filters": {
+      "main_category_name": "Books",
+      "subcategory_name": "Fiction",
+      "city_name": "Mumbai",
+      "rental_duration": "Per Month",
+      "type": 1
+    }
+  },
+  {
+    "name": "apartment_hourly_coimbatore",
+    "query": "apartment space for a few hours in Coimbatore",
+    "relevant_ids": [
+      "256030",
+      "62147"
+    ],
+    "source_filters": {
+      "main_category_name": "Accommodation & Spaces",
+      "subcategory_name": "Apartment",
+      "city_name": "Coimbatore",
+      "rental_duration": "Per Hour",
+      "type": 1
+    }
+  },
+  {
+    "name": "computer_repair_hourly_puducherry",
+    "query": "laptop and computer repair service by the hour in Puducherry",
+    "relevant_ids": [
+      "256026",
+      "127933"
+    ],
+    "source_filters": {
+      "main_category_name": "Computer & Accessories",
+      "subcategory_name": "Others",
+      "city_name": "Puducherry",
+      "rental_duration": "Per Hour",
+      "type": 1
+    }
+  },
+  {
+    "name": "wanted_mechanic_chennai",
+    "query": "people needing a mechanic for hourly hire in Chennai",
+    "relevant_ids": [
+      "256033",
+      "236308",
+      "230935",
+      "214142"
+    ],
+    "source_filters": {
+      "main_category_name": "Automotive Professionals",
+      "subcategory_name": "Mechanic",
+      "city_name": "Chennai",
+      "rental_duration": "Per Hour",
+      "type": 2
+    },
+    "acceptable_filters": [
+      {
+        "main_category_name": "Automotive Professionals",
+        "subcategory_name": "Mechanic",
+        "city_name": "Chennai",
+        "rental_duration": "Per Hour",
+        "type": 2
+      },
+      {
+        "main_category_name": "Automotive Professionals",
+        "subcategory_name": "Mechanic",
+        "city_name": "Chennai",
+        "rental_duration": "Per Hour",
+        "type": 1
+      }
+    ]
+  },
+  {
+    "name": "daily_car_cuddalore",
+    "query": "car rental for a day near Cuddalore",
+    "relevant_ids": [
+      "256023",
+      "256022",
+      "215362",
+      "154237",
+      "249105",
+      "119554",
+      "152577",
+      "209394",
+      "255127",
+      "254993",
+      "254620",
+      "254636"
+    ],
+    "source_filters": {
+      "main_category_name": "Automobiles",
+      "subcategory_name": "Car",
+      "city_name": "Cuddalore",
+      "rental_duration": "Per Day",
+      "type": 1
+    }
+  }
+]

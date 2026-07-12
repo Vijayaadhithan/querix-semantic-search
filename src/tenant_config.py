@@ -37,6 +37,9 @@ class TenantStorageConfig:
     pgvector_database: PostgresRuntimeConfig | None = None
     pgvector_table: str = "search_vectors"
     vector_dimensions: int = 768
+    pgvector_hnsw_m: int = 16
+    pgvector_hnsw_ef_construction: int = 64
+    pgvector_hnsw_ef_search: int = 100
 
 
 @dataclass(frozen=True)
@@ -294,12 +297,19 @@ def load_tenant_profile(path: Path) -> TenantProfile:
         pool_min_size=int(pool.get("min_size", 0)),
         pool_max_size=int(pool.get("max_size", 4)),
         pool_timeout_seconds=float(pool.get("timeout_seconds", 5)),
-        tls_mode=str(
-            tls.get(
-                "mode",
-                "prefer" if backend == "postgres" else "disable",
-            )
-        ).strip().casefold(),
+        tls_mode=_env_value(
+            tls,
+            "mode_env",
+            f"{default_prefix}_TLS_MODE",
+            default=str(
+                tls.get(
+                    "mode",
+                    "prefer" if backend == "postgres" else "disable",
+                )
+            ),
+        )
+        .strip()
+        .casefold(),
         tls_ca_file=_env_value(
             tls,
             "ca_file_env",
@@ -350,6 +360,9 @@ def load_tenant_profile(path: Path) -> TenantProfile:
         )
     pgvector_database = None
     pgvector_table = "search_vectors"
+    pgvector_hnsw_m = 16
+    pgvector_hnsw_ef_construction = 64
+    pgvector_hnsw_ef_search = 100
     vector_dimensions = int(storage.get("vector_dimensions", 768))
     if vector_dimensions <= 0 or vector_dimensions > 2000:
         raise ValueError(
@@ -406,6 +419,25 @@ def load_tenant_profile(path: Path) -> TenantProfile:
             "table",
             f"{company_id}_search_vectors",
         )
+        pgvector_hnsw = dict(pgvector.get("hnsw", {}))
+        pgvector_hnsw_m = int(pgvector_hnsw.get("m", 16))
+        pgvector_hnsw_ef_construction = int(
+            pgvector_hnsw.get("ef_construction", 64)
+        )
+        pgvector_hnsw_ef_search = int(pgvector_hnsw.get("ef_search", 100))
+        if pgvector_hnsw_m <= 0:
+            raise ValueError(
+                f"Tenant {company_id!r} pgvector hnsw.m must be positive"
+            )
+        if pgvector_hnsw_ef_construction <= 0:
+            raise ValueError(
+                f"Tenant {company_id!r} pgvector hnsw.ef_construction "
+                "must be positive"
+            )
+        if pgvector_hnsw_ef_search <= 0:
+            raise ValueError(
+                f"Tenant {company_id!r} pgvector hnsw.ef_search must be positive"
+            )
         if not pgvector_database.database or not pgvector_database.user:
             raise ValueError(
                 f"Tenant {company_id!r} pgvector database and user must be "
@@ -429,6 +461,9 @@ def load_tenant_profile(path: Path) -> TenantProfile:
         pgvector_database=pgvector_database,
         pgvector_table=pgvector_table,
         vector_dimensions=vector_dimensions,
+        pgvector_hnsw_m=pgvector_hnsw_m,
+        pgvector_hnsw_ef_construction=pgvector_hnsw_ef_construction,
+        pgvector_hnsw_ef_search=pgvector_hnsw_ef_search,
     )
 
     payload = dict(raw.get("payload", {}))
