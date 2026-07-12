@@ -288,7 +288,15 @@ chmod +x scripts/bootstrap_ubuntu.sh
 ./scripts/bootstrap_ubuntu.sh
 ```
 
-Only when a tenant uses PostgreSQL/pgvector:
+To install Docker, start the bundled pgvector/Redis services, and create the
+pgvector extension from the same script, set `.env.keys` first and run:
+
+```bash
+START_DOCKER_STACK=1 ./scripts/bootstrap_ubuntu.sh
+```
+
+Only when you are using native PostgreSQL instead of the bundled Docker
+pgvector service:
 
 ```bash
 INSTALL_PGVECTOR=1 ./scripts/bootstrap_ubuntu.sh
@@ -300,6 +308,13 @@ INSTALL_PGVECTOR=1 ./scripts/bootstrap_ubuntu.sh
 cd /path/to/Peronsal_rag
 chmod +x scripts/bootstrap_macos.sh
 ./scripts/bootstrap_macos.sh
+```
+
+To start the bundled Docker pgvector/Redis services from macOS, install and
+start Docker Desktop first, set `.env.keys`, then run:
+
+```bash
+START_DOCKER_STACK=1 ./scripts/bootstrap_macos.sh
 ```
 
 ### 6.3 Manual Python installation

@@ -189,7 +189,21 @@ Ubuntu:
 ./scripts/bootstrap_ubuntu.sh
 ```
 
-Ubuntu with pgvector support:
+Ubuntu with Docker, pgvector, and Redis started by the script:
+
+```bash
+START_DOCKER_STACK=1 ./scripts/bootstrap_ubuntu.sh
+```
+
+macOS with Docker pgvector/Redis started by the script, after Docker Desktop
+is installed and running:
+
+```bash
+START_DOCKER_STACK=1 ./scripts/bootstrap_macos.sh
+```
+
+Native Ubuntu pgvector extension installation is still available when you are
+not using the bundled Docker pgvector service:
 
 ```bash
 INSTALL_PGVECTOR=1 ./scripts/bootstrap_ubuntu.sh
@@ -211,7 +225,9 @@ Docker setup:
 ```bash
 cp .env.example .env
 cp .env.keys.example .env.keys
-docker compose up --build -d redis api
+docker compose up --build -d pgvector redis api
+docker compose exec pgvector psql -U "$POSTGRES_USER" -d "$PGVECTOR_DATABASE" \
+  -c "CREATE EXTENSION IF NOT EXISTS vector;"
 ```
 
 If Ollama should run inside Compose instead of on the host:
