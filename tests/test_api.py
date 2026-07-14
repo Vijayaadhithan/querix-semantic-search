@@ -18,6 +18,7 @@ from api import (
 )
 from gainr_compat import GainrFilterResultRequest
 from mysql_store import MySQLRuntimeConfig
+from postgres_store import PostgresRuntimeConfig
 from rate_limit import TenantRateLimiter
 from tenant_config import (
     TenantCompatibilityConfig,
@@ -104,9 +105,15 @@ def tenant_profile(
             result_id_column="id",
         ),
         storage=TenantStorageConfig(
-            chroma_dir=tmp_path / "chroma",
-            collection_name=f"company_{company_id}",
             bm25_path=tmp_path / company_id / "bm25.sqlite3",
+            pgvector_database=PostgresRuntimeConfig(
+                host="localhost",
+                port=5432,
+                database="vectors",
+                user="vectors",
+                password="secret",
+            ),
+            pgvector_table=f"{company_id}_vectors",
         ),
         payload=TenantPayloadConfig(
             public_fields=tuple(public_fields),

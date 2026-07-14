@@ -30,10 +30,8 @@ GAINR_FILTER_FIELDS = {
 
 @dataclass(frozen=True)
 class TenantStorageConfig:
-    chroma_dir: Path
-    collection_name: str
     bm25_path: Path
-    vector_backend: str = "chroma"
+    vector_backend: str = "pgvector"
     pgvector_database: PostgresRuntimeConfig | None = None
     pgvector_table: str = "search_vectors"
     vector_dimensions: int = 768
@@ -343,20 +341,12 @@ def load_tenant_profile(path: Path) -> TenantProfile:
 
     storage = dict(raw.get("storage", {}))
     vector_backend = str(
-        storage.get("vector_backend", "chroma")
+        storage.get("vector_backend", "pgvector")
     ).strip().casefold()
-    if vector_backend not in {"chroma", "pgvector"}:
+    if vector_backend != "pgvector":
         raise ValueError(
-            f"Tenant {company_id!r} has unsupported vector backend "
-            f"{vector_backend!r}."
-        )
-    collection_name = str(
-        storage.get("collection_name", f"company_{company_id}")
-    ).strip()
-    if not TENANT_ID_RE.fullmatch(collection_name):
-        raise ValueError(
-            f"Tenant {company_id!r} has unsafe Chroma collection name "
-            f"{collection_name!r}."
+            f"Tenant {company_id!r} must use vector_backend 'pgvector'; "
+            f"received {vector_backend!r}."
         )
     pgvector_database = None
     pgvector_table = "search_vectors"
@@ -368,89 +358,81 @@ def load_tenant_profile(path: Path) -> TenantProfile:
         raise ValueError(
             f"Tenant {company_id!r} vector_dimensions must be between 1 and 2000"
         )
-    if vector_backend == "pgvector":
-        pgvector = dict(storage.get("pgvector", {}))
-        use_company_database = bool(
-            pgvector.get("use_company_database", backend == "postgres")
-        )
-        if use_company_database:
-            if not isinstance(mysql, PostgresRuntimeConfig):
-                raise ValueError(
-                    f"Tenant {company_id!r} pgvector use_company_database "
-                    "requires a PostgreSQL company database."
+    pgvector = dict(storage.get("pgvector", {}))
+    use_company_database = bool(
+        pgvector.get("use_company_database", backend == "postgres")
+    )
+    if use_company_database:
+        if not isinstance(mysql, PostgresRuntimeConfig):
+            raise ValueError(
+                f"Tenant {company_id!r} pgvector use_company_database "
+                "requires a PostgreSQL company database."
+            )
+        pgvector_database = mysql
+    else:
+        vector_prefix = "PGVECTOR"
+        pgvector_database = PostgresRuntimeConfig(
+            host=_env_value(
+                pgvector,
+                "host_env",
+                f"{vector_prefix}_HOST",
+                default="localhost",
+            ),
+            port=int(
+                _env_value(
+                    pgvector,
+                    "port_env",
+                    f"{vector_prefix}_PORT",
+                    default="5432",
                 )
-            pgvector_database = mysql
-        else:
-            vector_prefix = "PGVECTOR"
-            pgvector_database = PostgresRuntimeConfig(
-                host=_env_value(
-                    pgvector,
-                    "host_env",
-                    f"{vector_prefix}_HOST",
-                    default="localhost",
-                ),
-                port=int(
-                    _env_value(
-                        pgvector,
-                        "port_env",
-                        f"{vector_prefix}_PORT",
-                        default="5432",
-                    )
-                ),
-                database=_env_value(
-                    pgvector,
-                    "database_env",
-                    f"{vector_prefix}_DATABASE",
-                ),
-                user=_env_value(
-                    pgvector,
-                    "user_env",
-                    f"{vector_prefix}_USER",
-                ),
-                password=_env_value(
-                    pgvector,
-                    "password_env",
-                    f"{vector_prefix}_PASSWORD",
-                ),
-                schema=_identifier(pgvector, "schema", "public"),
-            )
-        pgvector_table = _identifier(
-            pgvector,
-            "table",
-            f"{company_id}_search_vectors",
+            ),
+            database=_env_value(
+                pgvector,
+                "database_env",
+                f"{vector_prefix}_DATABASE",
+            ),
+            user=_env_value(
+                pgvector,
+                "user_env",
+                f"{vector_prefix}_USER",
+            ),
+            password=_env_value(
+                pgvector,
+                "password_env",
+                f"{vector_prefix}_PASSWORD",
+            ),
+            schema=_identifier(pgvector, "schema", "public"),
         )
-        pgvector_hnsw = dict(pgvector.get("hnsw", {}))
-        pgvector_hnsw_m = int(pgvector_hnsw.get("m", 16))
-        pgvector_hnsw_ef_construction = int(
-            pgvector_hnsw.get("ef_construction", 64)
+    pgvector_table = _identifier(
+        pgvector,
+        "table",
+        f"{company_id}_search_vectors",
+    )
+    pgvector_hnsw = dict(pgvector.get("hnsw", {}))
+    pgvector_hnsw_m = int(pgvector_hnsw.get("m", 16))
+    pgvector_hnsw_ef_construction = int(
+        pgvector_hnsw.get("ef_construction", 64)
+    )
+    pgvector_hnsw_ef_search = int(pgvector_hnsw.get("ef_search", 100))
+    if pgvector_hnsw_m <= 0:
+        raise ValueError(
+            f"Tenant {company_id!r} pgvector hnsw.m must be positive"
         )
-        pgvector_hnsw_ef_search = int(pgvector_hnsw.get("ef_search", 100))
-        if pgvector_hnsw_m <= 0:
-            raise ValueError(
-                f"Tenant {company_id!r} pgvector hnsw.m must be positive"
-            )
-        if pgvector_hnsw_ef_construction <= 0:
-            raise ValueError(
-                f"Tenant {company_id!r} pgvector hnsw.ef_construction "
-                "must be positive"
-            )
-        if pgvector_hnsw_ef_search <= 0:
-            raise ValueError(
-                f"Tenant {company_id!r} pgvector hnsw.ef_search must be positive"
-            )
-        if not pgvector_database.database or not pgvector_database.user:
-            raise ValueError(
-                f"Tenant {company_id!r} pgvector database and user must be "
-                "configured."
-            )
+    if pgvector_hnsw_ef_construction <= 0:
+        raise ValueError(
+            f"Tenant {company_id!r} pgvector hnsw.ef_construction "
+            "must be positive"
+        )
+    if pgvector_hnsw_ef_search <= 0:
+        raise ValueError(
+            f"Tenant {company_id!r} pgvector hnsw.ef_search must be positive"
+        )
+    if not pgvector_database.database or not pgvector_database.user:
+        raise ValueError(
+            f"Tenant {company_id!r} pgvector database and user must be "
+            "configured."
+        )
     storage_config = TenantStorageConfig(
-        chroma_dir=_path(
-            storage.get(
-                "chroma_dir",
-                f"storage/companies/{company_id}/chroma",
-            )
-        ),
-        collection_name=collection_name,
         bm25_path=_path(
             storage.get(
                 "bm25_path",
@@ -650,7 +632,6 @@ def discover_tenant_profiles(
 
 
 def validate_tenant_isolation(profiles: Iterable[TenantProfile]) -> None:
-    collection_owners: dict[tuple[Path, str], str] = {}
     pgvector_owners: dict[tuple[str, int, str, str, str], str] = {}
     bm25_owners: dict[Path, str] = {}
     endpoint_owners: dict[str, str] = {}
@@ -663,38 +644,25 @@ def validate_tenant_isolation(profiles: Iterable[TenantProfile]) -> None:
                 f"share API endpoint slug {endpoint_slug!r}."
             )
         endpoint_owners[endpoint_slug] = profile.company_id
-        if profile.storage.vector_backend == "chroma":
-            collection_key = (
-                profile.storage.chroma_dir.resolve(),
-                profile.storage.collection_name,
+        database = profile.storage.pgvector_database
+        if database is None:
+            raise ValueError(
+                f"Tenant {profile.company_id!r} has no pgvector database."
             )
-            if collection_key in collection_owners:
-                raise ValueError(
-                    f"Tenants {collection_owners[collection_key]!r} and "
-                    f"{profile.company_id!r} share Chroma collection "
-                    f"{collection_key[1]!r}."
-                )
-            collection_owners[collection_key] = profile.company_id
-        else:
-            database = profile.storage.pgvector_database
-            if database is None:
-                raise ValueError(
-                    f"Tenant {profile.company_id!r} has no pgvector database."
-                )
-            vector_key = (
-                database.host,
-                database.port,
-                database.database,
-                database.schema,
-                profile.storage.pgvector_table,
+        vector_key = (
+            database.host,
+            database.port,
+            database.database,
+            database.schema,
+            profile.storage.pgvector_table,
+        )
+        if vector_key in pgvector_owners:
+            raise ValueError(
+                f"Tenants {pgvector_owners[vector_key]!r} and "
+                f"{profile.company_id!r} share pgvector table "
+                f"{vector_key[-1]!r}."
             )
-            if vector_key in pgvector_owners:
-                raise ValueError(
-                    f"Tenants {pgvector_owners[vector_key]!r} and "
-                    f"{profile.company_id!r} share pgvector table "
-                    f"{vector_key[-1]!r}."
-                )
-            pgvector_owners[vector_key] = profile.company_id
+        pgvector_owners[vector_key] = profile.company_id
 
         bm25_path = profile.storage.bm25_path.resolve()
         if bm25_path in bm25_owners:

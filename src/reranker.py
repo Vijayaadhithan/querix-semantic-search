@@ -11,17 +11,11 @@ from settings import (
     JINA_RERANK_MODEL,
     JINA_RERANK_URL,
     RERANK_API_TIMEOUT_SECONDS,
-    RERANK_BATCH_SIZE,
     RERANK_FAILURE_COOLDOWN_SECONDS,
-    RERANK_LOCAL_ADAPTER,
-    RERANK_LOCAL_MODEL,
-    RERANK_LOCAL_TRUST_REMOTE_CODE,
     RERANK_MAX_DOCUMENT_CHARS,
-    RERANK_MAX_LENGTH,
     RERANK_MODEL,
     RERANK_PROVIDER_ORDER,
     RERANK_RATE_LIMIT_COOLDOWN_SECONDS,
-    RERANK_USE_FP16,
     VOYAGE_API_KEY,
     VOYAGE_RERANK_LITE_MODEL,
     VOYAGE_RERANK_MODEL,
@@ -81,162 +75,6 @@ class SharedReranker:
             return
         with self._inference_lock:
             yield
-
-
-class TransformerCrossEncoderReranker:
-    def __init__(
-        self,
-        model_name: str,
-        use_fp16: bool = False,
-        batch_size: int = 4,
-        max_length: int = 512,
-        trust_remote_code: bool = False,
-    ):
-        try:
-            import torch
-            from transformers import (
-                AutoModelForSequenceClassification,
-                AutoTokenizer,
-            )
-        except ImportError as exc:
-            raise RuntimeError(
-                "Transformer reranking requires torch and transformers. "
-                "Install requirements.txt first."
-            ) from exc
-
-        if torch.cuda.is_available():
-            self.device = torch.device("cuda")
-        elif torch.backends.mps.is_available():
-            self.device = torch.device("mps")
-        else:
-            self.device = torch.device("cpu")
-
-        self.torch = torch
-        self.batch_size = batch_size
-        self.max_length = max_length
-        try:
-            self.tokenizer = AutoTokenizer.from_pretrained(
-                model_name,
-                local_files_only=True,
-                trust_remote_code=trust_remote_code,
-            )
-            self.model = AutoModelForSequenceClassification.from_pretrained(
-                model_name,
-                local_files_only=True,
-                trust_remote_code=trust_remote_code,
-            )
-        except OSError:
-            self.tokenizer = AutoTokenizer.from_pretrained(
-                model_name,
-                trust_remote_code=trust_remote_code,
-            )
-            self.model = AutoModelForSequenceClassification.from_pretrained(
-                model_name,
-                trust_remote_code=trust_remote_code,
-            )
-        if use_fp16 and self.device.type != "cpu":
-            self.model = self.model.half()
-        self.model = self.model.to(self.device)
-        self.model.eval()
-
-    def compute_score(self, pairs, batch_size=None, max_length=None):
-        if not pairs:
-            return []
-        batch_size = batch_size or self.batch_size
-        max_length = max_length or self.max_length
-        scores = []
-
-        with self.torch.inference_mode():
-            for start in range(0, len(pairs), batch_size):
-                batch = pairs[start : start + batch_size]
-                encoded = self.tokenizer(
-                    [pair[0] for pair in batch],
-                    [pair[1] for pair in batch],
-                    padding=True,
-                    truncation=True,
-                    max_length=max_length,
-                    return_tensors="pt",
-                )
-                encoded = {
-                    key: value.to(self.device)
-                    for key, value in encoded.items()
-                }
-                logits = self.model(**encoded).logits.view(-1).float()
-                scores.extend(logits.cpu().tolist())
-        return scores
-
-
-class JinaListwiseReranker:
-    """Adapter for local Jina listwise reranker models.
-
-    jina-reranker-v3 exposes `model.rerank(query, documents)` through remote
-    model code. It returns sorted results, so this adapter restores scores to
-    the same order as the input pairs expected by the shared rerank function.
-    """
-
-    def __init__(self, model_name: str, trust_remote_code: bool = False):
-        if not trust_remote_code:
-            raise RuntimeError(
-                "Jina listwise reranking requires "
-                "RERANK_LOCAL_TRUST_REMOTE_CODE=true after reviewing the "
-                "model code and license."
-            )
-        try:
-            import torch
-            from transformers import AutoModel
-        except ImportError as exc:
-            raise RuntimeError(
-                "Local Jina reranking requires torch and transformers. "
-                "Install requirements.txt first."
-            ) from exc
-
-        if torch.cuda.is_available():
-            self.device = torch.device("cuda")
-        elif torch.backends.mps.is_available():
-            self.device = torch.device("mps")
-        else:
-            self.device = torch.device("cpu")
-
-        self.model_name = model_name
-        try:
-            self.model = AutoModel.from_pretrained(
-                model_name,
-                trust_remote_code=True,
-                local_files_only=True,
-            )
-        except OSError:
-            self.model = AutoModel.from_pretrained(
-                model_name,
-                trust_remote_code=True,
-            )
-        if hasattr(self.model, "to"):
-            self.model = self.model.to(self.device)
-        if hasattr(self.model, "eval"):
-            self.model.eval()
-
-    def compute_score(self, pairs, batch_size=None, max_length=None):
-        if not pairs:
-            return []
-        queries = {str(pair[0]) for pair in pairs}
-        if len(queries) != 1:
-            raise RuntimeError("Jina listwise reranker requires one query per batch.")
-        query = str(pairs[0][0])
-        documents = [str(pair[1]) for pair in pairs]
-        results = self.model.rerank(query, documents, top_n=len(documents))
-        scores: list[float | None] = [None] * len(documents)
-        for result in results:
-            try:
-                index = int(result["index"])
-                score = float(result["relevance_score"])
-            except (KeyError, TypeError, ValueError) as exc:
-                raise RuntimeError(
-                    "Jina listwise reranker returned an invalid result"
-                ) from exc
-            if 0 <= index < len(scores):
-                scores[index] = score
-        if any(score is None for score in scores):
-            raise RuntimeError("Jina listwise reranker did not score every document.")
-        return [float(score) for score in scores]
 
 
 class HostedReranker:
@@ -320,7 +158,7 @@ class HostedReranker:
         except ValueError:
             return None
 
-    def compute_score(self, pairs, batch_size=None, max_length=None):
+    def compute_score(self, pairs):
         self._state.last_usage = {}
         if not pairs:
             return []
@@ -344,7 +182,7 @@ class HostedReranker:
             allowed, retry_after = self.request_limiter.allow()
             if not allowed:
                 raise RuntimeError(
-                    f"{self.name} local request budget exhausted; "
+                    f"{self.name} provider request budget exhausted; "
                     f"retry_after={retry_after:.1f}s"
                 )
         try:
@@ -412,32 +250,6 @@ class HostedReranker:
         return [float(score) for score in scores]
 
 
-class LazyLocalReranker:
-    name = "local"
-    model = RERANK_LOCAL_MODEL
-
-    def __init__(self):
-        self._ranker = None
-        self._lock = threading.Lock()
-        self._inference_lock = threading.Lock()
-
-    def _ensure(self):
-        if self._ranker is not None:
-            return self._ranker
-        with self._lock:
-            if self._ranker is None:
-                self._ranker = load_local_reranker()
-        return self._ranker
-
-    def compute_score(self, pairs, batch_size=None, max_length=None):
-        with self._inference_lock:
-            return self._ensure().compute_score(
-                pairs,
-                batch_size=batch_size,
-                max_length=max_length,
-            )
-
-
 class FallbackReranker:
     supports_parallel = True
 
@@ -463,18 +275,14 @@ class FallbackReranker:
             labels.append(f"{provider.name}:{model}")
         return " -> ".join(labels)
 
-    def compute_score(self, pairs, batch_size=None, max_length=None):
+    def compute_score(self, pairs):
         self._state.last_attempts = []
         self._state.last_provider = ""
         failures = []
         for provider in self.providers:
             started = time.perf_counter()
             try:
-                scores = provider.compute_score(
-                    pairs,
-                    batch_size=batch_size,
-                    max_length=max_length,
-                )
+                scores = provider.compute_score(pairs)
             except Exception as exc:
                 elapsed_ms = (time.perf_counter() - started) * 1000
                 reason = str(exc).split(":", 1)[-1].strip()
@@ -521,21 +329,6 @@ class FallbackReranker:
         )
 
 
-def load_local_reranker():
-    if RERANK_LOCAL_ADAPTER == "jina-listwise":
-        return JinaListwiseReranker(
-            RERANK_LOCAL_MODEL,
-            trust_remote_code=RERANK_LOCAL_TRUST_REMOTE_CODE,
-        )
-    return TransformerCrossEncoderReranker(
-        RERANK_LOCAL_MODEL,
-        use_fp16=RERANK_USE_FP16,
-        batch_size=RERANK_BATCH_SIZE,
-        max_length=RERANK_MAX_LENGTH,
-        trust_remote_code=RERANK_LOCAL_TRUST_REMOTE_CODE,
-    )
-
-
 def load_reranker():
     providers = []
     for name in RERANK_PROVIDER_ORDER:
@@ -576,18 +369,12 @@ def load_reranker():
                 LOGGER.info(
                     "Jina reranker skipped because JINA_API_KEY is unset."
                 )
-        elif name == "local":
-            providers.append(LazyLocalReranker())
     if not providers:
         raise RuntimeError(
-            "No reranker is configured. Set a hosted API key or include local "
-            "in RERANK_PROVIDER_ORDER."
+            "No hosted reranker is configured. Set JINA_API_KEY or "
+            "VOYAGE_API_KEY for a provider in RERANK_PROVIDER_ORDER."
         )
     return FallbackReranker(providers)
-
-
-# Backward-compatible import for existing callers.
-BGEReranker = TransformerCrossEncoderReranker
 
 
 def rerank(
@@ -601,11 +388,7 @@ def rerank(
         return []
 
     pairs = [[query, candidate["text"]] for candidate in candidates]
-    scores = ranker.compute_score(
-        pairs,
-        batch_size=RERANK_BATCH_SIZE,
-        max_length=RERANK_MAX_LENGTH,
-    )
+    scores = ranker.compute_score(pairs)
     if isinstance(scores, (int, float)):
         scores = [scores]
 

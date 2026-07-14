@@ -12,7 +12,7 @@ from postgres_store import (
 
 
 class PgVectorCollection:
-    """Chroma-compatible subset backed by one isolated pgvector table."""
+    """Collection-style vector interface backed by one isolated pgvector table."""
 
     def __init__(
         self,

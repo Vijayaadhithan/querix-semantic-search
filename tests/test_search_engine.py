@@ -392,6 +392,22 @@ def test_browse_orders_the_complete_filtered_window_by_rental_fee(tmp_path):
         "car-250",
         "car-900",
     ]
+    wanted_under_1000 = index.browse(
+        {
+            "categorical": {"city_name": "Coimbatore"},
+            "max_rental_fee": 1000,
+        },
+        10,
+        sort_order="price_asc",
+        include_unpriced=True,
+    )
+    assert [row["doc_id"] for row in wanted_under_1000] == [
+        "car-250",
+        "car-900",
+        "car-zero",
+        "car-one",
+        "car-null",
+    ]
     index.close()
 
 
@@ -671,6 +687,126 @@ def test_semantic_vector_and_bm25_retrieval_start_in_parallel(
 
     assert result["vector_results"] == []
     assert result["bm25_results"] == []
+    index.close()
+
+
+def test_gainr_vehicle_travel_intent_demotes_vehicle_services():
+    query_plan = {
+        "semantic_query": "vehicle for long distance with comfort and safety",
+        "keyword_query": "vehicle long distance comfort safety",
+    }
+    candidates = [
+        {
+            "id": "detailer",
+            "text": "Car Detailer for Daily Hire",
+            "metadata": {
+                "main_category_name": "Services",
+                "subcategory_name": "Car Detailer",
+            },
+            "fusion_score": 0.05,
+        },
+        {
+            "id": "driver",
+            "text": "Light Motor Vehicle Acting Driver for Daily Hire",
+            "metadata": {
+                "main_category_name": "Automobiles",
+                "subcategory_name": "Acting Driver",
+            },
+            "fusion_score": 0.03,
+        },
+    ]
+
+    adjusted = search_engine._apply_gainr_domain_intent_adjustments(
+        query_plan,
+        candidates,
+        "gainr",
+    )
+
+    assert [candidate["id"] for candidate in adjusted] == [
+        "driver",
+        "detailer",
+    ]
+
+
+def test_gainr_vehicle_phrases_require_word_boundaries():
+    assert search_engine._contains_phrase("car for rent", {"car"})
+    assert not search_engine._contains_phrase("carpet cleaning", {"car"})
+    assert not search_engine._contains_phrase("advanced service", {"van"})
+
+
+def test_gainr_vehicle_service_query_is_not_demoted():
+    query_plan = {
+        "semantic_query": "car detailer in Mumbai",
+        "keyword_query": "car detailer Mumbai",
+    }
+    candidates = [
+        {
+            "id": "detailer",
+            "text": "Car Detailer for Daily Hire",
+            "metadata": {"main_category_name": "Services"},
+            "fusion_score": 0.05,
+        },
+        {
+            "id": "driver",
+            "text": "Light Motor Vehicle Acting Driver for Daily Hire",
+            "metadata": {"main_category_name": "Automobiles"},
+            "fusion_score": 0.03,
+        },
+    ]
+
+    adjusted = search_engine._apply_gainr_domain_intent_adjustments(
+        query_plan,
+        candidates,
+        "gainr",
+    )
+
+    assert adjusted == candidates
+
+
+def test_gainr_vehicle_intent_context_is_passed_to_reranker(tmp_path):
+    index = build_index(tmp_path / "gainr-rerank-context.sqlite3")
+
+    class CapturingRanker:
+        model_label = "test-reranker"
+        last_provider = "local"
+        last_attempts = []
+
+        def __init__(self):
+            self.queries = []
+
+        def compute_score(self, pairs, **_kwargs):
+            self.queries.extend(pair[0] for pair in pairs)
+            return [1.0 for _pair in pairs]
+
+    ranker = CapturingRanker()
+    engine = ProductSearchEngine(
+        collection=FakeCollection(),
+        bm25_index=index,
+        ranker=ranker,
+        company_id="gainr",
+    )
+    query_plan = {
+        "semantic_query": "vehicle for long distance with comfort and safety",
+        "keyword_query": "vehicle long distance comfort safety",
+        "inferred_categories": {},
+    }
+    candidates = [
+        {
+            "id": "driver",
+            "text": "Light Motor Vehicle Acting Driver for Daily Hire",
+            "metadata": {"content_title": "Driver"},
+        }
+    ]
+
+    engine.rank(
+        "vehicle for long distance with comfort and safety",
+        candidates,
+        query_plan=query_plan,
+        top_k=1,
+    )
+
+    assert "Gainr domain intent" in ranker.queries[0]
+    assert "Demote services about vehicles" in ranker.queries[0]
     index.close()
 
 

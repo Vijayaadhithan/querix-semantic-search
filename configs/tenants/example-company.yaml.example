@@ -69,8 +69,6 @@ storage:
       m: 16
       ef_construction: 64
       ef_search: 100
-  chroma_dir: storage/companies/acme/chroma
-  collection_name: company_acme
   bm25_path: storage/companies/acme/bm25.sqlite3
 
 payload:

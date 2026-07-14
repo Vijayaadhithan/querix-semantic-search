@@ -1,4 +1,3 @@
-from chroma_store import chroma_source_counts, get_collection
 from pgvector_store import PgVectorCollection
 from tenant_config import TenantProfile
 
@@ -9,42 +8,24 @@ def get_tenant_vector_collection(
     create: bool = False,
 ):
     storage = profile.storage
-    if storage.vector_backend == "chroma":
-        _client, collection = get_collection(
-            create=create,
-            chroma_dir=storage.chroma_dir,
-            collection_name=storage.collection_name,
+    if storage.pgvector_database is None:
+        raise RuntimeError(
+            f"Tenant {profile.company_id!r} has no pgvector database config."
         )
-        return collection
-    if storage.vector_backend == "pgvector":
-        if storage.pgvector_database is None:
-            raise RuntimeError(
-                f"Tenant {profile.company_id!r} has no pgvector database config."
-            )
-        return PgVectorCollection(
-            storage.pgvector_database,
-            storage.pgvector_table,
-            storage.vector_dimensions,
-            hnsw_m=storage.pgvector_hnsw_m,
-            hnsw_ef_construction=storage.pgvector_hnsw_ef_construction,
-            hnsw_ef_search=storage.pgvector_hnsw_ef_search,
-            create=create,
-        )
-    raise RuntimeError(
-        f"Unsupported vector backend {storage.vector_backend!r} for "
-        f"tenant {profile.company_id!r}."
+    return PgVectorCollection(
+        storage.pgvector_database,
+        storage.pgvector_table,
+        storage.vector_dimensions,
+        hnsw_m=storage.pgvector_hnsw_m,
+        hnsw_ef_construction=storage.pgvector_hnsw_ef_construction,
+        hnsw_ef_search=storage.pgvector_hnsw_ef_search,
+        create=create,
     )
 
 
 def list_tenant_vectors(profile: TenantProfile) -> None:
-    if profile.storage.vector_backend == "chroma":
-        total, counts = chroma_source_counts(
-            chroma_dir=profile.storage.chroma_dir,
-            collection_name=profile.storage.collection_name,
-        )
-    else:
-        collection = get_tenant_vector_collection(profile)
-        total, counts = collection.source_counts()
+    collection = get_tenant_vector_collection(profile)
+    total, counts = collection.source_counts()
     print(
         f"Company: {profile.company_id} | backend: "
         f"{profile.storage.vector_backend} | vectors: {total}"

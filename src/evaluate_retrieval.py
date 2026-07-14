@@ -100,6 +100,7 @@ def main() -> None:
     parser.add_argument("--limit", type=int, help="run only the first N cases")
     parser.add_argument(
         "--company",
+        required=True,
         help="tenant profile slug; uses that company's isolated indexes and DB",
     )
     args = parser.parse_args()
@@ -108,17 +109,16 @@ def main() -> None:
     if args.limit is not None:
         cases = cases[: args.limit]
 
-    if args.company:
-        profiles = discover_tenant_profiles()
-        try:
-            profile = profiles[args.company]
-        except KeyError as exc:
-            available = ", ".join(sorted(profiles)) or "none"
-            raise SystemExit(
-                f"Unknown company {args.company!r}; available: {available}"
-            ) from exc
-        index = PersistentBM25Index(profile.storage.bm25_path)
-        engine = ProductSearchEngine(
+    profiles = discover_tenant_profiles()
+    try:
+        profile = profiles[args.company]
+    except KeyError as exc:
+        available = ", ".join(sorted(profiles)) or "none"
+        raise SystemExit(
+            f"Unknown company {args.company!r}; available: {available}"
+        ) from exc
+    index = PersistentBM25Index(profile.storage.bm25_path)
+    engine = ProductSearchEngine(
             collection=get_tenant_vector_collection(profile),
             bm25_index=index,
             company_id=profile.company_id,
@@ -126,6 +126,7 @@ def main() -> None:
             close_bm25_index=True,
             planner_enabled=profile.planner_enabled,
             planner_prompt_context=profile.planner_prompt_context,
+            vector_post_filter_metadata=False,
             semantic_related_tail_enabled=(
                 profile.retrieval.semantic_related_tail_enabled
             ),
@@ -140,8 +141,6 @@ def main() -> None:
                 profile.retrieval.reranker_min_score_by_provider
             ),
         )
-    else:
-        engine = ProductSearchEngine()
     passed = 0
     reciprocal_ranks = []
     try:

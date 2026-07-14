@@ -1,6 +1,7 @@
 import hashlib
 import json
 import logging
+import re
 import threading
 import time
 import uuid
@@ -19,6 +20,7 @@ from database_store import (
 from gemini_client import last_gemini_metrics
 from ollama_client import last_ollama_embedding_metrics
 from query_planner import (
+    WANTED_AD_TYPE,
     build_query_filter_catalog,
     default_query_plan,
     deterministic_filter_query_plan,
@@ -32,7 +34,6 @@ from retrieval import (
     bm25_search,
     extract_product_ids,
     filter_candidates_by_ad_type,
-    load_collection,
     merge_results,
     related_tail_product_ids,
     vector_search,
@@ -41,6 +42,7 @@ from settings import (
     BM25_TOP_K,
     EMBED_MODEL,
     HYBRID_CANDIDATE_K,
+    JINA_RERANK_MODEL,
     UNPRICED_RENTAL_FEE_CEILING,
     MYSQL_RESULT_ID_COLUMN,
     MYSQL_SEARCH_ID_COLUMN,
@@ -54,18 +56,200 @@ from settings import (
     RESULT_CACHE_ENABLED,
     RESULT_CACHE_TTL_SECONDS,
     RERANK_CANDIDATE_K,
-    RERANK_LOCAL_ADAPTER,
-    RERANK_LOCAL_MODEL,
+    RERANK_MAX_DOCUMENT_CHARS,
     RETRIEVAL_OVERFETCH_FACTOR,
     RERANK_MODEL,
     RERANK_PROVIDER_ORDER,
     RERANK_TOP_K,
     VECTOR_CANDIDATE_K,
     VECTOR_TOP_K,
+    VOYAGE_RERANK_LITE_MODEL,
+    VOYAGE_RERANK_MODEL,
 )
 
 LOGGER = logging.getLogger("uvicorn.error")
-RESULT_CACHE_SCHEMA_VERSION = "v9"
+RESULT_CACHE_SCHEMA_VERSION = "v11"
+
+GAINR_VEHICLE_INTENT_TERMS = {
+    "automobile",
+    "automobiles",
+    "bike",
+    "cab",
+    "car",
+    "driver",
+    "suv",
+    "taxi",
+    "traveller",
+    "transport",
+    "travel",
+    "vehicle",
+    "van",
+}
+GAINR_VEHICLE_USE_TERMS = {
+    "comfort",
+    "comfortable",
+    "daily",
+    "day",
+    "distance",
+    "drive",
+    "hire",
+    "long",
+    "monthly",
+    "ride",
+    "rent",
+    "rental",
+    "safe",
+    "safety",
+    "tour",
+    "trip",
+    "weekly",
+}
+GAINR_VEHICLE_SERVICE_TERMS = {
+    "buffing",
+    "cleaning",
+    "consultant",
+    "detailing",
+    "detailer",
+    "insurance",
+    "mechanic",
+    "modification",
+    "modifier",
+    "polish",
+    "polisher",
+    "repair",
+    "service",
+    "wash",
+}
+GAINR_USABLE_VEHICLE_TERMS = {
+    "acting driver",
+    "bike",
+    "bus",
+    "cab",
+    "car",
+    "chauffeur",
+    "driver",
+    "innova",
+    "light motor vehicle",
+    "mini truck",
+    "pickup",
+    "sedan",
+    "suv",
+    "taxi",
+    "tempo traveller",
+    "tourist vehicle",
+    "traveller",
+    "truck",
+    "van",
+}
+
+
+def _tokens(text: str) -> set[str]:
+    return set(re.findall(r"[a-z0-9]+", text.casefold()))
+
+
+def _contains_phrase(text: str, phrases: set[str]) -> bool:
+    normalized = " ".join(text.casefold().split())
+    return any(
+        re.search(
+            r"(?<!\w)"
+            + r"\s+".join(
+                re.escape(token)
+                for token in phrase.casefold().split()
+            )
+            + r"(?!\w)",
+            normalized,
+        )
+        for phrase in phrases
+        if phrase.strip()
+    )
+
+
+def _gainr_vehicle_travel_intent(query_plan: dict | None) -> bool:
+    if not isinstance(query_plan, dict):
+        return False
+    query_text = " ".join(
+        str(query_plan.get(key) or "")
+        for key in ("semantic_query", "keyword_query")
+    )
+    query_tokens = _tokens(query_text)
+    if query_tokens & GAINR_VEHICLE_SERVICE_TERMS:
+        return False
+    if not (query_tokens & GAINR_VEHICLE_INTENT_TERMS):
+        return False
+    return bool(query_tokens & GAINR_VEHICLE_USE_TERMS) or _contains_phrase(
+        query_text,
+        {"long distance", "outstation", "road trip"},
+    )
+
+
+def _candidate_text(candidate: dict) -> str:
+    metadata = candidate.get("metadata") or {}
+    parts = [str(candidate.get("text") or "")]
+    for key in (
+        "content_title",
+        "title",
+        "main_category_name",
+        "subcategory_name",
+        "description",
+    ):
+        value = metadata.get(key)
+        if value not in (None, ""):
+            parts.append(str(value))
+    return " ".join(parts)
+
+
+def _apply_gainr_domain_intent_adjustments(
+    query_plan: dict,
+    candidates: list[dict],
+    company_id: str | None = None,
+) -> list[dict]:
+    if company_id != "gainr":
+        return candidates
+    if not _gainr_vehicle_travel_intent(query_plan):
+        return candidates
+
+    adjusted = []
+    for candidate in candidates:
+        item = dict(candidate)
+        text = _candidate_text(item).casefold()
+        metadata = item.get("metadata") or {}
+        score = float(item.get("fusion_score") or 0.0)
+
+        if str(metadata.get("main_category_name") or "").casefold() == (
+            "automobiles"
+        ):
+            score += 0.035
+        if _contains_phrase(text, GAINR_USABLE_VEHICLE_TERMS):
+            score += 0.025
+        if _contains_phrase(text, GAINR_VEHICLE_SERVICE_TERMS):
+            score -= 0.08
+
+        item["fusion_score"] = score
+        adjusted.append(item)
+
+    return sorted(
+        adjusted,
+        key=lambda item: float(item.get("fusion_score") or 0.0),
+        reverse=True,
+    )
+
+
+def _gainr_rerank_context(
+    query_plan: dict | None,
+    company_id: str | None = None,
+) -> str | None:
+    if company_id != "gainr":
+        return None
+    if not _gainr_vehicle_travel_intent(query_plan):
+        return None
+    return (
+        "Gainr domain intent: the user wants a usable vehicle or driver for "
+        "travel/transport. Prefer car, cab, driver, van, bus, traveller, bike, "
+        "truck, or other vehicle rental listings. Demote services about "
+        "vehicles such as detailing, polishing, modification, insurance, "
+        "cleaning, repair, or consulting unless the user explicitly asks for "
+        "those services."
+    )
 
 
 def active_filter_names(filters: dict) -> list[str]:
@@ -103,7 +287,11 @@ class ProductSearchEngine:
         reranker_relative_score_floor: float = 0.0,
         reranker_min_score_by_provider: dict[str, float] | None = None,
     ):
-        self.collection = collection or load_collection()
+        if collection is None:
+            raise ValueError(
+                "A tenant pgvector collection is required to build the search engine."
+            )
+        self.collection = collection
         self._owns_bm25_index = bm25_index is None or close_bm25_index
         self.bm25_index = bm25_index or PersistentBM25Index()
         self.query_provider = query_provider
@@ -233,9 +421,12 @@ class ProductSearchEngine:
             str(limit),
             str(ranking_window),
             RERANK_MODEL,
-            RERANK_LOCAL_MODEL,
-            RERANK_LOCAL_ADAPTER,
             ",".join(RERANK_PROVIDER_ORDER),
+            JINA_RERANK_MODEL,
+            VOYAGE_RERANK_MODEL,
+            VOYAGE_RERANK_LITE_MODEL,
+            str(RERANK_MAX_DOCUMENT_CHARS),
+            str(HYBRID_CANDIDATE_K),
             str(RERANK_CANDIDATE_K),
             str(PRIMARY_RANKED_K),
             json.dumps(
@@ -584,6 +775,16 @@ class ProductSearchEngine:
         allowed_ad_types: set[str] | None = None,
         strict_candidate_limit: bool = False,
     ) -> dict:
+        expected_types = (
+            {str(value) for value in allowed_ad_types}
+            if allowed_ad_types is not None
+            else {
+                WANTED_AD_TYPE
+                if query_plan.get("target_ad_type") == "wanted"
+                else "1"
+            }
+        )
+        include_unpriced = expected_types == {WANTED_AD_TYPE}
         extended_window = (
             candidate_limit is not None and candidate_limit > RERANK_TOP_K
         )
@@ -632,6 +833,7 @@ class ProductSearchEngine:
                 embedding_provider=self.embedding_provider,
                 company_id=self.company_id,
                 post_filter_metadata=self.vector_post_filter_metadata,
+                include_unpriced=include_unpriced,
             )
             return results, time.perf_counter() - started
 
@@ -643,6 +845,7 @@ class ProductSearchEngine:
                 self.collection,
                 resolved_filters,
                 bm25_top_k,
+                include_unpriced=include_unpriced,
             )
             return results, time.perf_counter() - started
 
@@ -659,6 +862,11 @@ class ProductSearchEngine:
             vector_results,
             bm25_results,
             query_plan.get("inferred_categories"),
+        )
+        merged = _apply_gainr_domain_intent_adjustments(
+            query_plan,
+            merged,
+            self.company_id,
         )
         # Apply ad intent before truncating the candidate window. Otherwise a
         # page can be short merely because unwanted ad types occupied the K
@@ -770,6 +978,12 @@ class ProductSearchEngine:
                     "Possible catalog categories: "
                     + ", ".join(dict.fromkeys(category_hints))
                 )
+            domain_context = _gainr_rerank_context(
+                query_plan,
+                self.company_id,
+            )
+            if domain_context:
+                context.append(domain_context)
             if context:
                 ranking_query = query + "\n" + "\n".join(context)
         started = time.perf_counter()

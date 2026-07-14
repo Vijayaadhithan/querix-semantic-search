@@ -961,7 +961,7 @@ def test_query_fallback_recovers_misspelled_city(tmp_path):
     index.close()
 
 
-def test_bge_rerank_adapter_orders_by_cross_encoder_score():
+def test_rerank_adapter_orders_by_provider_score():
     candidates = [
         {"id": "1", "text": "first passage", "metadata": {"id": 1}},
         {"id": "2", "text": "best passage", "metadata": {"id": 2}},

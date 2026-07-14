@@ -15,17 +15,19 @@ services:
       PGVECTOR_HOST: pgvector
       PGVECTOR_PORT: 5432
       API_TENANT_ENGINE_CACHE_SIZE: ${API_TENANT_ENGINE_CACHE_SIZE:-1}
-      API_TENANT_MAX_CONCURRENT_SEARCHES: ${API_TENANT_MAX_CONCURRENT_SEARCHES:-2}
+      API_TENANT_MAX_CONCURRENT_SEARCHES: ${API_TENANT_MAX_CONCURRENT_SEARCHES:-1}
     ports:
-      - "${API_PORT:-8000}:8000"
+      - "127.0.0.1:${API_PORT:-8000}:8000"
     volumes:
       - ./storage:/app/storage
       - ./configs/tenants:/app/configs/tenants:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
-      - redis
-      - pgvector
+      redis:
+        condition: service_healthy
+      pgvector:
+        condition: service_healthy
     restart: unless-stopped
 
   pgvector:
@@ -40,7 +42,12 @@ services:
     volumes:
       - pgvector-data:/var/lib/postgresql/data
     ports:
-      - "${PGVECTOR_PORT:-5432}:5432"
+      - "127.0.0.1:${PGVECTOR_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
     restart: unless-stopped
 
   redis:
@@ -48,6 +55,11 @@ services:
     command: ["redis-server", "--appendonly", "yes"]
     volumes:
       - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
     restart: unless-stopped
 
   ollama:
@@ -57,7 +69,7 @@ services:
     volumes:
       - ollama-data:/root/.ollama
     ports:
-      - "11434:11434"
+      - "127.0.0.1:11434:11434"
     restart: unless-stopped
 
 volumes:

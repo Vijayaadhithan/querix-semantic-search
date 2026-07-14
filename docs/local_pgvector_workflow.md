@@ -1,78 +1,89 @@
-# Local pgvector workflow
+# Local pgvector Workflow
 
-This is the local order for Gainr after switching vectors from Chroma to
-pgvector. BM25 remains the local SQLite lexical index.
+This workflow validates a tenant profile, builds local indexes, and runs a search without production-specific hostnames or credentials.
 
-## Stop local Docker services
+## Prerequisites
 
-```bash
-bash scripts/local_stop_docker.sh
-```
+- Python environment with `requirements.txt` installed
+- PostgreSQL with the `vector` extension
+- Redis
+- Ollama with the configured embedding model
+- A tenant YAML under `configs/tenants/`
+- Non-secret values in `.env` and secrets in `.env.keys`
 
-This keeps Docker volumes. It does not delete pgvector data.
-
-## Start and check local dependencies
-
-Make sure `.env` and `.env.keys` are configured first.
+Set a reusable tenant slug:
 
 ```bash
-bash scripts/local_start_check.sh
+export COMPANY_ID=<tenant-slug>
 ```
 
-This starts `pgvector` and `redis`, creates the `vector` extension, checks
-Python connectivity to pgvector, pulls `embeddinggemma:latest`, and preloads
-the configured local reranker.
-
-## Continue embedding/indexing
-
-Use this when a previous ingestion was interrupted or when source rows changed:
+## Start dependencies
 
 ```bash
-bash scripts/local_resume_gainr_index.sh resume
+docker compose up -d pgvector redis
+ollama pull embeddinggemma:latest
 ```
 
-Resume mode does not clear existing rows. It uses the stored content hashes and
-embeds only changed or missing rows.
-
-## Full rebuild
-
-Use this once after changing vector backend, embedding model, or when you want
-to force a clean local index:
+If Ollama should also run in Docker:
 
 ```bash
-bash scripts/local_resume_gainr_index.sh replace
+docker compose --profile ollama up -d ollama
+docker compose exec ollama ollama pull embeddinggemma:latest
 ```
 
-## Test API
+## Validate source access
+
+This command is read-only and does not generate embeddings:
 
 ```bash
-.venv/bin/python scripts/doctor.py --company gainr
-.venv/bin/python src/evaluate_queries.py --company gainr
-.venv/bin/python src/evaluate_retrieval.py --company gainr
-PGVECTOR_PORT=15432 .venv/bin/python src/run_api.py
+.venv/bin/python src/ingest.py \
+  --company "$COMPANY_ID" \
+  --database \
+  --check \
+  --limit 10
 ```
 
-In another terminal:
+## Build or resume indexes
+
+Incremental ingestion safely skips unchanged vectors:
 
 ```bash
-set -a
-source .env
-source .env.keys
-set +a
-
-curl -sS -X POST http://127.0.0.1:8000/api/v1/gainr/filter-result \
-  -H 'Content-Type: application/json' \
-  -H "X-API-Key: $GAINR_API_KEY" \
-  -d '{"searchTerm":"comfortable car for a day in Chennai","filter":{},"page":1}'
+.venv/bin/python src/ingest.py \
+  --company "$COMPANY_ID" \
+  --database
 ```
 
-## Latency test
+After a complete source scan, reconcile source deletions:
 
 ```bash
-.venv/bin/python scripts/load_test.py \
-  --company gainr \
-  --requests 20 \
-  --concurrency 2 \
-  --query "comfortable car for a day in Chennai" \
-  --query "teacher for home lessons in Chennai for one hour"
+.venv/bin/python src/ingest.py \
+  --company "$COMPANY_ID" \
+  --database \
+  --mysql-reconcile-deletions
 ```
+
+## Verify
+
+```bash
+.venv/bin/python src/ingest.py --company "$COMPANY_ID" --list
+.venv/bin/python scripts/doctor.py --company "$COMPANY_ID" --strict
+.venv/bin/pytest -q
+```
+
+Run a one-shot search:
+
+```bash
+.venv/bin/python src/chat.py \
+  --company "$COMPANY_ID" \
+  --query "example product query" \
+  --limit 10
+```
+
+## Evaluate changes
+
+```bash
+.venv/bin/python src/evaluate_queries.py --company "$COMPANY_ID"
+.venv/bin/python src/evaluate_retrieval.py --company "$COMPANY_ID"
+```
+
+Use a reviewed tenant-specific case file when changing embeddings, candidate windows, reranking models, or ranking policy. Compare pass rate, mean reciprocal rank, wall time, and peak memory before adopting the change.

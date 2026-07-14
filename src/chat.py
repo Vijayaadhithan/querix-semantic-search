@@ -7,57 +7,39 @@ from api import (
     public_product,
 )
 from bm25_index import PersistentBM25Index
-from mysql_store import (
-    fetch_product_types_by_ids,
-    fetch_products_by_ids,
-    mysql_connection,
-    mysql_source_name,
-    quote_mysql_identifier,
-    require_pymysql,
-)
+from mysql_store import fetch_products_by_ids
 from query_planner import (
-    build_query_filter_catalog,
     enrich_query_plan,
     extract_duration_filter,
     extract_price_constraints,
-    extract_query_plan,
     infer_target_ad_type,
-    normalize_filter_value,
     parse_query_plan,
     query_filter_value_index,
     resolve_query_filters,
 )
-from reranker import load_reranker, rerank
+from reranker import rerank
 from retrieval import (
-    bm25_search,
     extract_product_ids,
     filter_candidates_by_ad_type,
-    load_collection,
     merge_results,
     metadata_matches_filters,
-    vector_search,
 )
 from search_engine import ProductSearchEngine
 from settings import (
     APP_NAME,
-    MYSQL_DATABASE,
     MYSQL_RESULT_ID_COLUMN,
     MYSQL_RESULT_TABLE,
     MYSQL_SEARCH_ID_COLUMN,
     MYSQL_TABLE,
-    QUERY_EXTRACT_MODEL,
-    RERANK_MODEL,
 )
 from tenant_config import discover_tenant_profiles
 from vector_store import get_tenant_vector_collection
 
+# Keep the imports above available for older callers of `chat`; the executable
+# CLI now delegates the implementation to the focused modules directly.
 
-def build_engine(company: str | None = None) -> ProductSearchEngine:
-    if company is None:
-        engine = ProductSearchEngine()
-        engine.chat_public_fields = PUBLIC_PRODUCT_FIELDS
-        engine.chat_field_mapping = {}
-        return engine
+
+def build_engine(company: str) -> ProductSearchEngine:
     profiles = discover_tenant_profiles()
     try:
         profile = profiles[company]
@@ -74,6 +56,7 @@ def build_engine(company: str | None = None) -> ProductSearchEngine:
         close_bm25_index=True,
         planner_enabled=profile.planner_enabled,
         planner_prompt_context=profile.planner_prompt_context,
+        vector_post_filter_metadata=False,
         semantic_related_tail_enabled=(
             profile.retrieval.semantic_related_tail_enabled
         ),
@@ -142,7 +125,8 @@ def main():
     )
     parser.add_argument(
         "--company",
-        help="tenant profile slug; omit to use the legacy local indexes",
+        required=True,
+        help="tenant profile slug under configs/tenants",
     )
     parser.add_argument(
         "--query",
@@ -158,16 +142,11 @@ def main():
     if args.limit <= 0:
         raise RuntimeError("--limit must be greater than zero.")
 
-    backend_label = f"company {args.company}" if args.company else "local"
-    print(f"Opening {backend_label} search indexes...", flush=True)
+    print(f"Opening company {args.company} search indexes...", flush=True)
     engine = build_engine(args.company)
     bm25_count = engine.bm25_index.count()
     if not bm25_count:
-        command = (
-            f"python src/ingest.py --company {args.company} --mysql-bm25-only"
-            if args.company
-            else "python src/ingest.py --mysql-bm25-only"
-        )
+        command = f"python src/ingest.py --company {args.company} --bm25-only"
         print(
             "No persistent BM25 product index found. Run: "
             + command

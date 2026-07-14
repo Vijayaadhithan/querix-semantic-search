@@ -42,8 +42,6 @@ def profile(tmp_path, **compatibility_overrides):
             result_id_column="id",
         ),
         storage=TenantStorageConfig(
-            chroma_dir=tmp_path / "chroma",
-            collection_name="company_gainr",
             bm25_path=tmp_path / "bm25.sqlite3",
         ),
         payload=TenantPayloadConfig(public_fields=("id",)),
@@ -382,6 +380,27 @@ def test_gainr_repository_does_not_filter_ad_status(tmp_path):
 
     assert "a.status" not in where_clause
     assert params == ["1"]
+
+
+def test_gainr_wanted_budget_keeps_rows_without_a_published_budget(tmp_path):
+    repository = GainrDatabaseRepository(profile(tmp_path))
+
+    wanted_clause, wanted_params = repository._where_clause(
+        {"categorical": {}, "max_rental_fee": 1000},
+        GainrFilterResultRequest().filter,
+        allowed_ad_types={"2"},
+    )
+    offer_clause, offer_params = repository._where_clause(
+        {"categorical": {}, "max_rental_fee": 1000},
+        GainrFilterResultRequest().filter,
+        allowed_ad_types={"1"},
+    )
+
+    assert "a.type = %s" in wanted_clause
+    assert "sr.rental_fee IS NULL OR sr.rental_fee <= 1" in wanted_clause
+    assert wanted_params == ["2", 1000, "2"]
+    assert "sr.rental_fee IS NULL" not in offer_clause
+    assert offer_params == [1000, "1"]
 
 
 def test_fee_range_keys_can_be_changed_per_gainr_config(tmp_path):

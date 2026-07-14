@@ -46,8 +46,15 @@ database:
     mode_env: {prefix}_DB_TLS_MODE
     ca_file_env: {prefix}_DB_TLS_CA_FILE
 storage:
-  chroma_dir: {chroma_dir}
-  collection_name: company_{company}
+  vector_backend: pgvector
+  vector_dimensions: 768
+  pgvector:
+    use_company_database: {use_company_database}
+    table: {company}_vectors
+    hnsw:
+      m: 12
+      ef_construction: 48
+      ef_search: 80
   bm25_path: {bm25_path}
 payload:
   public_fields:
@@ -66,36 +73,18 @@ def write_profile(
     company: str,
     *,
     backend: str = "mysql",
-    vector_backend: str = "chroma",
+    vector_backend: str = "pgvector",
 ) -> None:
     prefix = company.upper()
     (tmp_path / f"{company}.yaml").write_text(
         PROFILE.replace(
             "database:\n",
             f"database:\n  backend: {backend}\n",
-        ).replace(
-            "storage:\n",
-            (
-                "storage:\n"
-                f"  vector_backend: {vector_backend}\n"
-                + (
-                    "  vector_dimensions: 768\n"
-                    "  pgvector:\n"
-                    "    use_company_database: true\n"
-                    "    table: alpha_vectors\n"
-                    "    hnsw:\n"
-                    "      m: 12\n"
-                    "      ef_construction: 48\n"
-                    "      ef_search: 80\n"
-                    if vector_backend == "pgvector"
-                    else ""
-                )
-            ),
         ).format(
             company=company,
             key_env=f"{prefix}_API_KEY",
             prefix=prefix,
-            chroma_dir=tmp_path / "chroma",
+            use_company_database=str(backend == "postgres").lower(),
             bm25_path=tmp_path / company / "bm25.sqlite3",
         ),
         encoding="utf-8",
@@ -109,6 +98,11 @@ def set_database_environment(monkeypatch, company: str) -> None:
     monkeypatch.setenv(f"{prefix}_DB_NAME", f"db_{company}")
     monkeypatch.setenv(f"{prefix}_DB_USER", company)
     monkeypatch.setenv(f"{prefix}_DB_PASSWORD", "secret")
+    monkeypatch.setenv("PGVECTOR_HOST", "localhost")
+    monkeypatch.setenv("PGVECTOR_PORT", "5432")
+    monkeypatch.setenv("PGVECTOR_DATABASE", "vectors")
+    monkeypatch.setenv("PGVECTOR_USER", "vectors")
+    monkeypatch.setenv("PGVECTOR_PASSWORD", "secret")
 
 
 def test_tenant_profiles_resolve_separate_storage_and_api_keys(
@@ -125,7 +119,7 @@ def test_tenant_profiles_resolve_separate_storage_and_api_keys(
         api_keys={"alpha": ["alpha-key"], "beta": ["beta-key"]},
     )
 
-    assert profiles["alpha"].storage.collection_name == "company_alpha"
+    assert profiles["alpha"].storage.pgvector_table == "alpha_vectors"
     assert profiles["alpha"].storage.bm25_path != profiles["beta"].storage.bm25_path
     assert profiles["alpha"].endpoint_slug == "alpha"
     assert profiles["alpha"].payload.request_mapping["query"] == "query"

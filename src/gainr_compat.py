@@ -401,16 +401,26 @@ class GainrDatabaseRepository:
                 )
         minimum = resolved_filters.get("min_rental_fee")
         maximum = resolved_filters.get("max_rental_fee")
-        if minimum is not None:
-            conditions.extend(
-                ("sr.rental_fee > 1", "sr.rental_fee >= %s")
-            )
-            params.append(minimum)
-        if maximum is not None:
-            if minimum is None:
-                conditions.append("sr.rental_fee > 1")
-            conditions.append("sr.rental_fee <= %s")
-            params.append(maximum)
+        if minimum is not None or maximum is not None:
+            priced_conditions = ["sr.rental_fee > 1"]
+            priced_params = []
+            if minimum is not None:
+                priced_conditions.append("sr.rental_fee >= %s")
+                priced_params.append(minimum)
+            if maximum is not None:
+                priced_conditions.append("sr.rental_fee <= %s")
+                priced_params.append(maximum)
+            priced_clause = " AND ".join(priced_conditions)
+            if allowed_ad_types is not None and "2" in allowed_ad_types:
+                conditions.append(
+                    "((a.type = %s AND "
+                    "(sr.rental_fee IS NULL OR sr.rental_fee <= 1)) "
+                    f"OR ({priced_clause}))"
+                )
+                params.append("2")
+            else:
+                conditions.append(f"({priced_clause})")
+            params.extend(priced_params)
         if allowed_ad_types is not None:
             self._append_condition(
                 conditions,

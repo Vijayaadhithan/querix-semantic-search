@@ -1,5 +1,4 @@
 app_name: Local Data Assistant
-collection_name: local_data
 ollama:
   # Keep the embedding model resident until Ollama is stopped.
   keep_alive: -1
@@ -33,26 +32,21 @@ embedding:
   similarity: cosine
   normalize: true
 
-chunking:
-  chunk_size: 512
-  chunk_overlap: 80
-
 retrieval:
   # Source rows commonly use 0 or 1 as "price not supplied". Such rows remain
   # searchable but rank after every genuine price in price-sorted searches.
   unpriced_rental_fee_ceiling: 1
   vector_candidate_k: 100
-  # Chroma's metadata-filtered HNSW path is very slow on the 250k-row Gainr
-  # collection. Retrieve a bounded unfiltered window and enforce the same
-  # metadata constraints in memory.
+  # A bounded post-filter window can avoid expensive complex metadata
+  # predicates while preserving exact checks in the retrieval layer.
   vector_post_filter_overfetch_factor: 10
   vector_post_filter_max_candidates: 2000
   vector_top_k: 30
   bm25_top_k: 30
-  hybrid_candidate_k: 60
-  # Rerank the 60 strongest fused candidates.
-  rerank_candidate_k: 60
-  primary_ranked_k: 60
+  hybrid_candidate_k: 40
+  # Keep one complete 20-result page inside the hosted semantic ranking window.
+  rerank_candidate_k: 20
+  primary_ranked_k: 20
   related_tail_enabled: true
   # Scroll searches over-fetch each retrieval source before reranking. This
   # prevents top-K from becoming a hard end-of-results cutoff.
@@ -62,23 +56,15 @@ retrieval:
   bm25_weight: 1.0
   soft_category_boost: 0.005
   final_top_k: 10
-  reranker_model: Alibaba-NLP/gte-reranker-modernbert-base
-  # Local reranking is the default for the 8 GB Hostinger test host. Keep
-  # concurrency low because every local model stays resident in process memory.
-  reranker_local_model: Alibaba-NLP/gte-reranker-modernbert-base
-  reranker_local_adapter: cross-encoder
-  reranker_local_trust_remote_code: false
-  reranker_batch_size: 4
-  reranker_max_length: 512
-  reranker_use_fp16: false
+  reranker_model: hosted-reranker-chain
   reranker_providers:
     order:
-      - local
+      - jina
+      - voyage-2.5
+      - voyage-2.5-lite
     timeout_seconds: 3
-    # Reranking 60 full 1.5K-character documents consumed roughly 20K+ tokens
-    # per search. The leading 800 characters retain the most useful labelled
-    # title/category/description content while reducing API usage.
-    max_document_chars: 800
+    # Bounds provider tokens/cost while retaining titles and strongest fields.
+    max_document_chars: 300
     voyage_model: rerank-2.5
     voyage_lite_model: rerank-2.5-lite
     voyage_requests_per_minute_per_model: 3
@@ -87,26 +73,22 @@ retrieval:
 api:
   host: 127.0.0.1
   port: 8000
-  # Local compatibility defaults to unauthenticated single-company mode.
-  # Production must set API_AUTH_ENABLED=true and configure one API key per
-  # company profile under configs/tenants/.
+  # Production must set API_AUTH_ENABLED=true and configure tenant API keys.
   auth_enabled: false
   rate_limit_enabled: true
   tenant_config_dir: configs/tenants
-  # Conservative defaults for the one-company 8 GB test host. Production can
-  # override these per deployment through .env after load testing.
+  # Conservative defaults for a one-company 8 GB deployment.
   tenant_engine_cache_size: 1
-  tenant_max_concurrent_searches: 2
+  tenant_max_concurrent_searches: 1
   # Use debug for library-level diagnostics; info shows the search flow.
   log_level: info
-  # Load the reranker once when the API process starts. Requests reuse the
-  # same in-memory model and do not pay model-loading latency.
+  # Validate and share the hosted provider chain when the API starts.
   preload_reranker: true
   # Normal product-grid and infinite-scroll batch size.
   default_page_size: 20
   max_page_size: 20
   preload_embedding: true
-  # Combined cached window: 60 reranked results plus up to 140 related rows.
+  # Combined cached window: 20 reranked results plus related catalogue rows.
   max_results: 200
   session_ttl_seconds: 600
   max_sessions: 500

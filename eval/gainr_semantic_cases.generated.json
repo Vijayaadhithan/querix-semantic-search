@@ -193,7 +193,23 @@
       "city_name": "Puducherry",
       "rental_duration": "Per Hour",
       "type": 1
-    }
+    },
+    "acceptable_filters": [
+      {
+        "main_category_name": "Computer & Accessories",
+        "subcategory_name": "Others",
+        "city_name": "Puducherry",
+        "rental_duration": "Per Hour",
+        "type": 1
+      },
+      {
+        "main_category_name": "IT & ITES Services",
+        "subcategory_name": "Technician",
+        "city_name": "Puducherry",
+        "rental_duration": "Per Hour",
+        "type": 1
+      }
+    ]
   },
   {
     "name": "wanted_mechanic_chennai",

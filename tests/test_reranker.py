@@ -7,7 +7,6 @@ import reranker
 from reranker import (
     FallbackReranker,
     HostedReranker,
-    JinaListwiseReranker,
     RequestWindowLimiter,
 )
 
@@ -80,6 +79,30 @@ def test_hosted_reranker_captures_provider_usage(monkeypatch):
     }
 
 
+def test_hosted_reranker_truncates_each_document_before_sending(monkeypatch):
+    captured = {}
+
+    def post(_url, **kwargs):
+        captured["json"] = kwargs["json"]
+        return FakeResponse()
+
+    monkeypatch.setattr(reranker.requests, "post", post)
+    provider = HostedReranker(
+        name="jina",
+        url="https://jina.example/rerank",
+        api_key="secret",
+        model="test-model",
+        max_document_chars=5,
+    )
+
+    provider.compute_score(
+        [["full query", "abcdefgh"], ["full query", "12345678"]]
+    )
+
+    assert captured["json"]["query"] == "full query"
+    assert captured["json"]["documents"] == ["abcde", "12345"]
+
+
 def test_reranker_chain_uses_next_provider_after_failure():
     class Provider:
         def __init__(self, name, result=None):
@@ -96,7 +119,7 @@ def test_reranker_chain_uses_next_provider_after_failure():
         [
             Provider("voyage"),
             Provider("jina", [0.7, 0.1]),
-            Provider("local", [0.1, 0.2]),
+            Provider("voyage-2.5-lite", [0.1, 0.2]),
         ]
     )
 
@@ -202,33 +225,3 @@ def test_voyage_model_budget_is_counted_independently(monkeypatch):
         assert "request budget exhausted" in str(exc)
     else:
         raise AssertionError("quality model should have exhausted its budget")
-
-
-def test_jina_listwise_requires_explicit_remote_code_trust():
-    try:
-        JinaListwiseReranker("jinaai/jina-reranker-v3")
-    except RuntimeError as exc:
-        assert "RERANK_LOCAL_TRUST_REMOTE_CODE=true" in str(exc)
-    else:
-        raise AssertionError("Jina listwise adapter must require explicit trust.")
-
-
-def test_jina_listwise_scores_are_restored_to_input_order():
-    class FakeModel:
-        def rerank(self, query, documents, top_n):
-            assert query == "camera"
-            assert documents == ["first", "second"]
-            assert top_n == 2
-            return [
-                {"index": 1, "relevance_score": 0.95},
-                {"index": 0, "relevance_score": 0.25},
-            ]
-
-    ranker = JinaListwiseReranker.__new__(JinaListwiseReranker)
-    ranker.model = FakeModel()
-
-    scores = ranker.compute_score(
-        [["camera", "first"], ["camera", "second"]]
-    )
-
-    assert scores == [0.25, 0.95]

@@ -79,8 +79,6 @@ storage:
       m: 16
       ef_construction: 64
       ef_search: 100
-  chroma_dir: storage/companies/gainr/chroma
-  collection_name: company_gainr
   bm25_path: storage/companies/gainr/bm25.sqlite3
 
 payload:
@@ -133,9 +131,9 @@ compatibility:
   adapter: gainr_legacy
   users_table: users
   page_size: 20
-  # Rerank the first two frontend pages. The remaining semantic result window
-  # is filled by the filtered catalogue tail for infinite scrolling.
-  semantic_ranked_window: 40
+  # Keep the first frontend page inside the bounded hosted rerank window. Later
+  # pages are filled from the filtered catalogue tail for infinite scrolling.
+  semantic_ranked_window: 20
   suggestions_limit: 8
   recent_limit: 10
   recent_ttl_seconds: 7776000

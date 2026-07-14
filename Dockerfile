@@ -10,7 +10,6 @@ WORKDIR /app
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        build-essential \
         curl \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --system app \
@@ -21,7 +20,7 @@ RUN python -m pip install --upgrade pip \
     && python -m pip install -r requirements.txt
 
 COPY . .
-RUN mkdir -p storage data/raw_docs \
+RUN mkdir -p storage \
     && chown -R app:app /app
 
 USER app

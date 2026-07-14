@@ -1,33 +1,19 @@
-import csv
 import hashlib
 import json
-import logging
 import re
 from datetime import date, datetime
 from decimal import Decimal
-from pathlib import Path
 from typing import Any
-
-from pypdf import PdfReader
 
 from database_store import (
     DatabaseRuntimeConfig,
     database_backend,
     database_source_name,
 )
-from settings import (
-    CHUNK_OVERLAP,
-    CHUNK_SIZE,
-    EMBED_MODEL,
-    MYSQL_DATABASE,
-    MYSQL_SEARCH_ID_COLUMN,
-    MYSQL_TABLE,
-    SOURCE_FILES_DIR,
-)
+from settings import EMBED_MODEL, MYSQL_DATABASE, MYSQL_SEARCH_ID_COLUMN, MYSQL_TABLE
 
 MYSQL_METADATA_MAX_CHARS = 1000
 MYSQL_JSON_METADATA_MAX_FIELDS = 64
-SUPPORTED_EXTENSIONS = {".pdf", ".csv", ".tsv", ".xlsx", ".xlsm"}
 JSON_TEXT_KEYS = (
     "embedding_text",
     "semantic_text",
@@ -64,132 +50,10 @@ LABELED_TEXT_PATTERN = re.compile(
 )
 
 
-class _PypdfRepairFilter(logging.Filter):
-    def filter(self, record: logging.LogRecord) -> bool:
-        return not record.getMessage().startswith("Ignoring wrong pointing object")
-
-
-logging.getLogger("pypdf._reader").addFilter(_PypdfRepairFilter())
-
-
-def read_pdf(path: Path) -> tuple[list[dict], int, int]:
-    reader = PdfReader(path)
-    pages = []
-    empty_pages = 0
-    for page_number, page in enumerate(reader.pages, start=1):
-        text = (page.extract_text() or "").strip()
-        if text:
-            pages.append({"page": page_number, "text": text})
-        else:
-            empty_pages += 1
-    return pages, empty_pages, len(reader.pages)
-
-
 def cell_to_text(value: Any) -> str:
     if value is None:
         return ""
     return str(value).strip()
-
-
-def normalize_headers(values: list[Any]) -> list[str]:
-    headers = []
-    for index, value in enumerate(values, start=1):
-        text = cell_to_text(value)
-        headers.append(text or f"column_{index}")
-    return headers
-
-
-def row_to_text(headers: list[str], values: list[Any]) -> str:
-    parts = []
-    width = max(len(headers), len(values))
-    for index in range(width):
-        value = cell_to_text(values[index] if index < len(values) else "")
-        if not value:
-            continue
-        header = headers[index] if index < len(headers) else f"column_{index + 1}"
-        parts.append(f"{header}: {value}")
-    return "; ".join(parts)
-
-
-def read_delimited_file(path: Path) -> tuple[list[dict], int, int]:
-    delimiter = "\t" if path.suffix.lower() == ".tsv" else ","
-    rows = []
-    empty_rows = 0
-    with path.open(newline="", encoding="utf-8-sig") as source_file:
-        reader = csv.reader(source_file, delimiter=delimiter)
-        try:
-            header_row = next(reader)
-        except StopIteration:
-            return [], 0, 0
-
-        headers = normalize_headers(header_row)
-        total_rows = 1
-        for row_number, row in enumerate(reader, start=2):
-            total_rows = row_number
-            text = row_to_text(headers, row)
-            if text:
-                rows.append({"row": row_number, "text": text})
-            else:
-                empty_rows += 1
-    return rows, empty_rows, total_rows
-
-
-def read_excel_file(path: Path) -> tuple[list[dict], int, int]:
-    try:
-        from openpyxl import load_workbook
-    except ImportError as exc:
-        raise RuntimeError(
-            "Reading Excel files requires openpyxl. Install requirements.txt first."
-        ) from exc
-
-    workbook = load_workbook(path, read_only=True, data_only=True)
-    rows = []
-    empty_rows = 0
-    total_rows = 0
-    for worksheet in workbook.worksheets:
-        iterator = worksheet.iter_rows(values_only=True)
-        try:
-            header_row = next(iterator)
-        except StopIteration:
-            continue
-
-        headers = normalize_headers(list(header_row))
-        total_rows += 1
-        for row_number, row in enumerate(iterator, start=2):
-            total_rows += 1
-            text = row_to_text(headers, list(row))
-            if text:
-                rows.append(
-                    {
-                        "sheet": worksheet.title,
-                        "row": row_number,
-                        "text": text,
-                    }
-                )
-            else:
-                empty_rows += 1
-
-    workbook.close()
-    return rows, empty_rows, total_rows
-
-
-def chunk_text(text: str, chunk_size: int = 512, overlap: int = 80) -> list[str]:
-    if chunk_size <= 0:
-        raise ValueError("chunk_size must be greater than zero")
-    if overlap < 0 or overlap >= chunk_size:
-        raise ValueError("overlap must be at least zero and smaller than chunk_size")
-
-    words = text.split()
-    step = chunk_size - overlap
-    return [
-        " ".join(words[start : start + chunk_size])
-        for start in range(0, len(words), step)
-    ]
-
-
-def chunk_id(filename: str, location: int | str, index: int) -> str:
-    value = f"{filename}\0{location}\0{index}".encode()
-    return hashlib.sha256(value).hexdigest()
 
 
 def mysql_document_id(
@@ -487,75 +351,3 @@ def prepare_bm25_index_row(
             row.get("is_rent_negotiable")
         ),
     }
-
-
-def prepare_pdf(path: Path) -> tuple[list[str], list[str], list[dict], int, int]:
-    pages, empty_pages, page_count = read_pdf(path)
-    ids = []
-    documents = []
-    metadatas = []
-    for page in pages:
-        for index, text in enumerate(
-            chunk_text(page["text"], CHUNK_SIZE, CHUNK_OVERLAP)
-        ):
-            ids.append(chunk_id(path.name, page["page"], index))
-            documents.append(text)
-            metadatas.append(
-                {
-                    "source_file": path.name,
-                    "page": page["page"],
-                    "chunk_index": index,
-                    "embedding_model": EMBED_MODEL,
-                }
-            )
-    return ids, documents, metadatas, empty_pages, page_count
-
-
-def prepare_table(path: Path) -> tuple[list[str], list[str], list[dict], int, int]:
-    if path.suffix.lower() in {".csv", ".tsv"}:
-        rows, empty_rows, row_count = read_delimited_file(path)
-    else:
-        rows, empty_rows, row_count = read_excel_file(path)
-
-    ids = []
-    documents = []
-    metadatas = []
-    for row in rows:
-        location = (
-            f"{row['sheet']}:{row['row']}" if "sheet" in row else str(row["row"])
-        )
-        for index, text in enumerate(
-            chunk_text(row["text"], CHUNK_SIZE, CHUNK_OVERLAP)
-        ):
-            ids.append(chunk_id(path.name, location, index))
-            documents.append(text)
-            metadata = {
-                "source_file": path.name,
-                "source_type": path.suffix.lower().lstrip("."),
-                "row": row["row"],
-                "chunk_index": index,
-                "embedding_model": EMBED_MODEL,
-            }
-            if "sheet" in row:
-                metadata["sheet"] = row["sheet"]
-            metadatas.append(metadata)
-    return ids, documents, metadatas, empty_rows, row_count
-
-
-def prepare_source(path: Path) -> tuple[list[str], list[str], list[dict], int, int]:
-    if path.suffix.lower() == ".pdf":
-        return prepare_pdf(path)
-    if path.suffix.lower() in SUPPORTED_EXTENSIONS:
-        return prepare_table(path)
-    raise ValueError(f"Unsupported source type: {path.suffix}")
-
-
-def find_source_files() -> list[Path]:
-    return sorted(
-        [
-            path
-            for path in SOURCE_FILES_DIR.iterdir()
-            if path.is_file() and path.suffix.lower() in SUPPORTED_EXTENSIONS
-        ],
-        key=lambda path: path.name.lower(),
-    )

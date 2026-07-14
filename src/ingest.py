@@ -1,54 +1,12 @@
 import argparse
 
-from chroma_store import (
-    clear_collection,
-    confirm,
-    delete_indexed_document,
-    get_collection,
-    list_indexed_documents,
-    mysql_current_ids,
-    source_is_current,
-)
-from document_processing import (
-    SUPPORTED_EXTENSIONS,
-    cell_to_text,
-    chunk_id,
-    chunk_text,
-    content_hash,
-    find_source_files,
-    metadata_value,
-    mysql_document_id,
-    mysql_row_identity,
-    prepare_bm25_index_row,
-    prepare_content_document,
-    prepare_mysql_row,
-    prepare_pdf,
-    prepare_source,
-    prepare_table,
-)
 from ingestion_service import (
     EMBED_BATCH_SIZE,
     MYSQL_BATCH_SIZE,
     check_mysql_source,
-    check_sources,
-    embed_for_upsert,
-    format_duration,
     ingest_mysql_source,
-    ingest_sources,
     rebuild_mysql_bm25_index,
 )
-from mysql_store import (
-    count_mysql_rows,
-    detect_mysql_primary_key,
-    fetch_mysql_columns,
-    iter_mysql_rows,
-    mysql_connection,
-    mysql_source_name,
-    quote_mysql_identifier,
-    require_pymysql,
-)
-from ollama_client import embed_texts
-from settings import EMBED_MODEL, SOURCE_FILES_DIR
 from tenant_config import discover_tenant_profiles
 from vector_store import (
     clear_tenant_vectors,
@@ -57,11 +15,17 @@ from vector_store import (
 )
 
 
+def confirm(message: str, assume_yes: bool = False) -> bool:
+    return assume_yes or input(f"{message} [y/N]: ").strip().casefold() in {
+        "y",
+        "yes",
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
-            "Ingest local files or a tenant's MySQL/PostgreSQL search-ready "
-            "table into its configured Chroma/pgvector and BM25 indexes."
+            "Manage a tenant's configured database, pgvector, and BM25 indexes."
         )
     )
     actions = parser.add_mutually_exclusive_group()
@@ -87,10 +51,8 @@ def main() -> None:
     )
     parser.add_argument(
         "--company",
-        help=(
-            "tenant profile slug under configs/tenants; required for isolated "
-            "production database ingestion"
-        ),
+        required=True,
+        help="tenant profile slug under configs/tenants",
     )
     parser.add_argument(
         "--yes",
@@ -98,15 +60,16 @@ def main() -> None:
         help="skip confirmation for delete operations",
     )
     parser.add_argument(
+        "--database",
         "--mysql",
+        dest="database",
         action="store_true",
-        help=(
-            "ingest the configured MySQL/PostgreSQL table; the flag name is "
-            "retained for compatibility"
-        ),
+        help="ingest the configured MySQL or PostgreSQL source table",
     )
     parser.add_argument(
+        "--bm25-only",
         "--mysql-bm25-only",
+        dest="bm25_only",
         action="store_true",
         help="rebuild only BM25 from the configured database; no embeddings",
     )
@@ -155,61 +118,37 @@ def main() -> None:
         ),
     )
     args = parser.parse_args()
-    tenant = None
-    if args.company:
-        profiles = discover_tenant_profiles()
-        try:
-            tenant = profiles[args.company]
-        except KeyError as exc:
-            available = ", ".join(sorted(profiles)) or "none"
-            raise SystemExit(
-                f"Unknown company {args.company!r}; available: {available}"
-            ) from exc
-
-    collection_options = {}
-    if tenant is not None:
-        collection_options = {
-            "chroma_dir": tenant.storage.chroma_dir,
-            "collection_name": tenant.storage.collection_name,
-        }
+    profiles = discover_tenant_profiles()
+    try:
+        tenant = profiles[args.company]
+    except KeyError as exc:
+        available = ", ".join(sorted(profiles)) or "none"
+        raise SystemExit(
+            f"Unknown company {args.company!r}; available: {available}"
+        ) from exc
 
     if args.list:
-        if tenant:
-            list_tenant_vectors(tenant)
-        else:
-            list_indexed_documents(**collection_options)
+        list_tenant_vectors(tenant)
         return
     if args.delete:
-        if tenant:
-            if not confirm(
-                f"Delete tenant vectors for source {args.delete!r}?",
-                args.yes,
-            ):
-                print("Cancelled.")
-                return
-            deleted = delete_tenant_source(tenant, args.delete)
-            print(f"Deleted {deleted} vectors.")
-        else:
-            delete_indexed_document(
-                args.delete,
-                args.yes,
-                **collection_options,
-            )
+        if not confirm(
+            f"Delete tenant vectors for source {args.delete!r}?", args.yes
+        ):
+            print("Cancelled.")
+            return
+        deleted = delete_tenant_source(tenant, args.delete)
+        print(f"Deleted {deleted} vectors.")
         return
     if args.clear:
-        if tenant:
-            if not confirm(
-                f"Delete all vectors for company {tenant.company_id!r}?",
-                args.yes,
-            ):
-                print("Cancelled.")
-                return
-            deleted = clear_tenant_vectors(tenant)
-            print(f"Deleted {deleted} vectors.")
-        else:
-            clear_collection(args.yes, **collection_options)
+        if not confirm(
+            f"Delete all vectors for company {tenant.company_id!r}?", args.yes
+        ):
+            print("Cancelled.")
+            return
+        deleted = clear_tenant_vectors(tenant)
+        print(f"Deleted {deleted} vectors.")
         return
-    if args.mysql and args.check:
+    if args.database and args.check:
         raise SystemExit(
             0
             if check_mysql_source(
@@ -219,7 +158,7 @@ def main() -> None:
             )
             else 1
         )
-    if args.mysql_bm25_only:
+    if args.bm25_only:
         rebuild_mysql_bm25_index(
             limit=args.limit,
             batch_size=args.mysql_batch_size,
@@ -227,7 +166,7 @@ def main() -> None:
             tenant=tenant,
         )
         return
-    if args.mysql:
+    if args.database:
         ingest_mysql_source(
             limit=args.limit,
             batch_size=args.mysql_batch_size,
@@ -240,22 +179,7 @@ def main() -> None:
         )
         return
 
-    if tenant is not None:
-        raise SystemExit(
-            "--company currently applies to configured database ingestion only; "
-            "add --mysql (legacy flag name for MySQL or PostgreSQL)."
-        )
-
-    source_files = find_source_files()
-    if not source_files:
-        extensions = ", ".join(sorted(SUPPORTED_EXTENSIONS))
-        raise SystemExit(
-            f"No supported files ({extensions}) found in {SOURCE_FILES_DIR}"
-        )
-
-    if args.check:
-        raise SystemExit(0 if check_sources(source_files) else 1)
-    ingest_sources(source_files)
+    raise SystemExit("Choose --database, --bm25-only, --list, --delete, or --clear.")
 
 
 if __name__ == "__main__":

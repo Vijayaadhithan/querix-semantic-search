@@ -1,8 +1,6 @@
 import time
-from pathlib import Path
 
 from bm25_index import PersistentBM25Index
-from chroma_store import get_collection, mysql_current_ids, source_is_current
 from database_store import (
     count_database_rows,
     database_backend,
@@ -11,14 +9,10 @@ from database_store import (
     fetch_database_columns,
     iter_database_rows,
 )
-from document_processing import (
-    prepare_bm25_index_row,
-    prepare_mysql_row,
-    prepare_source,
-)
+from document_processing import prepare_bm25_index_row, prepare_mysql_row
 from ollama_client import embed_texts
 from settings import (
-    CHROMA_DIR,
+    EMBED_MODEL,
     MYSQL_BM25_COLUMN,
     MYSQL_CONTENT_COLUMN,
     MYSQL_DATABASE,
@@ -29,30 +23,6 @@ from vector_store import get_tenant_vector_collection
 
 EMBED_BATCH_SIZE = 32
 MYSQL_BATCH_SIZE = 500
-
-
-def check_sources(source_files: list[Path]) -> bool:
-    valid = True
-    total_units = 0
-    total_chunks = 0
-    for path in source_files:
-        try:
-            ids, _, _, skipped_units, unit_count = prepare_source(path)
-            total_units += unit_count
-            total_chunks += len(ids)
-            print(
-                f"OK: {path.name} | {unit_count} source units | {len(ids)} chunks | "
-                f"{skipped_units} empty units"
-            )
-        except Exception as exc:
-            valid = False
-            print(f"ERROR: {path.name} | {type(exc).__name__}: {exc}")
-
-    print(
-        f"\nChecked {len(source_files)} source files, "
-        f"{total_units} source units, {total_chunks} chunks."
-    )
-    return valid
 
 
 def check_mysql_source(
@@ -142,51 +112,36 @@ def reconcile_deleted_documents(
     return len(stale_vector_ids), deleted_bm25
 
 
-def ingest_sources(source_files: list[Path]) -> None:
-    CHROMA_DIR.mkdir(parents=True, exist_ok=True)
-    _, collection = get_collection(create=True)
-
-    for path in source_files:
-        print(f"Processing: {path.name}")
-        try:
-            ids, documents, metadatas, skipped_units, _ = prepare_source(path)
-            if not documents:
-                print("  Skipped: no extractable text (OCR may be required).")
-                continue
-            if source_is_current(collection, path.name, ids, documents):
-                print(f"  Unchanged: keeping {len(documents)} existing chunks.")
-                continue
-
-            embeddings = []
-            for start in range(0, len(documents), EMBED_BATCH_SIZE):
-                batch = documents[start : start + EMBED_BATCH_SIZE]
-                embeddings.extend(embed_texts(batch))
-                completed = min(start + len(batch), len(documents))
-                print(
-                    f"  Embedded {completed}/{len(documents)} chunks",
-                    end="\r",
-                    flush=True,
-                )
-            print()
-
-            # Delete stale chunks only after extraction and embedding succeed.
-            collection.delete(where={"source_file": path.name})
-            collection.upsert(
-                ids=ids,
-                documents=documents,
-                embeddings=embeddings,
-                metadatas=metadatas,
-            )
-            print(
-                f"  Added {len(documents)} chunks; "
-                f"skipped {skipped_units} empty units."
-            )
-        except RuntimeError:
-            raise
-        except Exception as exc:
-            print(f"  ERROR: {type(exc).__name__}: {exc}")
-
-    print(f"\nIngestion complete. Collection contains {collection.count()} chunks.")
+def database_current_ids(
+    collection,
+    ids: list[str],
+    documents: list[str],
+    metadatas: list[dict],
+) -> set[str]:
+    """Return rows whose stored embedding still matches the source content."""
+    if not ids:
+        return set()
+    existing = collection.get(ids=ids, include=["documents", "metadatas"])
+    expected = {
+        doc_id: {
+            "document": document,
+            "hash": metadata.get("source_content_hash"),
+        }
+        for doc_id, document, metadata in zip(ids, documents, metadatas)
+    }
+    current = set()
+    for doc_id, document, metadata in zip(
+        existing["ids"], existing["documents"], existing["metadatas"]
+    ):
+        if metadata.get("embedding_model") != EMBED_MODEL:
+            continue
+        expected_row = expected.get(doc_id, {})
+        if (
+            metadata.get("source_content_hash") == expected_row.get("hash")
+            or document == expected_row.get("document")
+        ):
+            current.add(doc_id)
+    return current
 
 
 def ingest_mysql_source(
@@ -239,16 +194,10 @@ def ingest_mysql_source(
     row_count = count_database_rows(content_column, mysql_config)
     planned_rows = min(row_count, limit) if limit is not None else row_count
 
-    if tenant:
-        if tenant.storage.vector_backend == "chroma":
-            tenant.storage.chroma_dir.mkdir(parents=True, exist_ok=True)
-        collection = get_tenant_vector_collection(tenant, create=True)
-    else:
-        CHROMA_DIR.mkdir(parents=True, exist_ok=True)
-        _, collection = get_collection(create=True)
-    bm25_index = PersistentBM25Index(
-        tenant.storage.bm25_path if tenant else None
-    ) if tenant else PersistentBM25Index()
+    if tenant is None:
+        raise RuntimeError("Tenant profile is required for pgvector ingestion.")
+    collection = get_tenant_vector_collection(tenant, create=True)
+    bm25_index = PersistentBM25Index(tenant.storage.bm25_path)
     source_name = database_source_name(mysql_config)
 
     print(f"Processing {database_backend(mysql_config)} table: {database}.{table}")
@@ -292,7 +241,7 @@ def ingest_mysql_source(
             upsert_documents = documents
             upsert_metadatas = metadatas
         else:
-            current_ids = mysql_current_ids(collection, ids, documents, metadatas)
+            current_ids = database_current_ids(collection, ids, documents, metadatas)
             skipped_current += len(current_ids)
             upsert_ids = []
             upsert_documents = []
@@ -317,7 +266,7 @@ def ingest_mysql_source(
 
         print(
             f"  Preparing rows {batch_start}-{batch_end}/{total_label} for "
-            f"{tenant.storage.vector_backend if tenant else 'chroma'} "
+            "pgvector "
             f"({len(upsert_documents)} changed/new)",
             flush=True,
         )
@@ -420,6 +369,8 @@ def rebuild_mysql_bm25_index(
         raise RuntimeError("--mysql-batch-size must be greater than zero.")
     if limit is not None and limit <= 0:
         raise RuntimeError("--limit must be greater than zero.")
+    if tenant is None:
+        raise RuntimeError("Tenant profile is required for BM25 ingestion.")
 
     mysql_config = tenant.database if tenant else None
     content_column = (
@@ -450,11 +401,7 @@ def rebuild_mysql_bm25_index(
     row_count = count_database_rows(content_column, mysql_config)
     planned_rows = min(row_count, limit) if limit is not None else row_count
 
-    index = (
-        PersistentBM25Index(tenant.storage.bm25_path)
-        if tenant
-        else PersistentBM25Index()
-    )
+    index = PersistentBM25Index(tenant.storage.bm25_path)
     index.clear()
     batch = []
     processed = 0

@@ -9,7 +9,6 @@ import requests
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from chroma_store import get_collection
 from mysql_store import mysql_connection, quote_mysql_identifier
 from postgres_store import (
     PostgresRuntimeConfig,
@@ -22,9 +21,6 @@ from settings import (
     API_CORS_ORIGINS,
     API_TENANT_ENGINE_CACHE_SIZE,
     API_TENANT_MAX_CONCURRENT_SEARCHES,
-    BM25_INDEX_PATH,
-    CHROMA_DIR,
-    COLLECTION_NAME,
     EMBED_MODEL,
     GEMINI_API_KEY,
     JINA_API_KEY,
@@ -116,15 +112,8 @@ def check_database(profile=None) -> bool:
 
 def check_vectors(profile=None) -> bool:
     try:
-        if profile:
-            collection = get_tenant_vector_collection(profile)
-            backend = profile.storage.vector_backend
-        else:
-            _client, collection = get_collection(
-                chroma_dir=CHROMA_DIR,
-                collection_name=COLLECTION_NAME,
-            )
-            backend = "chroma"
+        collection = get_tenant_vector_collection(profile)
+        backend = profile.storage.vector_backend
         count = int(collection.count())
     except Exception as exc:
         return report("Vector index", False, type(exc).__name__)
@@ -142,8 +131,6 @@ def check_reranker() -> bool:
         available.append("voyage-2.5")
     if "voyage-2.5-lite" in RERANK_PROVIDER_ORDER and VOYAGE_API_KEY:
         available.append("voyage-2.5-lite")
-    if "local" in RERANK_PROVIDER_ORDER:
-        available.append("local")
     return report(
         "Reranker chain",
         bool(available),
@@ -152,12 +139,12 @@ def check_reranker() -> bool:
 
 
 def check_bm25(profile=None) -> bool:
-    path = profile.storage.bm25_path if profile else BM25_INDEX_PATH
+    path = profile.storage.bm25_path
     if not path.exists():
         return report(
             "BM25 index",
             False,
-            "missing; run src/ingest.py --company <slug> --mysql",
+            "missing; run src/ingest.py --company <slug> --database",
         )
     try:
         uri = f"file:{path}?mode=ro"
@@ -205,7 +192,7 @@ def check_production_security(profile=None) -> list[bool]:
         ),
         report(
             "8 GB search concurrency limit",
-            API_TENANT_MAX_CONCURRENT_SEARCHES <= 2,
+            API_TENANT_MAX_CONCURRENT_SEARCHES == 1,
             (
                 "API_TENANT_MAX_CONCURRENT_SEARCHES="
                 f"{API_TENANT_MAX_CONCURRENT_SEARCHES}"
@@ -234,7 +221,8 @@ def main() -> int:
     )
     parser.add_argument(
         "--company",
-        help="check one tenant profile instead of the legacy local configuration",
+        required=True,
+        help="tenant profile slug under configs/tenants",
     )
     parser.add_argument(
         "--strict",
@@ -250,15 +238,13 @@ def main() -> int:
         ),
     )
     args = parser.parse_args()
-    profile = None
-    if args.company:
-        profiles = discover_tenant_profiles()
-        try:
-            profile = profiles[args.company]
-        except KeyError:
-            available = ", ".join(sorted(profiles)) or "none"
-            print(f"Unknown company {args.company!r}; available: {available}")
-            return 1
+    profiles = discover_tenant_profiles()
+    try:
+        profile = profiles[args.company]
+    except KeyError:
+        available = ", ".join(sorted(profiles)) or "none"
+        print(f"Unknown company {args.company!r}; available: {available}")
+        return 1
 
     print(f"Python: {sys.version.split()[0]}")
     if profile:

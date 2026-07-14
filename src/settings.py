@@ -32,12 +32,8 @@ def _load_config() -> dict:
 
 CONFIG = _load_config()
 
-SOURCE_FILES_DIR = PROJECT_ROOT / "data" / "raw_docs"
-RAW_DOCS_DIR = SOURCE_FILES_DIR
-CHROMA_DIR = PROJECT_ROOT / "storage" / "chroma"
 BM25_INDEX_PATH = PROJECT_ROOT / "storage" / "bm25.sqlite3"
 APP_NAME = CONFIG.get("app_name", "Local Data Assistant")
-COLLECTION_NAME = CONFIG.get("collection_name", "local_data")
 USAGE_TRACKING_ENABLED = _env_bool(
     "USAGE_TRACKING_ENABLED",
     bool(CONFIG.get("api", {}).get("usage_tracking_enabled", True)),
@@ -136,9 +132,6 @@ RESULT_CACHE_TTL_SECONDS = int(
 if RESULT_CACHE_TTL_SECONDS <= 0:
     raise ValueError("REDIS_RESULT_CACHE_TTL_SECONDS must be greater than zero.")
 
-CHUNK_SIZE = int(CONFIG.get("chunking", {}).get("chunk_size", 512))
-CHUNK_OVERLAP = int(CONFIG.get("chunking", {}).get("chunk_overlap", 80))
-
 UNPRICED_RENTAL_FEE_CEILING = float(
     CONFIG.get("retrieval", {}).get("unpriced_rental_fee_ceiling", 1)
 )
@@ -213,37 +206,7 @@ SOFT_CATEGORY_BOOST = float(
 )
 RERANK_TOP_K = int(CONFIG.get("retrieval", {}).get("final_top_k", 6))
 RERANK_MODEL = CONFIG.get("retrieval", {}).get(
-    "reranker_model", "Alibaba-NLP/gte-reranker-modernbert-base"
-)
-RERANK_LOCAL_MODEL = os.getenv(
-    "RERANK_LOCAL_MODEL",
-    str(CONFIG.get("retrieval", {}).get("reranker_local_model", RERANK_MODEL)),
-)
-RERANK_LOCAL_ADAPTER = os.getenv(
-    "RERANK_LOCAL_ADAPTER",
-    str(
-        CONFIG.get("retrieval", {}).get(
-            "reranker_local_adapter",
-            "cross-encoder",
-        )
-    ),
-).strip().casefold()
-if RERANK_LOCAL_ADAPTER not in {"cross-encoder", "jina-listwise"}:
-    raise ValueError(
-        "RERANK_LOCAL_ADAPTER must be one of cross-encoder or jina-listwise."
-    )
-RERANK_LOCAL_TRUST_REMOTE_CODE = _env_bool(
-    "RERANK_LOCAL_TRUST_REMOTE_CODE",
-    bool(CONFIG.get("retrieval", {}).get("reranker_local_trust_remote_code", False)),
-)
-RERANK_BATCH_SIZE = int(
-    CONFIG.get("retrieval", {}).get("reranker_batch_size", 4)
-)
-RERANK_MAX_LENGTH = int(
-    CONFIG.get("retrieval", {}).get("reranker_max_length", 512)
-)
-RERANK_USE_FP16 = bool(
-    CONFIG.get("retrieval", {}).get("reranker_use_fp16", False)
+    "reranker_model", "hosted-reranker-chain"
 )
 RERANK_PROVIDER_CONFIG = CONFIG.get("retrieval", {}).get(
     "reranker_providers",
@@ -270,7 +233,6 @@ _invalid_rerank_providers = sorted(
         "voyage",
         "voyage-2.5",
         "voyage-2.5-lite",
-        "local",
     }
 )
 if _invalid_rerank_providers:

@@ -1,12 +1,8 @@
-import chromadb
-
 from ollama_client import embed_text
 from mysql_store import fetch_product_types_by_ids
 from query_planner import OFFER_AD_TYPE, WANTED_AD_TYPE
 from settings import (
     BM25_WEIGHT,
-    CHROMA_DIR,
-    COLLECTION_NAME,
     UNPRICED_RENTAL_FEE_CEILING,
     MYSQL_SEARCH_ID_COLUMN,
     MYSQL_TABLE,
@@ -18,25 +14,12 @@ from settings import (
 )
 
 
-def load_collection(
-    chroma_dir=CHROMA_DIR,
-    collection_name=COLLECTION_NAME,
-):
-    client = chromadb.PersistentClient(path=str(chroma_dir))
-    try:
-        return client.get_collection(collection_name)
-    except Exception as exc:
-        raise RuntimeError(
-            f"No vector collection {collection_name!r} found. "
-            "Run the tenant ingestion job first."
-        ) from exc
-
-
 def metadata_matches_filters(
     metadata,
     source_name,
     resolved_filters,
     company_id=None,
+    include_unpriced=False,
 ) -> bool:
     if metadata.get("source_file") != source_name:
         return False
@@ -54,12 +37,15 @@ def metadata_matches_filters(
     maximum = resolved_filters.get("max_rental_fee")
     if minimum is None and maximum is None:
         return True
+    raw_rental_fee = metadata.get("rental_fee")
+    if raw_rental_fee in (None, "") and include_unpriced:
+        return True
     try:
-        rental_fee = float(metadata.get("rental_fee"))
+        rental_fee = float(raw_rental_fee)
     except (TypeError, ValueError):
         return False
     if rental_fee <= UNPRICED_RENTAL_FEE_CEILING:
-        return False
+        return include_unpriced
     if minimum is not None and rental_fee < minimum:
         return False
     if maximum is not None and rental_fee > maximum:
@@ -71,11 +57,10 @@ def vector_where_filter(
     source_name,
     resolved_filters,
     company_id=None,
+    include_unpriced=False,
 ):
-    # Each tenant already owns an isolated vector collection. Adding
-    # source_file/company_id to every Chroma query makes HNSW search fall back
-    # to an expensive metadata-filtered path across the whole collection.
-    # Source and tenant are still verified by metadata_matches_filters below.
+    # Each tenant owns an isolated pgvector table. Source and tenant metadata
+    # are still verified by metadata_matches_filters after vector retrieval.
     clauses = []
     for key, expected in resolved_filters.get("categorical", {}).items():
         if isinstance(expected, (list, tuple, set)):
@@ -85,12 +70,16 @@ def vector_where_filter(
             clauses.append({key: {"$in": values}})
         else:
             clauses.append({key: expected})
-    minimum = resolved_filters.get("min_rental_fee")
-    maximum = resolved_filters.get("max_rental_fee")
-    if minimum is not None:
-        clauses.append({"rental_fee": {"$gte": minimum}})
-    if maximum is not None:
-        clauses.append({"rental_fee": {"$lte": maximum}})
+    # A wanted/request ad commonly stores 0 when its budget was not supplied.
+    # Omitting the vector-store price predicate preserves those rows; the exact
+    # price-or-unpriced rule is still enforced below in metadata_matches_filters.
+    if not include_unpriced:
+        minimum = resolved_filters.get("min_rental_fee")
+        maximum = resolved_filters.get("max_rental_fee")
+        if minimum is not None:
+            clauses.append({"rental_fee": {"$gte": minimum}})
+        if maximum is not None:
+            clauses.append({"rental_fee": {"$lte": maximum}})
     if not clauses:
         return None
     if len(clauses) == 1:
@@ -108,6 +97,7 @@ def vector_search(
     embedding_provider=None,
     company_id=None,
     post_filter_metadata=False,
+    include_unpriced=False,
 ):
     if collection.count() <= 0:
         return []
@@ -127,11 +117,11 @@ def vector_search(
             source_name,
             resolved_filters,
             company_id,
+            include_unpriced,
         )
         if where_filter is not None and post_filter_metadata:
-            # Chroma's metadata-filtered query path can take many seconds on
-            # large collections. Tenant collections are already isolated, so
-            # retrieve a bounded HNSW window and enforce the exact same
+            # Some metadata-filtered ANN paths can be expensive on large
+            # tables. Retrieve a bounded HNSW window and enforce the exact
             # constraints with metadata_matches_filters below.
             query_options["n_results"] = min(
                 max(candidate_k, top_k)
@@ -144,9 +134,8 @@ def vector_search(
     try:
         results = collection.query(**query_options)
     except TypeError as exc:
-        # The pgvector compatibility collection in older deployments did not
-        # yet expose Chroma's `where` keyword. Keep the correctness-preserving
-        # metadata check below as a fallback.
+        # Older pgvector adapters did not expose the `where` keyword. Keep the
+        # correctness-preserving metadata check below as a fallback.
         if "where" not in str(exc):
             raise
         query_options.pop("where", None)
@@ -167,6 +156,7 @@ def vector_search(
                 source_name,
                 resolved_filters,
                 company_id,
+                include_unpriced,
             )
         ):
             continue
@@ -184,8 +174,21 @@ def vector_search(
     return output
 
 
-def bm25_search(query, index, collection, resolved_filters, top_k=15):
-    ranked = index.search(query, resolved_filters, top_k)
+def bm25_search(
+    query,
+    index,
+    collection,
+    resolved_filters,
+    top_k=15,
+    *,
+    include_unpriced=False,
+):
+    ranked = index.search(
+        query,
+        resolved_filters,
+        top_k,
+        include_unpriced=include_unpriced,
+    )
     if not ranked:
         return []
 
@@ -261,6 +264,7 @@ def related_tail_product_ids(
             else OFFER_AD_TYPE
         }
     )
+    include_unpriced = expected_types == {WANTED_AD_TYPE}
     excluded_products = {
         str(product_id)
         for product_id in (exclude_product_ids or set())
@@ -278,6 +282,7 @@ def related_tail_product_ids(
             exclude_doc_ids=set(exclude_doc_ids or set()),
             offset=offset,
             sort_order=sort_order,
+            include_unpriced=include_unpriced,
         )
         if not rows:
             break

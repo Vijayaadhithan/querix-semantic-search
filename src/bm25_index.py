@@ -354,7 +354,14 @@ class PersistentBM25Index:
             for locality, location in relationships.items()
         }
 
-    def search(self, query: str, resolved_filters: dict, top_k: int) -> list[dict]:
+    def search(
+        self,
+        query: str,
+        resolved_filters: dict,
+        top_k: int,
+        *,
+        include_unpriced: bool = False,
+    ) -> list[dict]:
         tokens = tokenize_query(query)
         if not tokens or top_k <= 0:
             return []
@@ -372,17 +379,13 @@ class PersistentBM25Index:
                 f"p.{column}",
                 value,
             )
-        if "min_rental_fee" in resolved_filters:
-            conditions.append("p.rental_fee > ?")
-            params.append(UNPRICED_RENTAL_FEE_CEILING)
-            conditions.append("p.rental_fee >= ?")
-            params.append(resolved_filters["min_rental_fee"])
-        if "max_rental_fee" in resolved_filters:
-            if "min_rental_fee" not in resolved_filters:
-                conditions.append("p.rental_fee > ?")
-                params.append(UNPRICED_RENTAL_FEE_CEILING)
-            conditions.append("p.rental_fee <= ?")
-            params.append(resolved_filters["max_rental_fee"])
+        self._append_price_conditions(
+            conditions,
+            params,
+            "p.rental_fee",
+            resolved_filters,
+            include_unpriced=include_unpriced,
+        )
 
         params.append(top_k)
         with self._lock:
@@ -424,6 +427,39 @@ class PersistentBM25Index:
         conditions.append(f"{column} = ?")
         params.append(value)
 
+    @staticmethod
+    def _append_price_conditions(
+        conditions: list[str],
+        params: list,
+        column: str,
+        resolved_filters: dict,
+        *,
+        include_unpriced: bool,
+    ) -> None:
+        minimum = resolved_filters.get("min_rental_fee")
+        maximum = resolved_filters.get("max_rental_fee")
+        if minimum is None and maximum is None:
+            return
+
+        priced_conditions = [f"{column} > ?"]
+        priced_params = [UNPRICED_RENTAL_FEE_CEILING]
+        if minimum is not None:
+            priced_conditions.append(f"{column} >= ?")
+            priced_params.append(minimum)
+        if maximum is not None:
+            priced_conditions.append(f"{column} <= ?")
+            priced_params.append(maximum)
+
+        priced_clause = " AND ".join(priced_conditions)
+        if include_unpriced:
+            conditions.append(
+                f"(({column} IS NULL OR {column} <= ?) OR ({priced_clause}))"
+            )
+            params.append(UNPRICED_RENTAL_FEE_CEILING)
+        else:
+            conditions.append(f"({priced_clause})")
+        params.extend(priced_params)
+
     def browse(
         self,
         resolved_filters: dict,
@@ -432,6 +468,7 @@ class PersistentBM25Index:
         exclude_doc_ids: set[str] | None = None,
         offset: int = 0,
         sort_order: str | None = None,
+        include_unpriced: bool = False,
     ) -> list[dict]:
         """Return filtered category rows without requiring a keyword match."""
         if top_k <= 0 or offset < 0:
@@ -459,17 +496,13 @@ class PersistentBM25Index:
                 column,
                 value,
             )
-        if "min_rental_fee" in resolved_filters:
-            conditions.append("rental_fee > ?")
-            params.append(UNPRICED_RENTAL_FEE_CEILING)
-            conditions.append("rental_fee >= ?")
-            params.append(resolved_filters["min_rental_fee"])
-        if "max_rental_fee" in resolved_filters:
-            if "min_rental_fee" not in resolved_filters:
-                conditions.append("rental_fee > ?")
-                params.append(UNPRICED_RENTAL_FEE_CEILING)
-            conditions.append("rental_fee <= ?")
-            params.append(resolved_filters["max_rental_fee"])
+        self._append_price_conditions(
+            conditions,
+            params,
+            "rental_fee",
+            resolved_filters,
+            include_unpriced=include_unpriced,
+        )
 
         excluded = sorted(exclude_doc_ids or set())
         if excluded:
