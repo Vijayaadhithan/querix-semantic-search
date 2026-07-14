@@ -71,7 +71,7 @@ The default `m=16`, `ef_construction=64`, and `ef_search=100` are balanced CPU-h
 
 ## 8 GB deployment profile
 
-A single API process shares one hosted-provider chain across tenant engines. The service cache should retain only the active tenant on an 8 GB host, and tenant search concurrency should initially remain one. The default profile reranks one complete 20-result page, truncates each candidate document to 300 characters, and keeps a 40-item hybrid fallback window. Redis and pgvector run as separate containers with persistent volumes. No local reranker weights or model cache are required.
+A single API process shares one hosted-provider chain across tenant engines. The service cache should retain only the active tenant on an 8 GB host, and tenant search concurrency should initially remain one. The default profile over-fetches up to 80 results from each retrieval source, applies intent shaping to a 40-item hybrid recall window, reranks one complete 20-result page, and truncates each API candidate to 300 characters. Redis and pgvector run as separate containers with persistent volumes. No local reranker weights or model cache are required.
 
 ## Security
 

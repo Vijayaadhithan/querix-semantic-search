@@ -68,7 +68,7 @@ from settings import (
 )
 
 LOGGER = logging.getLogger("uvicorn.error")
-RESULT_CACHE_SCHEMA_VERSION = "v11"
+RESULT_CACHE_SCHEMA_VERSION = "v12"
 
 GAINR_VEHICLE_INTENT_TERMS = {
     "automobile",
@@ -785,15 +785,20 @@ class ProductSearchEngine:
             }
         )
         include_unpriced = expected_types == {WANTED_AD_TYPE}
-        extended_window = (
-            candidate_limit is not None and candidate_limit > RERANK_TOP_K
-        )
         requested = candidate_limit or RERANK_TOP_K
+        # The hosted reranker payload can stay small without shrinking
+        # retrieval recall. Gainr's intent adjustments need a deeper fused
+        # pool so descriptive terms such as "safety" do not let keyword-heavy
+        # service ads crowd usable vehicles out before reranking.
+        recall_window = max(HYBRID_CANDIDATE_K, requested)
+        extended_window = (
+            candidate_limit is not None and recall_window > RERANK_TOP_K
+        )
         retrieval_depth = (
             max(
                 VECTOR_TOP_K,
                 BM25_TOP_K,
-                requested * RETRIEVAL_OVERFETCH_FACTOR,
+                recall_window * RETRIEVAL_OVERFETCH_FACTOR,
             )
             if extended_window
             else None
@@ -803,13 +808,9 @@ class ProductSearchEngine:
         hybrid_top_k = (
             requested
             if strict_candidate_limit
-            else max(HYBRID_CANDIDATE_K, requested)
+            else recall_window
         )
-        vector_candidate_k = (
-            vector_top_k
-            if strict_candidate_limit
-            else max(VECTOR_CANDIDATE_K, vector_top_k)
-        )
+        vector_candidate_k = max(VECTOR_CANDIDATE_K, vector_top_k)
         LOGGER.info(
             "[search:%s] step=retrieve status=start embedding_model=%s "
             "vector_k=%d bm25_k=%d hybrid_k=%d filters=%s",

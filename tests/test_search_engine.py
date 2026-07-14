@@ -690,6 +690,82 @@ def test_semantic_vector_and_bm25_retrieval_start_in_parallel(
     index.close()
 
 
+def test_small_rerank_window_preserves_deep_gainr_recall(
+    tmp_path,
+    monkeypatch,
+):
+    index = build_index(tmp_path / "gainr-deep-recall.sqlite3")
+    engine = ProductSearchEngine(
+        collection=FakeCollection(),
+        bm25_index=index,
+        company_id="gainr",
+    )
+    captured = {}
+
+    def vector(_query, _collection, top_k, **kwargs):
+        captured["vector_top_k"] = top_k
+        captured["vector_candidate_k"] = kwargs["candidate_k"]
+        results = [
+            {
+                "id": f"safety-{position}",
+                "text": "Safety officer for daily hire",
+                "metadata": {
+                    "main_category_name": "Services",
+                    "subcategory_name": "Safety Officer",
+                },
+                "score": 1.0,
+                "source": "vector",
+            }
+            for position in range(top_k - 1)
+        ]
+        results.append(
+            {
+                "id": "driver",
+                "text": "Light Motor Vehicle Acting Driver for Daily Hire",
+                "metadata": {
+                    "main_category_name": "Automobiles",
+                    "subcategory_name": "Acting Driver",
+                },
+                "score": 0.1,
+                "source": "vector",
+            }
+        )
+        return results
+
+    def bm25(_query, _index, _collection, _filters, top_k, **_kwargs):
+        captured["bm25_top_k"] = top_k
+        return []
+
+    monkeypatch.setattr(search_engine, "vector_search", vector)
+    monkeypatch.setattr(search_engine, "bm25_search", bm25)
+    monkeypatch.setattr(
+        search_engine,
+        "filter_candidates_by_ad_type",
+        lambda candidates, *_args, **_kwargs: candidates,
+    )
+
+    result = engine.retrieve(
+        {
+            "semantic_query": (
+                "vehicle for long distance with comfort and safety"
+            ),
+            "keyword_query": "vehicle long distance comfort safety",
+            "target_ad_type": "offer",
+            "inferred_categories": {},
+        },
+        {"categorical": {"rental_duration": "Per Day"}},
+        candidate_limit=20,
+        strict_candidate_limit=True,
+    )
+
+    assert captured["vector_top_k"] == 80
+    assert captured["bm25_top_k"] == 80
+    assert captured["vector_candidate_k"] >= 100
+    assert len(result["candidates"]) == 20
+    assert result["candidates"][0]["id"] == "driver"
+    index.close()
+
+
 def test_gainr_vehicle_travel_intent_demotes_vehicle_services():
     query_plan = {
         "semantic_query": "vehicle for long distance with comfort and safety",

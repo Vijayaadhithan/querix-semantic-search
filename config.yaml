@@ -43,6 +43,9 @@ retrieval:
   vector_post_filter_max_candidates: 2000
   vector_top_k: 30
   bm25_top_k: 30
+  # Recall pool used before the smaller hosted reranker payload is selected.
+  # With overfetch_factor=2, paged semantic searches inspect up to 80 results
+  # from each retrieval source while sending only 20 candidates to the API.
   hybrid_candidate_k: 40
   # Keep one complete 20-result page inside the hosted semantic ranking window.
   rerank_candidate_k: 20
