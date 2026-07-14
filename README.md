@@ -50,6 +50,7 @@ tests/                  Unit and contract tests
 - [API integration](docs/company_api_integration.md)
 - [Local pgvector workflow](docs/local_pgvector_workflow.md)
 - [Production operations](docs/production_search_operations.md)
+- [Production setup](docs/production_setup.md)
 - [Production commands](docs/production_commands.md)
 
 ## Configuration boundaries
@@ -76,7 +77,7 @@ Use the commands in [Local pgvector workflow](docs/local_pgvector_workflow.md). 
 .venv/bin/pytest -q
 ```
 
-Production deployment, ingestion, health checks, evaluation, and rollback commands are intentionally kept in [Production commands](docs/production_commands.md).
+Initial server preparation is documented in [Production setup](docs/production_setup.md). Deployment, ingestion, health checks, evaluation, and rollback commands are kept in [Production commands](docs/production_commands.md).
 
 ## Operational expectations
 

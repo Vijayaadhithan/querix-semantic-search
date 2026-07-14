@@ -2,6 +2,8 @@
 
 This runbook covers the complete workflow from a local Git push to a production Docker update. Run commands from the repository root unless stated otherwise.
 
+Complete [Production Setup](production_setup.md) first on a new host or when migrating legacy systemd services into Docker. This document assumes the supported Docker networking, storage ownership, secrets, and restart policies are already configured.
+
 The Docker services use `restart: unless-stopped`. When started with `docker compose up -d`, they continue after the SSH session or terminal closes and restart after a server reboot, provided the Docker service is enabled.
 
 ## 1. Before pushing from development
@@ -56,15 +58,14 @@ sudo systemctl is-enabled docker
 sudo systemctl is-active docker
 ```
 
-If Ollama runs as a host service:
+Legacy API and Ollama systemd services must remain disabled when Compose owns those services:
 
 ```bash
-sudo systemctl enable --now ollama
-sudo systemctl is-enabled ollama
-sudo systemctl is-active ollama
+sudo systemctl disable --now gainr-api
+sudo systemctl disable --now ollama
 ```
 
-This is normally a one-time server setup.
+Commands may report `Unit not found` on a clean server; that requires no action. This is normally a one-time server setup.
 
 ## 4. Back up before updating
 
@@ -110,6 +111,11 @@ git status --short
 Git does not replace `.env` or `.env.keys`. Preserve existing database passwords, API keys, and admin keys, then add or update these non-secret values in `.env`:
 
 ```dotenv
+OLLAMA_BASE_URL=http://ollama:11434
+OLLAMA_KEEP_ALIVE=-1
+
+REDIS_URL=redis://redis:6379/0
+
 RERANK_PROVIDER_ORDER=jina,voyage-2.5,voyage-2.5-lite
 RERANK_API_TIMEOUT_SECONDS=3
 RERANK_MAX_DOCUMENT_CHARS=300
@@ -148,6 +154,7 @@ rg '^(RERANK_|PRIMARY_RANKED_K|HYBRID_CANDIDATE_K|API_AUTH_ENABLED|REDIS_ENABLED
 ```bash
 docker compose config --quiet
 docker compose pull pgvector redis
+docker compose --profile ollama pull ollama
 docker compose build --pull api
 docker compose up -d pgvector redis
 docker compose ps
@@ -157,18 +164,14 @@ The API image must be rebuilt because application code and Python requirements c
 
 ## 8. Prepare the embedding model
 
-If Ollama runs on the host:
-
-```bash
-ollama pull embeddinggemma:latest
-ollama list
-```
-
-If Ollama runs in Docker, set `OLLAMA_BASE_URL=http://ollama:11434` in `.env`, then run:
+Start Docker-managed Ollama and prepare the embedding model:
 
 ```bash
 docker compose --profile ollama up -d ollama
 docker compose exec -T ollama ollama pull embeddinggemma:latest
+docker compose exec -T ollama ollama list
+docker compose run --rm --no-deps api \
+  curl -fsS http://ollama:11434/api/tags
 ```
 
 The reranker is hosted, so there are no reranker weights to download or prefetch. Startup validates that the configured provider chain has at least one matching credential.
@@ -222,7 +225,7 @@ Incremental ingestion skips rows whose content hash and embedding model are alre
 ## 11. Start the production API in the background
 
 ```bash
-docker compose up -d --remove-orphans api
+docker compose up -d --force-recreate api
 docker compose ps
 docker compose logs --tail=200 api
 ```
@@ -243,7 +246,8 @@ Confirm the restart policies:
 docker inspect --format '{{.Name}} restart={{.HostConfig.RestartPolicy.Name}}' \
   "$(docker compose ps -q api)" \
   "$(docker compose ps -q pgvector)" \
-  "$(docker compose ps -q redis)"
+  "$(docker compose ps -q redis)" \
+  "$(docker compose ps -q ollama)"
 ```
 
 Each should report `restart=unless-stopped`.
