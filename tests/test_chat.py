@@ -256,6 +256,97 @@ def test_parse_query_plan_keeps_guessed_category_soft():
     }
 
 
+def test_enrich_query_plan_treats_safety_as_vehicle_quality():
+    query = "vehicle for long distance with comfort and safety"
+    plan = {
+        "semantic_query": query,
+        "keyword_query": "vehicle long distance comfort safety",
+        "target_ad_type": "offer",
+        "filters": {
+            "main_category": None,
+            "subcategory": None,
+            "state": None,
+            "city": None,
+            "locality": None,
+            "rental_duration": None,
+            "min_rental_fee": None,
+            "max_rental_fee": None,
+        },
+        "inferred_categories": {
+            "main_category": None,
+            "subcategory": None,
+        },
+    }
+    value_index = {
+        "main_category": {"automobiles": "Automobiles"},
+        "subcategory": {
+            "acting driver": "Acting Driver",
+            "safety officer": "Safety Officer",
+        },
+        "state": {},
+        "city": {},
+        "locality": {},
+        "rental_duration": {"per day": "Per Day"},
+        "_subcategory_main_category": {
+            "acting driver": "Automobiles",
+            "safety officer": "Personal & Home Services",
+        },
+        "_city_state": {},
+        "_locality_location": {},
+    }
+
+    enriched = enrich_query_plan(query, plan, value_index)
+
+    assert "safe long-distance travel" in enriched["semantic_query"]
+    assert "safety" not in enriched["keyword_query"].casefold()
+    for concept in ("car", "cab", "taxi", "driver", "van", "bus", "traveller"):
+        assert concept in enriched["keyword_query"].casefold().split()
+    assert enriched["filters"]["main_category"] is None
+    assert enriched["inferred_categories"]["main_category"] == (
+        "Automobiles"
+    )
+
+
+def test_vehicle_safety_service_request_is_not_rewritten_as_travel():
+    query = "vehicle safety inspection service"
+    plan = {
+        "semantic_query": query,
+        "keyword_query": query,
+        "target_ad_type": "offer",
+        "filters": {
+            "main_category": None,
+            "subcategory": None,
+            "state": None,
+            "city": None,
+            "locality": None,
+            "rental_duration": None,
+            "min_rental_fee": None,
+            "max_rental_fee": None,
+        },
+        "inferred_categories": {
+            "main_category": None,
+            "subcategory": None,
+        },
+    }
+    value_index = {
+        "main_category": {"automobiles": "Automobiles"},
+        "subcategory": {},
+        "state": {},
+        "city": {},
+        "locality": {},
+        "rental_duration": {},
+        "_subcategory_main_category": {},
+        "_city_state": {},
+        "_locality_location": {},
+    }
+
+    enriched = enrich_query_plan(query, plan, value_index)
+
+    assert enriched["semantic_query"] == query
+    assert enriched["keyword_query"] == query
+    assert enriched["inferred_categories"]["main_category"] is None
+
+
 def test_functional_category_word_does_not_become_hard_filter():
     plan = parse_query_plan(
         """

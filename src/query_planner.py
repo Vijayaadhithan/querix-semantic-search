@@ -215,6 +215,55 @@ FAST_PATH_SORT_TOKENS = {
     "sort",
     "sorted",
 }
+FUNCTIONAL_VEHICLE_TERMS = {
+    "automobile",
+    "automobiles",
+    "cab",
+    "car",
+    "driver",
+    "taxi",
+    "transport",
+    "vehicle",
+}
+FUNCTIONAL_VEHICLE_TRAVEL_TERMS = {
+    "comfort",
+    "comfortable",
+    "journey",
+    "safe",
+    "safety",
+    "tour",
+    "travel",
+    "trip",
+}
+FUNCTIONAL_VEHICLE_SERVICE_TERMS = {
+    "audit",
+    "auditor",
+    "cleaning",
+    "consultant",
+    "detailer",
+    "inspection",
+    "insurance",
+    "mechanic",
+    "officer",
+    "polishing",
+    "repair",
+    "trainer",
+    "training",
+}
+FUNCTIONAL_VEHICLE_KEYWORDS = (
+    "vehicle",
+    "rental",
+    "car",
+    "cab",
+    "taxi",
+    "driver",
+    "van",
+    "bus",
+    "traveller",
+    "long",
+    "distance",
+    "travel",
+)
 OFFER_AD_TYPE = "1"
 WANTED_AD_TYPE = "2"
 DURATION_PATTERNS = (
@@ -961,6 +1010,33 @@ def infer_target_ad_type(query: str) -> str:
     )
 
 
+def is_functional_vehicle_travel_request(query: str) -> bool:
+    normalized = normalize_filter_value(query)
+    tokens = set(re.findall(r"[^\W_]+", normalized))
+    if tokens & FUNCTIONAL_VEHICLE_SERVICE_TERMS:
+        return False
+    if not (tokens & FUNCTIONAL_VEHICLE_TERMS):
+        return False
+    return bool(tokens & FUNCTIONAL_VEHICLE_TRAVEL_TERMS) or bool(
+        re.search(
+            r"\b(?:long[\s-]+distance|outstation|road[\s-]+trip)\b",
+            normalized,
+        )
+    )
+
+
+def expand_functional_semantic_query(query: str, semantic_query: str) -> str:
+    if not is_functional_vehicle_travel_request(query):
+        return semantic_query
+    context = (
+        "comfortable and safe long-distance travel using a usable vehicle "
+        "rental or driver"
+    )
+    if context in normalize_filter_value(semantic_query):
+        return semantic_query
+    return f"{semantic_query} {context}".strip()
+
+
 def expand_functional_keyword_query(query: str, keyword_query: str) -> str:
     normalized = normalize_filter_value(query)
     rough_terrain = (
@@ -975,6 +1051,30 @@ def expand_functional_keyword_query(query: str, keyword_query: str) -> str:
         concepts = "off-road vehicle ATV 4x4"
         if "atv" not in normalize_filter_value(keyword_query):
             return f"{keyword_query} {concepts}".strip()
+    if is_functional_vehicle_travel_request(query):
+        # These are desired qualities of the vehicle, not catalog listing
+        # types. Leaving them as strong BM25 terms promotes safety officers,
+        # auditors, and trainers over actual transport listings.
+        keyword_query = re.sub(
+            r"\b(?:comfort|comfortable|safe|safety|secure|security)\b",
+            " ",
+            keyword_query,
+            flags=re.IGNORECASE,
+        )
+        keyword_query = " ".join(keyword_query.split())
+        keyword_query = re.sub(
+            r"(?:\b(?:and|with)\b\s*)+$",
+            "",
+            keyword_query,
+            flags=re.IGNORECASE,
+        ).strip()
+        existing = set(re.findall(r"[^\W_]+", keyword_query.casefold()))
+        additions = [
+            term
+            for term in FUNCTIONAL_VEHICLE_KEYWORDS
+            if term not in existing
+        ]
+        return " ".join([keyword_query, *additions]).strip()
     return keyword_query
 
 
@@ -1000,6 +1100,10 @@ def infer_functional_subcategory(query: str, values: dict) -> str | None:
 
 
 def enrich_query_plan(query: str, plan: dict, value_index: dict) -> dict:
+    plan["semantic_query"] = expand_functional_semantic_query(
+        query,
+        plan["semantic_query"],
+    )
     plan["keyword_query"] = expand_functional_keyword_query(
         query,
         plan["keyword_query"],
@@ -1101,6 +1205,16 @@ def enrich_query_plan(query: str, plan: dict, value_index: dict) -> dict:
                 value_index["subcategory"],
             )
         )
+
+    if (
+        is_functional_vehicle_travel_request(query)
+        and filters.get("main_category") is None
+        and inferred_categories.get("main_category") is None
+    ):
+        # This is a soft fusion preference, never a hard category filter.
+        inferred_categories["main_category"] = value_index[
+            "main_category"
+        ].get("automobiles")
 
     filters["rental_duration"] = extract_duration_filter(
         query,
@@ -1291,6 +1405,13 @@ def extract_query_plan(
         "searching for another person's request. Use target_ad_type=wanted only when "
         "the user explicitly asks for wanted/request ads or for people who need an "
         "item. Use null for every absent filter."
+        " Distinguish the requested item from its desired qualities. For example, "
+        "'vehicle for long distance with comfort and safety' requests a usable "
+        "travel vehicle or driver; comfort and safety are attributes, not requests "
+        "for safety officers, trainers, auditors, or other safety services. In that "
+        "case semantic_query should express comfortable safe long-distance vehicle "
+        "travel, while keyword_query should prioritize listing concepts such as car, "
+        "cab, taxi, driver, van, bus, and traveller rather than the word safety."
     )
     if prompt_context.strip():
         system_prompt += (

@@ -790,6 +790,15 @@ def test_gainr_vehicle_travel_intent_demotes_vehicle_services():
             },
             "fusion_score": 0.03,
         },
+        {
+            "id": "safety-auditor",
+            "text": "Food Safety Auditor for Daily Hire",
+            "metadata": {
+                "main_category_name": "Services",
+                "subcategory_name": "Food Safety Auditor",
+            },
+            "fusion_score": 0.07,
+        },
     ]
 
     adjusted = search_engine._apply_gainr_domain_intent_adjustments(
@@ -800,6 +809,7 @@ def test_gainr_vehicle_travel_intent_demotes_vehicle_services():
 
     assert [candidate["id"] for candidate in adjusted] == [
         "driver",
+        "safety-auditor",
         "detailer",
     ]
 
@@ -882,6 +892,7 @@ def test_gainr_vehicle_intent_context_is_passed_to_reranker(tmp_path):
     )
 
     assert "Gainr domain intent" in ranker.queries[0]
+    assert "generic safety officers" in ranker.queries[0]
     assert "Demote services about vehicles" in ranker.queries[0]
     index.close()
 

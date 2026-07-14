@@ -68,7 +68,8 @@ from settings import (
 )
 
 LOGGER = logging.getLogger("uvicorn.error")
-RESULT_CACHE_SCHEMA_VERSION = "v12"
+RESULT_CACHE_SCHEMA_VERSION = "v13"
+QUERY_PLAN_CACHE_SCHEMA_VERSION = "v2"
 
 GAINR_VEHICLE_INTENT_TERMS = {
     "automobile",
@@ -215,14 +216,22 @@ def _apply_gainr_domain_intent_adjustments(
         metadata = item.get("metadata") or {}
         score = float(item.get("fusion_score") or 0.0)
 
-        if str(metadata.get("main_category_name") or "").casefold() == (
-            "automobiles"
-        ):
+        is_automobile = (
+            str(metadata.get("main_category_name") or "").casefold()
+            == "automobiles"
+        )
+        is_usable_vehicle = _contains_phrase(
+            text,
+            GAINR_USABLE_VEHICLE_TERMS,
+        )
+        if is_automobile:
             score += 0.035
-        if _contains_phrase(text, GAINR_USABLE_VEHICLE_TERMS):
+        if is_usable_vehicle:
             score += 0.025
         if _contains_phrase(text, GAINR_VEHICLE_SERVICE_TERMS):
             score -= 0.08
+        if not is_automobile and not is_usable_vehicle:
+            score -= 0.06
 
         item["fusion_score"] = score
         adjusted.append(item)
@@ -245,7 +254,9 @@ def _gainr_rerank_context(
     return (
         "Gainr domain intent: the user wants a usable vehicle or driver for "
         "travel/transport. Prefer car, cab, driver, van, bus, traveller, bike, "
-        "truck, or other vehicle rental listings. Demote services about "
+        "truck, or other vehicle rental listings. Treat comfort and safety as "
+        "desired vehicle qualities; generic safety officers, trainers, "
+        "auditors, and safety services are irrelevant. Demote services about "
         "vehicles such as detailing, polishing, modification, insurance, "
         "cleaning, repair, or consulting unless the user explicitly asks for "
         "those services."
@@ -614,7 +625,9 @@ class ProductSearchEngine:
                 del self._query_plan_cache[key]
         if self.shared_plan_cache is None:
             return None
-        shared_key = hashlib.sha256(key.encode("utf-8")).hexdigest()
+        shared_key = hashlib.sha256(
+            f"{QUERY_PLAN_CACHE_SCHEMA_VERSION}\0{key}".encode("utf-8")
+        ).hexdigest()
         result = self.shared_plan_cache.get_json(
             self._cache_namespace("query_plan"),
             shared_key,
@@ -640,7 +653,9 @@ class ProductSearchEngine:
         key = self._query_cache_key(query)
         self._cache_memory_plan(key, result)
         if self.shared_plan_cache is not None:
-            shared_key = hashlib.sha256(key.encode("utf-8")).hexdigest()
+            shared_key = hashlib.sha256(
+                f"{QUERY_PLAN_CACHE_SCHEMA_VERSION}\0{key}".encode("utf-8")
+            ).hexdigest()
             self.shared_plan_cache.set_json(
                 self._cache_namespace("query_plan"),
                 shared_key,

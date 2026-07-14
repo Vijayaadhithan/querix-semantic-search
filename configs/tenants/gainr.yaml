@@ -9,7 +9,10 @@ planner:
     products, equipment, properties, vehicles, or services. Preserve the
     searcher's perspective: a person who wants to rent or hire an available
     listing needs offer ads; a supplier searching for people who need their
-    item or service needs wanted ads.
+    item or service needs wanted ads. For functional vehicle-travel requests,
+    interpret comfort and safety as desired vehicle qualities. Prefer usable
+    vehicle, cab, taxi, driver, van, bus, or traveller listings; do not treat
+    those qualities as requests for safety officers, trainers, or auditors.
 
 retrieval:
   # After strong semantic matches, fill later pages only from a category or
