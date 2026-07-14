@@ -31,15 +31,17 @@ Production host:
 cd <production-repository-path>
 export BRANCH=main
 git status --short
-git pull --ff-only origin "$BRANCH"
-docker compose config --quiet
-docker compose build --pull api
-docker compose --profile ollama up -d pgvector redis ollama
-docker compose --profile ollama up -d --no-deps --force-recreate api
+git pull --ff-only origin "$BRANCH" && \
+  COMPANY_ID=gainr ./scripts/deploy_production.sh
 ```
 
-Wait for real readiness; do not pipe `curl` directly into `jq` in the loop,
-because `jq` can exit successfully after a failed `curl`:
+The script automatically validates Compose, rebuilds the API image, ensures
+pgvector/Redis/Docker Ollama are running, recreates only the API, waits for real
+readiness, runs the tenant doctor, and shows status and recent logs. Because the
+commands use `&&`, deployment does not start if `git pull` fails. It also refuses
+to run over uncommitted production files or concurrently with another deployment.
+
+The equivalent manual readiness check is:
 
 ```bash
 until curl -fsS --max-time 5 \
@@ -51,12 +53,15 @@ do
   sleep 3
 done
 jq . /tmp/semantic-search-ready.json
-docker compose logs --tail=100 api
 ```
 
 Do **not** run ingestion for an ordinary code change. Use ingestion only when
 source rows/indexed metadata changed, or when the embedding/index contract
 changed. Never use `docker compose down -v` during deployment.
+
+The script never edits `.env` or `.env.keys`; Git ignores both. If release notes
+require a new production environment value, edit it before running the script.
+`docker compose config --quiet` will catch invalid or missing required values.
 
 ## 1. Before pushing from development
 
@@ -398,16 +403,8 @@ For later code-only releases that do not change dependencies, embedding text, em
 cd <production-repository-path>
 export BRANCH=main
 git status --short
-git pull --ff-only origin "$BRANCH"
-docker compose config --quiet
-docker compose build --pull api
-docker compose --profile ollama up -d pgvector redis ollama
-docker compose --profile ollama up -d --no-deps --force-recreate api
-docker compose ps
-docker compose logs --tail=100 api
-until curl -fsS --max-time 5 -o /tmp/semantic-search-ready.json \
-  http://127.0.0.1:8000/api/v1/ready; do sleep 3; done
-jq . /tmp/semantic-search-ready.json
+git pull --ff-only origin "$BRANCH" && \
+  COMPANY_ID=gainr ./scripts/deploy_production.sh
 ```
 
 Do not run ingestion automatically for every code-only release. Run it only when source data, embedding content, the embedding model, BM25 data, or index schema changed.

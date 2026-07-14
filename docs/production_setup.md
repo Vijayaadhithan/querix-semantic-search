@@ -395,19 +395,17 @@ Back up before applying an unverified release. Then update and recreate the API:
 ```bash
 cd <production-repository-path>
 git status --short
-git pull --ff-only origin main
-docker compose config --quiet
-docker compose build --pull api
-docker compose --profile ollama up -d pgvector redis ollama
-docker compose --profile ollama up -d --no-deps --force-recreate api
-docker compose ps
-docker compose logs --tail=200 api
-until curl -fsS --max-time 5 -o /tmp/semantic-search-ready.json \
-  http://127.0.0.1:8000/api/v1/ready; do sleep 3; done
-jq . /tmp/semantic-search-ready.json
+git pull --ff-only origin main && \
+  COMPANY_ID=gainr ./scripts/deploy_production.sh
 ```
 
-Git does not update `.env` or `.env.keys`. Apply release-specific environment changes manually and recreate the API afterward.
+The deployment script performs the Compose validation, API build/recreation,
+readiness wait, tenant doctor, container status, and log checks automatically.
+It stops on the first failed gate and prints API diagnostics after a readiness
+failure.
+
+Git does not update `.env` or `.env.keys`, and the script never edits them.
+Apply release-specific environment changes manually before running the command.
 
 Do not run ingestion for every code deployment. Run it only when source rows, indexed text, the embedding model, filter metadata, or index schema changed.
 

@@ -60,8 +60,9 @@ tests/                  Unit and contract tests
 
 For every ordinary code change, use the copy-paste workflow at the top of
 [Production commands](docs/production_commands.md#routine-code-change-use-this-every-time).
-It pulls the new revision, rebuilds/recreates only the API, waits for real
-readiness, and leaves existing embeddings and indexes untouched.
+After a successful pull, `scripts/deploy_production.sh` rebuilds/recreates only
+the API, waits for real readiness, runs the tenant doctor, and leaves existing
+embeddings and indexes untouched.
 
 ## Configuration boundaries
 
