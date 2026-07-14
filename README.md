@@ -10,8 +10,12 @@ A tenant-isolated semantic search service for product and classified catalogues.
 - Structured category, location, price, duration, and listing-type filters.
 - Tenant-scoped API keys, rate limits, caches, indexes, and database configuration.
 - Cursor-based search pagination and monthly usage reporting.
-- Redis result caching and graceful reranker fallback.
-- Docker deployment with persistent pgvector, Redis, and application data.
+- Redis result caching plus graceful vector, BM25, and reranker degradation.
+- Docker deployment with persistent pgvector, Redis, Ollama, and application data.
+- Gainr compatibility pagination with a ranked 20-result first page and
+  filtered continuation pages.
+- Real serving-path readiness, bounded overload admission, rotated container
+  logs, and a guarded daily incremental-ingestion timer.
 
 The production vector backend is pgvector only. Chroma is not a runtime or ingestion dependency.
 
@@ -28,7 +32,7 @@ request
   -> pagination, diagnostics, and cache
 ```
 
-Broad catalogue queries remain browseable. Queries containing structured constraints apply those constraints before final ranking. If a reranker is unavailable, the API returns the fused semantic result with degraded diagnostics instead of failing the request.
+Broad catalogue queries remain browseable. Queries containing structured constraints apply those constraints before final ranking. If one retrieval path or a reranker is unavailable, the API uses the remaining safe result path and reports degraded diagnostics. A request fails only when no serving path remains.
 
 ## Repository layout
 
@@ -52,6 +56,12 @@ tests/                  Unit and contract tests
 - [Production operations](docs/production_search_operations.md)
 - [Production setup](docs/production_setup.md)
 - [Production commands](docs/production_commands.md)
+- [Retrieval evaluation gates](eval/README.md)
+
+For every ordinary code change, use the copy-paste workflow at the top of
+[Production commands](docs/production_commands.md#routine-code-change-use-this-every-time).
+It pulls the new revision, rebuilds/recreates only the API, waits for real
+readiness, and leaves existing embeddings and indexes untouched.
 
 ## Configuration boundaries
 
@@ -84,6 +94,11 @@ Initial server preparation is documented in [Production setup](docs/production_s
 - Start with one API worker on an 8 GB host and increase only after load testing.
 - Keep Redis enabled in production.
 - Keep tenant search concurrency bounded to protect memory and latency.
+- Use `DOCKER_OLLAMA_BASE_URL`, `DOCKER_REDIS_URL`, and
+  `DOCKER_MYSQL_HOST` for container networking; keep ordinary host values for
+  direct Python commands.
 - Rebuild embeddings whenever the embedding model or embedding text contract changes.
+- Do not run ingestion for API-only, documentation, pagination, caching,
+  fallback, or reranker changes.
 - Evaluate ranking changes against a versioned, reviewed query set before deployment.
 - Place the API behind TLS termination and do not expose pgvector or Redis publicly.

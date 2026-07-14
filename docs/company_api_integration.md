@@ -94,7 +94,7 @@ Supply exactly one of `query` or `cursor`. A tenant profile may map different ex
     }
   ],
   "interpreted_query": {
-    "execution_path": "hybrid"
+    "execution_path": "semantic"
   },
   "applied_filters": {},
   "unresolved_filters": {},
@@ -147,7 +147,7 @@ The optional month uses `YYYY-MM`. Usage is tenant-scoped and intended for accou
 | `410` | Cursor expired | Restart from the original query |
 | `422` | Request validation failed | Show a validation message or correct the payload |
 | `429` | Tenant rate limit reached | Retry with exponential backoff and jitter |
-| `503` | Dependency or tenant service unavailable | Retry briefly; alert if sustained |
+| `503` | Dependency unavailable or bounded search capacity is busy | Honor `Retry-After`, retry briefly, and alert if sustained |
 
 Do not automatically retry validation or authentication failures. For `429` and transient `503`, use bounded exponential backoff and preserve the original request ID in application logs.
 
@@ -161,6 +161,13 @@ The service can enable an optional tenant adapter for an existing frontend contr
 - `GET /api/v1/<company-slug>/recent-search`
 
 These routes are adapter-specific and are not part of the canonical integration contract. New integrations should use `/search`, `/health`, and `/usage` unless compatibility is explicitly required.
+
+Gainr's `filter-result` adapter uses page-number pagination rather than the
+canonical cursor contract. Resend the same `searchTerm` and `filter` object and
+change only `page`. It returns 20 rows per normal page: the first semantic page
+is reranked, and later pages continue from inventory satisfying the same
+predefined city, locality, price, duration, and ad-type constraints. The final
+page may contain fewer than 20 rows when eligible inventory is exhausted.
 
 ## Backend proxy example
 

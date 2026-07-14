@@ -6,6 +6,58 @@ Complete [Production Setup](production_setup.md) first on a new host or when mig
 
 The Docker services use `restart: unless-stopped`. When started with `docker compose up -d`, they continue after the SSH session or terminal closes and restart after a server reboot, provided the Docker service is enabled.
 
+## Routine code change: use this every time
+
+For an ordinary code/configuration change, push from development and recreate
+only the production API. Existing pgvector embeddings, BM25, Redis data, and
+the Docker Ollama model are preserved.
+
+Development machine:
+
+```bash
+git status --short
+git diff --check
+.venv/bin/python -m pytest -q
+docker compose config --quiet
+git add -A
+git status --short
+git commit -m "Describe the production change"
+git push origin main
+```
+
+Production host:
+
+```bash
+cd <production-repository-path>
+export BRANCH=main
+git status --short
+git pull --ff-only origin "$BRANCH"
+docker compose config --quiet
+docker compose build --pull api
+docker compose --profile ollama up -d pgvector redis ollama
+docker compose --profile ollama up -d --no-deps --force-recreate api
+```
+
+Wait for real readiness; do not pipe `curl` directly into `jq` in the loop,
+because `jq` can exit successfully after a failed `curl`:
+
+```bash
+until curl -fsS --max-time 5 \
+  -o /tmp/semantic-search-ready.json \
+  http://127.0.0.1:8000/api/v1/ready
+do
+  echo "Waiting for API..."
+  docker compose ps
+  sleep 3
+done
+jq . /tmp/semantic-search-ready.json
+docker compose logs --tail=100 api
+```
+
+Do **not** run ingestion for an ordinary code change. Use ingestion only when
+source rows/indexed metadata changed, or when the embedding/index contract
+changed. Never use `docker compose down -v` during deployment.
+
 ## 1. Before pushing from development
 
 Review and verify the complete change set:
@@ -111,6 +163,10 @@ git status --short
 Git does not replace `.env` or `.env.keys`. Preserve existing database passwords, API keys, and admin keys, then add or update these non-secret values in `.env`:
 
 ```dotenv
+DOCKER_OLLAMA_BASE_URL=http://ollama:11434
+DOCKER_REDIS_URL=redis://redis:6379/0
+DOCKER_MYSQL_HOST=<actual-production-database-host>
+
 OLLAMA_BASE_URL=http://ollama:11434
 OLLAMA_KEEP_ALIVE=-1
 
@@ -155,10 +211,8 @@ rg '^(RERANK_|PRIMARY_RANKED_K|HYBRID_CANDIDATE_K|API_AUTH_ENABLED|REDIS_ENABLED
 
 ```bash
 docker compose config --quiet
-docker compose pull pgvector redis
-docker compose --profile ollama pull ollama
 docker compose build --pull api
-docker compose up -d pgvector redis
+docker compose --profile ollama up -d pgvector redis ollama
 docker compose ps
 ```
 
@@ -170,11 +224,13 @@ Start Docker-managed Ollama and prepare the embedding model:
 
 ```bash
 docker compose --profile ollama up -d ollama
-docker compose exec -T ollama ollama pull embeddinggemma:latest
 docker compose exec -T ollama ollama list
 docker compose run --rm --no-deps api \
   curl -fsS http://ollama:11434/api/tags
 ```
+
+Run `docker compose exec -T ollama ollama pull embeddinggemma:latest` only on
+a new Ollama volume or when `ollama list` reports that the model is missing.
 
 The reranker is hosted, so there are no reranker weights to download or prefetch. Startup validates that the configured provider chain has at least one matching credential.
 
@@ -190,18 +246,14 @@ docker compose run --rm api python src/ingest.py \
   --limit 10
 ```
 
-## 10. Update the indexes for this release
+## 10. Decide whether indexes need updating
 
-The reranker change does not change stored embeddings. If production already contains the complete pgvector index for the same `embeddinggemma:latest` embedding model, do not replace or force re-embed vectors.
+Do not update indexes for API, pagination, caching, fallback, reranker,
+monitoring, documentation, or Docker-only changes. Existing embeddings remain
+valid for those releases.
 
-Rebuild BM25 once for this upgrade so the current lexical fields and price/listing logic are populated from the source database:
-
-```bash
-docker compose run --rm api python src/ingest.py \
-  --company "$COMPANY_ID" \
-  --bm25-only \
-  --mysql-batch-size 5000
-```
+Run incremental ingestion only when source rows, indexed filter metadata, or
+embedding text changed:
 
 Verify vector and BM25 counts:
 
@@ -210,8 +262,6 @@ docker compose run --rm api python src/ingest.py \
   --company "$COMPANY_ID" \
   --list
 ```
-
-If pgvector is missing rows or source data changed, run an incremental full scan with deletion reconciliation:
 
 ```bash
 docker compose run --rm api python src/ingest.py \
@@ -227,7 +277,7 @@ Incremental ingestion skips rows whose content hash and embedding model are alre
 ## 11. Start the production API in the background
 
 ```bash
-docker compose up -d --force-recreate api
+docker compose --profile ollama up -d --no-deps --force-recreate api
 docker compose ps
 docker compose logs --tail=200 api
 ```
@@ -254,21 +304,22 @@ docker inspect --format '{{.Name}} restart={{.HostConfig.RestartPolicy.Name}}' \
 
 Each should report `restart=unless-stopped`.
 
-After the new API is healthy, an installation upgraded from the former local-reranker profile may remove its now-unused Hugging Face volume once:
-
-```bash
-docker volume ls --filter label=com.docker.compose.volume=hf-cache
-docker volume rm <volume-name-shown-above>
-```
-
-Do not remove pgvector, Redis, Ollama, or application storage volumes.
+Do not remove pgvector, Redis, Ollama, or application storage volumes during a
+release. The hosted-reranker image does not require a Hugging Face model volume.
 
 ## 12. Production verification
 
 Readiness:
 
 ```bash
-curl -fsS http://127.0.0.1:8000/api/v1/ready
+until curl -fsS --max-time 5 \
+  -o /tmp/semantic-search-ready.json \
+  http://127.0.0.1:8000/api/v1/ready
+do
+  echo "Waiting for API..."
+  sleep 3
+done
+jq . /tmp/semantic-search-ready.json
 ```
 
 Strict infrastructure and security verification:
@@ -350,10 +401,13 @@ git status --short
 git pull --ff-only origin "$BRANCH"
 docker compose config --quiet
 docker compose build --pull api
-docker compose up -d --no-deps --force-recreate api
+docker compose --profile ollama up -d pgvector redis ollama
+docker compose --profile ollama up -d --no-deps --force-recreate api
 docker compose ps
 docker compose logs --tail=100 api
-curl -fsS http://127.0.0.1:8000/api/v1/ready
+until curl -fsS --max-time 5 -o /tmp/semantic-search-ready.json \
+  http://127.0.0.1:8000/api/v1/ready; do sleep 3; done
+jq . /tmp/semantic-search-ready.json
 ```
 
 Do not run ingestion automatically for every code-only release. Run it only when source data, embedding content, the embedding model, BM25 data, or index schema changed.
@@ -366,23 +420,24 @@ succeeds. A host lock prevents overlapping runs. The BM25 revision now changes
 only when indexed content actually changes, so an unchanged daily scan does not
 invalidate every cached search.
 
-Install the systemd units after replacing `/opt/semantic-search` in the service
-file if the production checkout uses a different absolute path:
+Install the systemd units using the current production checkout path:
 
 ```bash
-sudo cp deploy/semantic-search-ingest.service /etc/systemd/system/
+export PRODUCTION_REPO="$(pwd)"
+sed "s|/opt/semantic-search|$PRODUCTION_REPO|g" \
+  deploy/semantic-search-ingest.service | \
+  sudo tee /etc/systemd/system/semantic-search-ingest.service >/dev/null
 sudo cp deploy/semantic-search-ingest.timer /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now semantic-search-ingest.timer
 systemctl list-timers semantic-search-ingest.timer
 ```
 
-Run and inspect it once before relying on the timer:
+Inspect the timer without forcing an immediate ingestion run:
 
 ```bash
-sudo systemctl start semantic-search-ingest.service
-sudo systemctl status semantic-search-ingest.service
-journalctl -u semantic-search-ingest.service -n 200 --no-pager
+systemctl status semantic-search-ingest.timer --no-pager
+journalctl -u semantic-search-ingest.timer -n 50 --no-pager
 ```
 
 The timer uses `Persistent=true`: if the host is down at 03:00 IST, systemd
@@ -397,7 +452,7 @@ The previous Git commit is stored in `$BACKUP_DIR/git-commit.txt`. To roll back 
 export PREVIOUS_COMMIT="$(cat "$BACKUP_DIR/git-commit.txt")"
 git switch --detach "$PREVIOUS_COMMIT"
 docker compose build api
-docker compose up -d --no-deps --force-recreate api
+docker compose --profile ollama up -d --no-deps --force-recreate api
 docker compose logs --tail=200 api
 ```
 

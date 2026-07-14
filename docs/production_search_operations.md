@@ -9,7 +9,7 @@ The production service should provide:
 - tenant-isolated search and usage accounting;
 - semantic-first ranking with structured-filter correctness;
 - bounded latency and memory on the selected host;
-- graceful degradation during reranker or query-provider failures;
+- graceful degradation during vector, BM25, reranker, or query-provider failures;
 - reproducible ingestion and rollback;
 - API-visible timings and provider diagnostics.
 
@@ -17,11 +17,20 @@ The production service should provide:
 
 Use one API worker, a tenant engine cache of one, and one concurrent search per tenant as the safe starting point. Keep pgvector and Redis on private Docker networking and expose the API only through a TLS reverse proxy.
 
-The hosted profile uses Jina first, followed by Voyage quality and lite fallbacks. It reranks 20 candidates, caps each candidate document at 300 characters, and uses a 40-item hybrid recall window. Paged semantic searches over-fetch up to 80 results from each retrieval source before intent shaping selects the 20 API candidates; this preserves recall without increasing reranker tokens. On the current 10-query Gainr evaluation it passed every case with MRR 0.925 in approximately 36 seconds and about 82 MB maximum evaluator RSS. The previous local accuracy profile measured MRR 0.933 in approximately 54 seconds and about 1.08 GB maximum RSS on the same cases. These figures are a release baseline, not a production latency guarantee.
+The hosted profile uses Jina first, followed by Voyage quality and lite fallbacks. It reranks 20 candidates, caps each candidate document at 300 characters, and uses a 40-item hybrid recall window. Gainr retains those 20 ranked results as its first page and fills later pages only from inventory that satisfies the same predefined filters. Current observed production latency is roughly three seconds for uncached semantic search and below one second for deterministic search, but these are observations rather than service guarantees.
 
 The hosted document payload is bounded at 6,000 characters per search before JSON overhead: 20 candidates multiplied by 300 characters. This is 60% lower than a 30-candidate, 500-character profile while retaining a fully reranked 20-result first page. Provider-reported token counts can differ from character estimates, so monitor the usage diagnostics in real traffic.
 
-The service intentionally has no local reranker fallback. If all hosted providers fail, it returns the existing hybrid order with degraded diagnostics and does not cache that degraded result.
+The service intentionally has no local reranker fallback. If all hosted providers fail, it returns the existing hybrid order with degraded diagnostics and does not cache that degraded result. Vector and BM25 retrieval are also independent: one may serve while the other is degraded, and both failures are required before retrieval itself is unavailable.
+
+## Routine releases
+
+The canonical copy-paste workflow is
+[Routine code change](production_commands.md#routine-code-change-use-this-every-time).
+An API-only release rebuilds and recreates the API container but does not run
+ingestion or modify pgvector/BM25. The production Compose layout uses Docker
+Ollama and the `DOCKER_OLLAMA_BASE_URL`, `DOCKER_REDIS_URL`, and
+`DOCKER_MYSQL_HOST` variables.
 
 ## Release policy
 
@@ -40,6 +49,10 @@ Ranking changes should be approved from a reviewed evaluation set. Generated cas
 
 Use incremental ingestion for routine updates. It writes changed BM25 rows and vectors while skipping content whose hash and embedding model are current.
 
+The enabled systemd timer starts this guarded job around 03:00 IST. A source
+scan may read all eligible rows, but it embeds only changed/new content,
+reconciles deletions, and restarts the API only after success.
+
 Use deletion reconciliation only after a complete scan. Use forced re-embedding when the embedding model or embedding-text contract changes. Use replacement only for an authoritative tenant rebuild, because it clears that tenant's existing vector source and BM25 index before repopulation.
 
 Back up pgvector and the `storage/` directory before destructive maintenance.
@@ -55,7 +68,8 @@ Monitor:
 - database pool wait and query time;
 - pgvector and BM25 counts;
 - process/container memory and CPU;
-- HTTP 429 and 5xx rates.
+- HTTP 429 and 5xx rates;
+- bounded-capacity rejections and degraded retrieval counts.
 
 A high reranker time or token count suggests reducing the ranked window or document-character cap only after relevance testing. A high vector time suggests checking HNSW use, metadata predicates, database load, and `ef_search`. A high planner time suggests deterministic fast-path coverage or query-provider latency.
 

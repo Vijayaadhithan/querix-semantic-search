@@ -27,3 +27,11 @@ Each case can use the existing `relevant_ids`, `expected_filters`,
 `result_limit: 40` checks the ranked first page plus continuation inventory.
 Only add thresholds and forbidden IDs after a human has reviewed the labels;
 generated category matches alone are not a reliable relevance judgment.
+
+Evaluation reads the existing indexes. It does not require re-ingestion after
+an API-only, pagination, caching, fallback, Docker, or documentation change.
+Run ingestion first only when the evaluated source/index contract changed.
+
+Before approving a ranking release, record the case-file revision, pass count,
+MRR, precision gates, wall time, and whether any run was degraded. Do not treat
+one historical benchmark as a permanent production guarantee.

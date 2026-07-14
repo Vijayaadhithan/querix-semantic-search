@@ -95,6 +95,10 @@ Create or edit `.env`. Do not overwrite a working production file with `.env.exa
 The core Docker production values are:
 
 ```dotenv
+DOCKER_OLLAMA_BASE_URL=http://ollama:11434
+DOCKER_REDIS_URL=redis://redis:6379/0
+DOCKER_MYSQL_HOST=<actual-production-database-host>
+
 OLLAMA_BASE_URL=http://ollama:11434
 OLLAMA_KEEP_ALIVE=-1
 
@@ -126,6 +130,8 @@ API_RATE_LIMIT_ENABLED=true
 API_TENANT_CONFIG_DIR=configs/tenants
 API_TENANT_ENGINE_CACHE_SIZE=1
 API_TENANT_MAX_CONCURRENT_SEARCHES=1
+API_SEARCH_SLOT_TIMEOUT_SECONDS=5
+OLLAMA_QUERY_TIMEOUT_SECONDS=10
 API_CORS_ORIGINS=https://<customer-domain>
 
 USAGE_TRACKING_ENABLED=true
@@ -148,8 +154,12 @@ Do not enable `verify-full` until the correct certificate is installed and mount
 
 Important Docker addresses:
 
-- Use `redis`, not `127.0.0.1`, for Redis from the API container.
-- Use `ollama`, not `127.0.0.1` or `host.docker.internal`, when Ollama runs in Compose.
+- `DOCKER_REDIS_URL` is the value injected into the API container; use the
+  Compose hostname `redis`, not `127.0.0.1`.
+- `DOCKER_OLLAMA_BASE_URL` is the value injected into the API container; use
+  the Compose hostname `ollama` for the supported production layout.
+- `DOCKER_MYSQL_HOST` must be the real hostname of the company database as
+  reachable from the API container.
 - Compose supplies `pgvector:5432` to the API container. `PGVECTOR_PORT=15432` is only the optional loopback host mapping.
 - Use the real remote database hostname for a remote company database.
 
@@ -235,8 +245,13 @@ docker compose ps -a
 Pull the embedding model into the persistent Ollama volume:
 
 ```bash
-docker compose exec -T ollama ollama pull embeddinggemma:latest
 docker compose exec -T ollama ollama list
+```
+
+Only if `embeddinggemma:latest` is missing:
+
+```bash
+docker compose exec -T ollama ollama pull embeddinggemma:latest
 ```
 
 Verify API-network access to Ollama:
@@ -275,7 +290,7 @@ For a new host, restore a validated pgvector custom-format dump and the `storage
 Start in detached mode:
 
 ```bash
-docker compose up -d --force-recreate api
+docker compose --profile ollama up -d --no-deps --force-recreate api
 docker compose ps -a
 docker compose logs --tail=200 api
 ```
@@ -289,7 +304,14 @@ The API may briefly show `health: starting` while it validates providers and war
 Check readiness:
 
 ```bash
-curl -fsS http://127.0.0.1:8000/api/v1/ready
+until curl -fsS --max-time 5 \
+  -o /tmp/semantic-search-ready.json \
+  http://127.0.0.1:8000/api/v1/ready
+do
+  echo "Waiting for API..."
+  sleep 3
+done
+jq . /tmp/semantic-search-ready.json
 ```
 
 Run the infrastructure doctor:
@@ -376,15 +398,33 @@ git status --short
 git pull --ff-only origin main
 docker compose config --quiet
 docker compose build --pull api
-docker compose up -d --no-deps --force-recreate api
+docker compose --profile ollama up -d pgvector redis ollama
+docker compose --profile ollama up -d --no-deps --force-recreate api
 docker compose ps
 docker compose logs --tail=200 api
-curl -fsS http://127.0.0.1:8000/api/v1/ready
+until curl -fsS --max-time 5 -o /tmp/semantic-search-ready.json \
+  http://127.0.0.1:8000/api/v1/ready; do sleep 3; done
+jq . /tmp/semantic-search-ready.json
 ```
 
 Git does not update `.env` or `.env.keys`. Apply release-specific environment changes manually and recreate the API afterward.
 
 Do not run ingestion for every code deployment. Run it only when source rows, indexed text, the embedding model, filter metadata, or index schema changed.
+
+### Daily 03:00 IST synchronization
+
+Install the timer once using the current checkout path, following
+[Daily 03:00 IST incremental ingestion](production_commands.md#15-daily-0300-ist-incremental-ingestion).
+After later code pulls, the unit continues to call the script from that checkout;
+reinstall it only if the repository path or unit files change.
+
+Verify the schedule without starting ingestion manually:
+
+```bash
+systemctl list-timers semantic-search-ingest.timer
+systemctl status semantic-search-ingest.timer --no-pager
+journalctl -u semantic-search-ingest.service -n 100 --no-pager
+```
 
 ## 14. Backups
 
@@ -417,7 +457,7 @@ ls -lh "$BACKUP_DIR"
 Restart the API after the backup:
 
 ```bash
-docker compose up -d api
+docker compose --profile ollama up -d --no-deps api
 ```
 
 Store backups outside the application host and periodically test a restore in a separate environment.
@@ -456,7 +496,7 @@ Cause: a legacy systemd API or another process still owns the loopback port.
 ```bash
 sudo ss -ltnp | grep ':8000'
 sudo systemctl disable --now gainr-api
-docker compose up -d --force-recreate api
+docker compose --profile ollama up -d --no-deps --force-recreate api
 ```
 
 ### API container ID is empty
@@ -478,23 +518,23 @@ Cause: the host bind mount is owned by a user that does not match the container 
 docker compose stop api
 docker compose run --rm --no-deps --user root api \
   sh -c 'chown -R app:app /app/storage && chmod -R u+rwX,go-rwx /app/storage'
-docker compose up -d --force-recreate api
+docker compose --profile ollama up -d --no-deps --force-recreate api
 ```
 
 ### Ollama connection is refused
 
-The API container must use the Compose service name:
+The API container must use the Docker-specific Compose service address:
 
 ```dotenv
-OLLAMA_BASE_URL=http://ollama:11434
+DOCKER_OLLAMA_BASE_URL=http://ollama:11434
 ```
 
 Then:
 
 ```bash
 docker compose --profile ollama up -d ollama
-docker compose exec -T ollama ollama pull embeddinggemma:latest
-docker compose up -d --force-recreate api
+docker compose exec -T ollama ollama list
+docker compose --profile ollama up -d --no-deps --force-recreate api
 ```
 
 ### Redis is healthy but the doctor cannot connect
@@ -502,16 +542,14 @@ docker compose up -d --force-recreate api
 The API container must use the Compose service name:
 
 ```dotenv
-REDIS_URL=redis://redis:6379/0
+DOCKER_REDIS_URL=redis://redis:6379/0
 ```
 
 Check for duplicate values or a shell override:
 
 ```bash
-grep -n '^REDIS_URL=' .env .env.keys
-env | grep '^REDIS_URL=' || true
-unset REDIS_URL
-docker compose up -d --force-recreate api
+grep -n '^DOCKER_REDIS_URL=' .env
+docker compose --profile ollama up -d --no-deps --force-recreate api
 ```
 
 Verify from the API container:
@@ -539,4 +577,3 @@ Address the specific reported control. Common causes are disabled database TLS v
 - Never rebuild all embeddings solely because API or reranker code changed.
 - Never expose the API directly to the internet; terminate TLS at a reverse proxy.
 - Never expose Redis or pgvector publicly.
-

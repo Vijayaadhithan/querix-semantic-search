@@ -2,7 +2,7 @@
 
 ## Purpose
 
-The service turns natural-language catalogue queries into tenant-isolated, filter-aware, ranked product results. PostgreSQL remains the source of truth. Retrieval indexes store only the data required to find candidates; returned cards are hydrated from the canonical result table.
+The service turns natural-language catalogue queries into tenant-isolated, filter-aware, ranked product results. The configured company database (MySQL or PostgreSQL) remains the source of truth. Retrieval indexes store only the data required to find candidates; returned cards are hydrated from the canonical result table.
 
 ## Components
 
@@ -25,18 +25,23 @@ The service turns natural-language catalogue queries into tenant-isolated, filte
 2. Rate limiting and per-tenant concurrency controls are applied.
 3. Deterministic parsing handles clear filters; the query model handles ambiguous intent.
 4. Filters are resolved against the tenant catalogue vocabulary.
-5. pgvector and BM25 retrieve independent candidate windows.
+5. pgvector and standalone BM25 retrieve independent candidate windows.
 6. Reciprocal-rank fusion creates a provider-independent fallback order.
 7. The reranker scores the bounded candidate set.
 8. Ranking policy removes low-confidence or wrong-intent results.
 9. IDs are hydrated from the canonical result table.
-10. The API returns a cursor, diagnostics, and results; eligible responses enter Redis.
+10. The canonical API returns a cursor; compatibility adapters may expose
+    page-number pagination. Eligible responses enter Redis with diagnostics.
 
 ## Ranking and failure behavior
 
 Semantic ranking is the primary result order. BM25 protects exact names, identifiers, and rare words. Structured filters are hard constraints only when confidently extracted or supplied by the client.
 
-Reranking is fail-open. A timeout, rate limit, or provider error retains the hybrid order and marks the response degraded. Degraded responses are not written to the result cache, so a temporary provider failure cannot become sticky.
+Retrieval and reranking are fail-open. If vector/Ollama fails, standalone BM25
+can still serve lexical candidates. If BM25 fails, pgvector can continue. A
+reranker timeout, rate limit, or provider error retains the hybrid order. The
+request fails only when both retrieval paths fail. Degraded responses are not
+written to the result cache, so a temporary failure cannot become sticky.
 
 The ranked window must cover every page that should preserve semantic order. Increasing it improves deep-page consistency but increases provider latency and token usage. Candidate and document-length changes must therefore be evaluated for reciprocal rank, latency, and API usage.
 
@@ -57,6 +62,10 @@ Startup rejects shared endpoint slugs, API keys, pgvector tables, and BM25 files
 
 The ingestion job reads the configured search-ready table in bounded batches. It upserts BM25 data, skips vectors whose content hash and embedding model are unchanged, embeds only changed rows, and writes to the tenant pgvector table.
 
+Production runs the guarded incremental job around 03:00 IST. It prevents
+overlap, reconciles deletions after a full scan, and restarts the API only after
+a successful run. An unchanged scan does not advance the BM25 revision.
+
 Deletion reconciliation is an explicit full-scan operation. A limited scan cannot reconcile deletions because unseen source rows may still be valid. A full replacement clears only the selected tenant's vector source and BM25 index.
 
 ## Storage model
@@ -71,7 +80,7 @@ The default `m=16`, `ef_construction=64`, and `ef_search=100` are balanced CPU-h
 
 ## 8 GB deployment profile
 
-A single API process shares one hosted-provider chain across tenant engines. The service cache should retain only the active tenant on an 8 GB host, and tenant search concurrency should initially remain one. The default profile over-fetches up to 80 results from each retrieval source, applies intent shaping to a 40-item hybrid recall window, reranks one complete 20-result page, and truncates each API candidate to 300 characters. Redis and pgvector run as separate containers with persistent volumes. No local reranker weights or model cache are required.
+A single API process shares one hosted-provider chain across tenant engines. The service cache retains the active tenant on an 8 GB host, and tenant search concurrency remains one. Excess work waits for a bounded interval and then returns `503` with `Retry-After`. The default profile over-fetches from each retrieval source, applies intent shaping to a 40-item hybrid recall window, reranks one complete 20-result page, and truncates each API candidate to 300 characters. API, Redis, pgvector, and Docker-managed Ollama have explicit memory and log limits. No local reranker weights are required.
 
 ## Security
 
