@@ -61,6 +61,14 @@ OLLAMA_BASE_URL = os.getenv(
 OLLAMA_KEEP_ALIVE = os.getenv("OLLAMA_KEEP_ALIVE")
 if OLLAMA_KEEP_ALIVE is None:
     OLLAMA_KEEP_ALIVE = CONFIG.get("ollama", {}).get("keep_alive", -1)
+OLLAMA_QUERY_TIMEOUT_SECONDS = float(
+    os.getenv(
+        "OLLAMA_QUERY_TIMEOUT_SECONDS",
+        str(CONFIG.get("ollama", {}).get("query_timeout_seconds", 10)),
+    )
+)
+if OLLAMA_QUERY_TIMEOUT_SECONDS <= 0:
+    raise ValueError("OLLAMA_QUERY_TIMEOUT_SECONDS must be greater than zero.")
 EMBED_MODEL = CONFIG.get("embedding", {}).get("model", "embeddinggemma:latest")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GEMINI_API_BASE_URL = os.getenv(
@@ -387,12 +395,20 @@ API_TENANT_MAX_CONCURRENT_SEARCHES = int(
         ),
     )
 )
+API_SEARCH_SLOT_TIMEOUT_SECONDS = float(
+    os.getenv(
+        "API_SEARCH_SLOT_TIMEOUT_SECONDS",
+        str(CONFIG.get("api", {}).get("search_slot_timeout_seconds", 5)),
+    )
+)
 if API_TENANT_ENGINE_CACHE_SIZE <= 0:
     raise ValueError("API_TENANT_ENGINE_CACHE_SIZE must be greater than zero.")
 if API_TENANT_MAX_CONCURRENT_SEARCHES <= 0:
     raise ValueError(
         "API_TENANT_MAX_CONCURRENT_SEARCHES must be greater than zero."
     )
+if API_SEARCH_SLOT_TIMEOUT_SECONDS <= 0:
+    raise ValueError("API_SEARCH_SLOT_TIMEOUT_SECONDS must be greater than zero.")
 
 MYSQL_HOST = os.getenv("MYSQL_HOST", "localhost")
 MYSQL_PORT = int(os.getenv("MYSQL_PORT", "3306"))

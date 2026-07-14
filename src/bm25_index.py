@@ -235,6 +235,7 @@ class PersistentBM25Index:
         ]
         with self._lock:
             with self.connection:
+                changes_before = self.connection.total_changes
                 self.connection.executemany(
                     """
                     INSERT INTO products (
@@ -274,10 +275,27 @@ class PersistentBM25Index:
                         locality_id = excluded.locality_id,
                         ad_type = excluded.ad_type,
                         is_rent_negotiable = excluded.is_rent_negotiable
+                    WHERE products.product_id IS NOT excluded.product_id
+                       OR products.content IS NOT excluded.content
+                       OR products.main_category_name IS NOT excluded.main_category_name
+                       OR products.subcategory_name IS NOT excluded.subcategory_name
+                       OR products.state_name IS NOT excluded.state_name
+                       OR products.city_name IS NOT excluded.city_name
+                       OR products.locality_name IS NOT excluded.locality_name
+                       OR products.rental_duration IS NOT excluded.rental_duration
+                       OR products.rental_fee IS NOT excluded.rental_fee
+                       OR products.main_category_id IS NOT excluded.main_category_id
+                       OR products.subcategory_id IS NOT excluded.subcategory_id
+                       OR products.state_id IS NOT excluded.state_id
+                       OR products.city_id IS NOT excluded.city_id
+                       OR products.locality_id IS NOT excluded.locality_id
+                       OR products.ad_type IS NOT excluded.ad_type
+                       OR products.is_rent_negotiable IS NOT excluded.is_rent_negotiable
                     """,
                     values,
                 )
-                self._increment_revision()
+                if self.connection.total_changes > changes_before:
+                    self._increment_revision()
 
     def filter_value_index(self) -> dict:
         value_index = {}
@@ -391,7 +409,7 @@ class PersistentBM25Index:
         with self._lock:
             rows = self.connection.execute(
                 f"""
-                SELECT p.doc_id, p.product_id, bm25(products_fts) AS rank
+                SELECT p.*, bm25(products_fts) AS rank
                 FROM products_fts
                 JOIN products AS p ON p.rowid = products_fts.rowid
                 WHERE {' AND '.join(conditions)}
@@ -404,6 +422,12 @@ class PersistentBM25Index:
             {
                 "doc_id": row["doc_id"],
                 "product_id": row["product_id"],
+                "content": row["content"],
+                "metadata": {
+                    column: row[column]
+                    for column in (*FILTER_COLUMNS, *OPTIONAL_PRODUCT_COLUMNS)
+                    if row[column] is not None
+                },
                 "score": -float(row["rank"]),
             }
             for row in rows

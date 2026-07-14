@@ -1,0 +1,19 @@
+[Unit]
+Description=Semantic search daily incremental ingestion
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/semantic-search
+Environment=PROJECT_DIR=/opt/semantic-search
+Environment=COMPANY_ID=gainr
+ExecStart=/opt/semantic-search/scripts/run_scheduled_ingestion.sh
+TimeoutStartSec=6h
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+
+[Install]
+WantedBy=multi-user.target

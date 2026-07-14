@@ -25,6 +25,19 @@ def reciprocal_rank(result_ids: list[str], relevant_ids: set[str]) -> float:
     return 0.0
 
 
+def precision_at_k(
+    result_ids: list[str],
+    relevant_ids: set[str],
+    k: int,
+) -> float:
+    considered = result_ids[:k]
+    if not considered:
+        return 0.0
+    return sum(product_id in relevant_ids for product_id in considered) / len(
+        considered
+    )
+
+
 def filter_reciprocal_rank(products: list[dict], filters: dict) -> tuple[float, list[str]]:
     matches = []
     for rank, product in enumerate(products, start=1):
@@ -145,8 +158,10 @@ def main() -> None:
     reciprocal_ranks = []
     try:
         for case in cases:
-            result = engine.search(case["query"])
+            result_limit = int(case.get("result_limit", 20))
+            result = engine.search(case["query"], limit=result_limit)
             result_ids = [str(value) for value in result["product_ids"]]
+            matching: set[str] = set()
             if case.get("expected_empty"):
                 success = not result_ids
                 rr = 1.0 if success else 0.0
@@ -178,8 +193,27 @@ def main() -> None:
                 success = rr > 0
             else:
                 relevant_ids = {str(value) for value in case["relevant_ids"]}
+                matching = relevant_ids
                 rr = reciprocal_rank(result_ids, relevant_ids)
                 success = rr > 0
+            precision_3 = precision_at_k(result_ids, matching, 3)
+            hit_10 = bool(set(result_ids[:10]) & matching)
+            minimum_rr = case.get("min_reciprocal_rank")
+            if minimum_rr is not None:
+                success = success and rr >= float(minimum_rr)
+            minimum_precision_3 = case.get("min_precision_at_3")
+            if minimum_precision_3 is not None:
+                success = success and precision_3 >= float(
+                    minimum_precision_3
+                )
+            minimum_results = case.get("min_result_count")
+            if minimum_results is not None:
+                success = success and len(result_ids) >= int(minimum_results)
+            forbidden_ids = {
+                str(value) for value in case.get("forbidden_ids", [])
+            }
+            forbidden_top_10 = sorted(set(result_ids[:10]) & forbidden_ids)
+            success = success and not forbidden_top_10
             reciprocal_ranks.append(rr)
             passed += int(success)
             label = "PASS" if success else "FAIL"
@@ -191,10 +225,18 @@ def main() -> None:
                 print(
                     f"{label} {case['name']}: {result_ids} "
                     f"matched={matching_ids if success else []} "
-                    f"group={matched_group if success else 'none'}"
+                    f"group={matched_group if matched_group is not None else 'none'} "
+                    f"RR={rr:.3f} P@3={precision_3:.3f} "
+                    f"hit@10={hit_10} count={len(result_ids)} "
+                    f"forbidden@10={forbidden_top_10}"
                 )
             else:
-                print(f"{label} {case['name']}: {result_ids}")
+                print(
+                    f"{label} {case['name']}: {result_ids} "
+                    f"RR={rr:.3f} P@3={precision_3:.3f} "
+                    f"hit@10={hit_10} count={len(result_ids)} "
+                    f"forbidden@10={forbidden_top_10}"
+                )
     finally:
         engine.close()
 

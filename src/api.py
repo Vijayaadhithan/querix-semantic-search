@@ -16,8 +16,10 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Callable
 
+import requests
 from fastapi import FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -53,7 +55,10 @@ from settings import (
     API_TENANT_CONFIG_DIR,
     API_TENANT_ENGINE_CACHE_SIZE,
     API_TENANT_MAX_CONCURRENT_SEARCHES,
+    API_SEARCH_SLOT_TIMEOUT_SECONDS,
     APP_NAME,
+    EMBED_MODEL,
+    OLLAMA_BASE_URL,
     RERANK_MODEL,
     REDIS_ENABLED,
     REDIS_KEY_PREFIX,
@@ -103,6 +108,10 @@ class InvalidCursorError(ValueError):
 
 
 class ExpiredCursorError(ValueError):
+    pass
+
+
+class SearchCapacityError(RuntimeError):
     pass
 
 
@@ -302,11 +311,14 @@ class ProductSearchService:
         field_mapping: dict[str, str] | None = None,
         usage_store: MonthlyUsageStore | None = None,
         max_concurrent_searches: int = API_TENANT_MAX_CONCURRENT_SEARCHES,
+        search_slot_timeout_seconds: float = API_SEARCH_SLOT_TIMEOUT_SECONDS,
     ):
         if max_results <= 0:
             raise ValueError("Maximum results must be greater than zero.")
         if max_concurrent_searches <= 0:
             raise ValueError("Maximum concurrent searches must be greater than zero.")
+        if search_slot_timeout_seconds <= 0:
+            raise ValueError("Search slot timeout must be greater than zero.")
         self.engine = engine
         self.sessions = sessions or SearchSessionStore()
         self.max_results = max_results
@@ -314,6 +326,7 @@ class ProductSearchService:
         self.public_fields = tuple(public_fields)
         self.field_mapping = dict(field_mapping or {})
         self.usage_store = usage_store
+        self.search_slot_timeout_seconds = search_slot_timeout_seconds
         self._engine_lock = threading.Lock()
         self._search_slots = threading.BoundedSemaphore(
             max_concurrent_searches
@@ -325,6 +338,8 @@ class ProductSearchService:
         self._monitor_started = 0
         self._monitor_completed = 0
         self._monitor_failed = 0
+        self._monitor_rejected = 0
+        self._monitor_degraded = 0
         self._monitor_events: deque[dict[str, Any]] = deque(maxlen=100)
         self._coalesce_lock = threading.Lock()
         self._inflight_searches: dict[str, threading.Event] = {}
@@ -367,6 +382,56 @@ class ProductSearchService:
             **cache_health,
         )
 
+    def readiness(self) -> dict[str, Any]:
+        components: dict[str, dict[str, Any]] = {}
+        try:
+            indexed_products = self.engine.bm25_index.count()
+            components["bm25"] = {
+                "ok": indexed_products > 0,
+                "indexed_products": indexed_products,
+            }
+        except Exception as exc:
+            components["bm25"] = {
+                "ok": False,
+                "error_type": type(exc).__name__,
+            }
+
+        collection = getattr(self.engine, "collection", None)
+        if collection is None or not hasattr(collection, "count"):
+            components["pgvector"] = {"ok": True, "configured": False}
+        else:
+            try:
+                vector_products = int(collection.count())
+                components["pgvector"] = {
+                    "ok": vector_products > 0,
+                    "indexed_products": vector_products,
+                }
+            except Exception as exc:
+                components["pgvector"] = {
+                    "ok": False,
+                    "error_type": type(exc).__name__,
+                }
+
+        database_pool = getattr(self.engine, "database_pool", None)
+        if database_pool is None:
+            components["database"] = {"ok": True, "configured": False}
+        else:
+            try:
+                with database_pool.connection() as connection:
+                    with connection.cursor() as cursor:
+                        cursor.execute("SELECT 1")
+                        cursor.fetchone()
+                components["database"] = {"ok": True}
+            except Exception as exc:
+                components["database"] = {
+                    "ok": False,
+                    "error_type": type(exc).__name__,
+                }
+        return {
+            "ok": all(component["ok"] for component in components.values()),
+            "components": components,
+        }
+
     def monitor_status(self) -> dict[str, Any]:
         with self._monitor_lock:
             events = list(self._monitor_events)[:20]
@@ -375,6 +440,8 @@ class ProductSearchService:
                 "started": self._monitor_started,
                 "completed": self._monitor_completed,
                 "failed": self._monitor_failed,
+                "rejected": self._monitor_rejected,
+                "degraded": self._monitor_degraded,
                 "recent": events,
             }
 
@@ -468,7 +535,11 @@ class ProductSearchService:
                 [
                     {
                         "step": "retrieve",
-                        "status": "complete",
+                        "status": (
+                            "degraded"
+                            if result.get("retrieval_degraded")
+                            else "complete"
+                        ),
                         "duration_ms": round(
                             max(
                                 float(
@@ -512,6 +583,11 @@ class ProductSearchService:
                         "vector_results": len(vector_results),
                         "bm25_results": len(bm25_results),
                         "candidates": len(candidates),
+                        "degraded_stages": result.get(
+                            "degraded_stages",
+                            [],
+                        ),
+                        "error_type": result.get("retrieval_error_type"),
                     },
                     {
                         "step": "rerank",
@@ -591,7 +667,15 @@ class ProductSearchService:
         try:
             if not owner:
                 wait_started = time.perf_counter()
-                inflight.wait()
+                completed = inflight.wait(
+                    timeout=max(10.0, self.search_slot_timeout_seconds)
+                )
+                if not completed:
+                    with self._monitor_lock:
+                        self._monitor_rejected += 1
+                    raise SearchCapacityError(
+                        "An identical search is still running; retry shortly."
+                    )
                 LOGGER.info(
                     "step=request_coalesce status=waited company=%s "
                     "query_chars=%d duration_ms=%.0f",
@@ -599,8 +683,19 @@ class ProductSearchService:
                     len(query),
                     (time.perf_counter() - wait_started) * 1000,
                 )
-            with self._search_slots:
+            acquired = self._search_slots.acquire(
+                timeout=self.search_slot_timeout_seconds
+            )
+            if not acquired:
+                with self._monitor_lock:
+                    self._monitor_rejected += 1
+                raise SearchCapacityError(
+                    "Search capacity is busy; retry shortly."
+                )
+            try:
                 result = self.engine.search(query, **kwargs)
+            finally:
+                self._search_slots.release()
         except Exception as exc:
             duration_ms = (time.perf_counter() - started) * 1000
             with self._monitor_lock:
@@ -687,6 +782,10 @@ class ProductSearchService:
             result["_service_total_ms"] = duration_ms
             with self._monitor_lock:
                 self._monitor_completed += 1
+                if result.get("retrieval_degraded") or result.get(
+                    "reranker_degraded"
+                ):
+                    self._monitor_degraded += 1
                 self._monitor_events.appendleft(event)
             return result
         finally:
@@ -797,6 +896,10 @@ class ProductSearchService:
                     "reranker_provider",
                     "none",
                 ),
+                "retrieval_degraded": bool(
+                    result.get("retrieval_degraded")
+                ),
+                "degraded_stages": result.get("degraded_stages", []),
             }
         )
         timings_ms = {
@@ -1143,6 +1246,7 @@ def create_app(
             active_usage_store = MonthlyUsageStore(USAGE_DB_PATH)
             owns_usage_store = True
         application.state.usage_store = active_usage_store
+        application.state.check_ollama_readiness = service is None
         tenant_mode = service is None and (
             tenant_registry is not None or API_AUTH_ENABLED
         )
@@ -1432,6 +1536,12 @@ def create_app(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except ExpiredCursorError as exc:
             raise HTTPException(status_code=410, detail=str(exc)) from exc
+        except SearchCapacityError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail=str(exc),
+                headers={"Retry-After": "2"},
+            ) from exc
         except RuntimeError as exc:
             LOGGER.exception(
                 "search_request status=failed company=%s error_type=%s "
@@ -1452,16 +1562,59 @@ def create_app(
             raise
 
     @application.get("/api/v1/ready", tags=["system"])
-    def ready() -> dict[str, Any]:
+    def ready():
         tenant_mode = bool(application.state.tenant_mode)
         registry = getattr(application.state, "tenant_registry", None)
-        return {
-            "status": "ok",
+        checks: dict[str, Any] = {}
+        if tenant_mode:
+            pool = application.state.tenant_service_pool
+            for company_id in registry.profiles:
+                try:
+                    checks[company_id] = pool.get(company_id).readiness()
+                except Exception as exc:
+                    checks[company_id] = {
+                        "ok": False,
+                        "components": {},
+                        "error_type": type(exc).__name__,
+                    }
+        else:
+            checks["legacy"] = application.state.search_service.readiness()
+
+        ollama = {"ok": True, "checked": False}
+        if application.state.check_ollama_readiness:
+            try:
+                response = requests.get(
+                    f"{OLLAMA_BASE_URL}/api/tags",
+                    timeout=2,
+                )
+                response.raise_for_status()
+                names = {
+                    model.get("name")
+                    for model in response.json().get("models", [])
+                }
+                ollama = {
+                    "ok": EMBED_MODEL in names,
+                    "checked": True,
+                    "model": EMBED_MODEL,
+                }
+            except Exception as exc:
+                ollama = {
+                    "ok": False,
+                    "checked": True,
+                    "model": EMBED_MODEL,
+                    "error_type": type(exc).__name__,
+                }
+        checks["ollama"] = ollama
+        ready_now = all(check.get("ok", False) for check in checks.values())
+        payload = {
+            "status": "ok" if ready_now else "not_ready",
             "tenant_mode": tenant_mode,
             "configured_companies": (
                 len(registry.profiles) if registry is not None else 1
             ),
+            "checks": checks,
         }
+        return JSONResponse(payload, status_code=200 if ready_now else 503)
 
     @application.get(
         "/api/v1/health",

@@ -11,6 +11,7 @@ import api
 from api import (
     ExpiredCursorError,
     ProductSearchService,
+    SearchCapacityError,
     SearchRequest,
     SearchSessionStore,
     TenantServicePool,
@@ -221,6 +222,7 @@ def test_expired_cursor_requires_a_new_query():
 def test_http_contract_and_validation():
     service = ProductSearchService(FakeEngine(), max_results=20)
     with TestClient(create_app(service=service)) as client:
+        ready = client.get("/api/v1/ready")
         health = client.get("/api/v1/health")
         response = client.post(
             "/api/v1/search",
@@ -231,6 +233,11 @@ def test_http_contract_and_validation():
             json={"query": "camera", "cursor": "also-set"},
         )
 
+    assert ready.status_code == 200
+    assert ready.json()["checks"]["legacy"]["components"]["bm25"] == {
+        "ok": True,
+        "indexed_products": 12,
+    }
     assert health.status_code == 200
     assert health.json()["indexed_products"] == 12
     assert health.json()["reranker_loaded"] is True
@@ -247,6 +254,26 @@ def test_http_contract_and_validation():
     assert response.json()["interpreted_query"]["sort_order"] == "price_asc"
     assert response.json()["interpreted_query"]["result_cache_hit"] is False
     assert invalid.status_code == 422
+
+
+def test_readiness_fails_when_a_critical_index_is_empty():
+    class EmptyCollection:
+        def count(self):
+            return 0
+
+    engine = FakeEngine()
+    engine.collection = EmptyCollection()
+    service = ProductSearchService(engine, max_results=20)
+
+    with TestClient(create_app(service=service)) as client:
+        response = client.get("/api/v1/ready")
+
+    assert response.status_code == 503
+    assert response.json()["status"] == "not_ready"
+    assert response.json()["checks"]["legacy"]["components"]["pgvector"] == {
+        "ok": False,
+        "indexed_products": 0,
+    }
 
 
 def test_repeated_query_result_cache_is_reported_by_api():
@@ -658,6 +685,48 @@ def test_users_in_the_same_company_can_search_concurrently():
 
     assert first_result.company_id == "alpha"
     assert second_result.company_id == "alpha"
+
+
+def test_search_capacity_wait_is_bounded_and_reported():
+    class BlockingEngine(FakeEngine):
+        def __init__(self):
+            super().__init__()
+            self.entered = threading.Event()
+            self.release = threading.Event()
+
+        def search(self, query, limit=None):
+            self.entered.set()
+            self.release.wait(timeout=2)
+            return super().search(query, limit)
+
+    engine = BlockingEngine()
+    service = ProductSearchService(
+        engine,
+        max_concurrent_searches=1,
+        search_slot_timeout_seconds=0.01,
+    )
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first = executor.submit(
+            service.search,
+            SearchRequest(query="camera"),
+        )
+        assert engine.entered.wait(timeout=1)
+        second = executor.submit(
+            service.search,
+            SearchRequest(query="bike"),
+        )
+        try:
+            second.result(timeout=1)
+        except SearchCapacityError:
+            pass
+        else:
+            raise AssertionError("Expected a bounded capacity rejection")
+        engine.release.set()
+        first.result(timeout=1)
+
+    monitor = service.monitor_status()
+    assert monitor["rejected"] == 1
+    assert monitor["failed"] == 1
 
 
 def test_company_rate_limit_is_enforced_before_search(tmp_path):

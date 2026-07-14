@@ -35,11 +35,17 @@ Successful response:
 
 ## Health
 
-Public process readiness:
+Public serving-path readiness:
 
 ```http
 GET /api/v1/ready
 ```
+
+This endpoint returns `200` only when the configured tenant indexes, source
+database, and Ollama embedding model are available. It returns `503` with
+component status when a critical dependency is unavailable. Redis and hosted
+rerank providers are not readiness blockers because search has local/fusion
+fallbacks for those dependencies.
 
 Authenticated tenant health:
 

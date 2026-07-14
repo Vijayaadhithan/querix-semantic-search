@@ -83,6 +83,9 @@ api:
   # Conservative defaults for a one-company 8 GB deployment.
   tenant_engine_cache_size: 1
   tenant_max_concurrent_searches: 1
+  # Reject excess work after a short bounded wait instead of building an
+  # unbounded in-process queue on the 8 GB host.
+  search_slot_timeout_seconds: 5
   # Use debug for library-level diagnostics; info shows the search flow.
   log_level: info
   # Validate and share the hosted provider chain when the API starts.

@@ -182,6 +182,11 @@ def bm25_search(
     top_k=15,
     *,
     include_unpriced=False,
+    source_name=None,
+    company_id=None,
+    source_type="mysql",
+    search_table=MYSQL_TABLE,
+    search_id_column=MYSQL_SEARCH_ID_COLUMN,
 ):
     ranked = index.search(
         query,
@@ -192,27 +197,22 @@ def bm25_search(
     if not ranked:
         return []
 
-    scores = {item["doc_id"]: item["score"] for item in ranked}
-    ordered_ids = [item["doc_id"] for item in ranked]
-    data = collection.get(ids=ordered_ids, include=["documents", "metadatas"])
-    documents = {
-        doc_id: {"text": text, "metadata": metadata}
-        for doc_id, text, metadata in zip(
-            data["ids"],
-            data["documents"],
-            data["metadatas"],
-        )
-    }
     return [
         {
-            "id": doc_id,
-            "text": documents[doc_id]["text"],
-            "metadata": documents[doc_id]["metadata"],
-            "score": scores[doc_id],
+            "id": item["doc_id"],
+            "text": item.get("content", ""),
+            "metadata": {
+                **(item.get("metadata") or {}),
+                "source_file": source_name,
+                "company_id": company_id,
+                "source_type": source_type,
+                "source_table": search_table,
+                search_id_column: item["product_id"],
+            },
+            "score": item["score"],
             "source": "bm25",
         }
-        for doc_id in ordered_ids
-        if doc_id in documents
+        for item in ranked
     ]
 
 

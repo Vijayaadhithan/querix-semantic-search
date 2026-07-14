@@ -559,6 +559,46 @@ class GainrDatabaseRepository:
         self._attach_attributes(ordered)
         return ordered
 
+    def filter_product_ids(
+        self,
+        product_ids: list[Any],
+        resolved_filters: dict,
+        request_filter: GainrSearchFilter,
+        allowed_ad_types: set[str] | None,
+    ) -> list[Any]:
+        """Return eligible IDs in semantic rank order without hydrating cards."""
+        if not product_ids:
+            return []
+        where_clause, params = self._where_clause(
+            resolved_filters,
+            request_filter,
+            product_ids=product_ids,
+            allowed_ad_types=allowed_ad_types,
+        )
+        with self.connection() as connection:
+            with connection.cursor() as cursor:
+                search_id = quote_mysql_identifier(
+                    self.config.search_id_column
+                )
+                cursor.execute(
+                    f"""
+                    SELECT sr.{search_id} AS __search_id
+                    FROM {self.search_table} AS sr
+                    JOIN {self.result_table} AS a ON a.id = sr.id
+                    WHERE {where_clause}
+                    """,
+                    params,
+                )
+                eligible = {
+                    str(row["__search_id"])
+                    for row in cursor.fetchall()
+                }
+        return [
+            product_id
+            for product_id in product_ids
+            if str(product_id) in eligible
+        ]
+
     def _attach_attributes(self, rows: list[dict]) -> None:
         product_ids = [
             row.get(self.config.result_id_column)
@@ -965,8 +1005,16 @@ class GainrCompatibilityService:
                 resolved_filters=effective,
                 allowed_ad_types=allowed_ad_types,
             )
-            rows = self.repository.hydrate_filtered(
+            eligible_ids = self.repository.filter_product_ids(
                 result.get("product_ids", []),
+                effective,
+                request.filter,
+                allowed_ad_types,
+            )
+            total = len(eligible_ids)
+            start = (request.page - 1) * page_size
+            rows = self.repository.hydrate_filtered(
+                eligible_ids[start : start + page_size],
                 effective,
                 request.filter,
                 allowed_ad_types,
@@ -975,9 +1023,6 @@ class GainrCompatibilityService:
                 len(result.get("product_ids", []))
                 >= self.product_search_service.max_results
             )
-            total = len(rows)
-            start = (request.page - 1) * page_size
-            rows = rows[start : start + page_size]
             route = "semantic"
             usage = self.product_search_service._record_usage(result)
         card_mapping_started = time.perf_counter()

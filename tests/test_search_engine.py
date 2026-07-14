@@ -690,6 +690,60 @@ def test_semantic_vector_and_bm25_retrieval_start_in_parallel(
     index.close()
 
 
+def test_vector_failure_fails_open_to_standalone_bm25(tmp_path, monkeypatch):
+    index = build_index(tmp_path / "bm25-fail-open.sqlite3")
+    engine = ProductSearchEngine(
+        collection=FakeCollection(),
+        bm25_index=index,
+        company_id="gainr",
+    )
+    monkeypatch.setattr(
+        search_engine,
+        "vector_search",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("embedding unavailable")
+        ),
+    )
+    monkeypatch.setattr(
+        search_engine,
+        "filter_candidates_by_ad_type",
+        lambda candidates, *_args, **_kwargs: candidates,
+    )
+
+    result = engine.retrieve(
+        {
+            "semantic_query": "bike",
+            "keyword_query": "bike",
+            "target_ad_type": "offer",
+            "inferred_categories": {},
+        },
+        {"categorical": {"city_name": "Chennai"}},
+    )
+
+    assert result["vector_results"] == []
+    assert result["bm25_results"][0]["text"] == "bike-chennai"
+    assert result["bm25_results"][0]["metadata"]["id"] == "bike-chennai"
+    assert result["retrieval_degraded"] is True
+    assert result["degraded_stages"] == ["vector"]
+    index.close()
+
+
+def test_unchanged_bm25_upsert_does_not_advance_revision(tmp_path):
+    index = PersistentBM25Index(tmp_path / "stable-revision.sqlite3")
+    row = product_row(
+        "bike-chennai",
+        city_name="Chennai",
+        subcategory_name="Bike",
+    )
+    index.upsert([row])
+    revision = index.revision()
+
+    index.upsert([row])
+
+    assert index.revision() == revision
+    index.close()
+
+
 def test_small_rerank_window_preserves_deep_gainr_recall(
     tmp_path,
     monkeypatch,

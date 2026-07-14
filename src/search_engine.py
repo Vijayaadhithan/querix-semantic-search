@@ -13,6 +13,7 @@ from bm25_index import PersistentBM25Index
 from database_store import (
     create_database_pool,
     DatabaseRuntimeConfig,
+    database_backend,
     database_source_name,
     fetch_product_types_by_ids,
     fetch_products_by_ids,
@@ -68,7 +69,7 @@ from settings import (
 )
 
 LOGGER = logging.getLogger("uvicorn.error")
-RESULT_CACHE_SCHEMA_VERSION = "v13"
+RESULT_CACHE_SCHEMA_VERSION = "v14"
 QUERY_PLAN_CACHE_SCHEMA_VERSION = "v2"
 
 GAINR_VEHICLE_INTENT_TERMS = {
@@ -329,6 +330,7 @@ class ProductSearchEngine:
         }
         self.mysql_config = mysql_config
         self.database_pool = create_database_pool(mysql_config)
+        self.source_type = database_backend(mysql_config)
         self.source_name = database_source_name(mysql_config)
         self.search_table = (
             mysql_config.search_table if mysql_config is not None else MYSQL_TABLE
@@ -578,6 +580,7 @@ class ProductSearchEngine:
             or self.shared_plan_cache is None
             or result["query_plan"].get("fallback_reason")
             or result.get("reranker_degraded")
+            or result.get("retrieval_degraded")
         ):
             return
         payload = {
@@ -862,6 +865,11 @@ class ProductSearchEngine:
                 resolved_filters,
                 bm25_top_k,
                 include_unpriced=include_unpriced,
+                source_name=self.source_name,
+                company_id=self.company_id,
+                source_type=self.source_type,
+                search_table=self.search_table,
+                search_id_column=self.search_id_column,
             )
             return results, time.perf_counter() - started
 
@@ -871,8 +879,33 @@ class ProductSearchEngine:
         ) as executor:
             vector_future = executor.submit(run_vector)
             bm25_future = executor.submit(run_bm25)
-            vector_results, vector_seconds = vector_future.result()
-            bm25_results, bm25_seconds = bm25_future.result()
+            retrieval_errors = []
+            try:
+                vector_results, vector_seconds = vector_future.result()
+            except Exception as exc:
+                vector_results, vector_seconds = [], 0.0
+                retrieval_errors.append(("vector", exc))
+                LOGGER.exception(
+                    "[search:%s] step=vector status=degraded error_type=%s",
+                    trace_id,
+                    type(exc).__name__,
+                )
+            try:
+                bm25_results, bm25_seconds = bm25_future.result()
+            except Exception as exc:
+                bm25_results, bm25_seconds = [], 0.0
+                retrieval_errors.append(("bm25", exc))
+                LOGGER.exception(
+                    "[search:%s] step=bm25 status=degraded error_type=%s",
+                    trace_id,
+                    type(exc).__name__,
+                )
+
+        if len(retrieval_errors) == 2:
+            stages = ", ".join(stage for stage, _exc in retrieval_errors)
+            raise RuntimeError(f"All retrieval paths failed: {stages}") from (
+                retrieval_errors[0][1]
+            )
 
         merged = merge_results(
             vector_results,
@@ -921,6 +954,13 @@ class ProductSearchEngine:
             "vector_seconds": vector_seconds,
             "bm25_seconds": bm25_seconds,
             "embedding_model_metrics": embedding_metrics,
+            "retrieval_degraded": bool(retrieval_errors),
+            "retrieval_error_type": (
+                type(retrieval_errors[0][1]).__name__
+                if retrieval_errors
+                else None
+            ),
+            "degraded_stages": [stage for stage, _exc in retrieval_errors],
         }
 
     def ensure_reranker(self) -> float:

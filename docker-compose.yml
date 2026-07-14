@@ -10,8 +10,9 @@ services:
     environment:
       API_HOST: 0.0.0.0
       API_PORT: 8000
-      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
-      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      OLLAMA_BASE_URL: ${DOCKER_OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      REDIS_URL: ${DOCKER_REDIS_URL:-redis://redis:6379/0}
+      MYSQL_HOST: ${DOCKER_MYSQL_HOST:-host.docker.internal}
       PGVECTOR_HOST: pgvector
       PGVECTOR_PORT: 5432
       API_TENANT_ENGINE_CACHE_SIZE: ${API_TENANT_ENGINE_CACHE_SIZE:-1}
@@ -28,6 +29,12 @@ services:
         condition: service_healthy
       pgvector:
         condition: service_healthy
+    mem_limit: 1g
+    logging:
+      driver: json-file
+      options:
+        max-size: 20m
+        max-file: "5"
     restart: unless-stopped
 
   pgvector:
@@ -48,6 +55,12 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
+    mem_limit: 2500m
+    logging:
+      driver: json-file
+      options:
+        max-size: 20m
+        max-file: "5"
     restart: unless-stopped
 
   redis:
@@ -60,6 +73,12 @@ services:
       interval: 10s
       timeout: 3s
       retries: 10
+    mem_limit: 256m
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
     restart: unless-stopped
 
   ollama:
@@ -70,6 +89,12 @@ services:
       - ollama-data:/root/.ollama
     ports:
       - "127.0.0.1:11434:11434"
+    mem_limit: 1536m
+    logging:
+      driver: json-file
+      options:
+        max-size: 20m
+        max-file: "3"
     restart: unless-stopped
 
 volumes:

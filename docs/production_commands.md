@@ -128,6 +128,8 @@ API_AUTH_ENABLED=true
 REDIS_ENABLED=true
 API_TENANT_ENGINE_CACHE_SIZE=1
 API_TENANT_MAX_CONCURRENT_SEARCHES=1
+API_SEARCH_SLOT_TIMEOUT_SECONDS=5
+OLLAMA_QUERY_TIMEOUT_SECONDS=10
 ```
 
 Keep hosted-provider credentials in `.env.keys` or the production secret manager:
@@ -356,7 +358,38 @@ curl -fsS http://127.0.0.1:8000/api/v1/ready
 
 Do not run ingestion automatically for every code-only release. Run it only when source data, embedding content, the embedding model, BM25 data, or index schema changed.
 
-## 15. Rollback
+## 15. Daily 03:00 IST incremental ingestion
+
+The scheduled job scans the configured source table, embeds only changed
+content, reconciles deleted rows, and restarts the API only after ingestion
+succeeds. A host lock prevents overlapping runs. The BM25 revision now changes
+only when indexed content actually changes, so an unchanged daily scan does not
+invalidate every cached search.
+
+Install the systemd units after replacing `/opt/semantic-search` in the service
+file if the production checkout uses a different absolute path:
+
+```bash
+sudo cp deploy/semantic-search-ingest.service /etc/systemd/system/
+sudo cp deploy/semantic-search-ingest.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now semantic-search-ingest.timer
+systemctl list-timers semantic-search-ingest.timer
+```
+
+Run and inspect it once before relying on the timer:
+
+```bash
+sudo systemctl start semantic-search-ingest.service
+sudo systemctl status semantic-search-ingest.service
+journalctl -u semantic-search-ingest.service -n 200 --no-pager
+```
+
+The timer uses `Persistent=true`: if the host is down at 03:00 IST, systemd
+runs the missed job after the host starts. The five-minute randomized delay
+keeps the start near 03:00 while avoiding an exact boundary spike.
+
+## 16. Rollback
 
 The previous Git commit is stored in `$BACKUP_DIR/git-commit.txt`. To roll back code during the same maintenance session:
 
@@ -377,7 +410,7 @@ git switch main
 git pull --ff-only origin main
 ```
 
-## 16. Troubleshooting
+## 17. Troubleshooting
 
 ```bash
 docker compose ps

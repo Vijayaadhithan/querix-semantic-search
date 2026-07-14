@@ -15,10 +15,12 @@ planner:
     those qualities as requests for safety officers, trainers, or auditors.
 
 retrieval:
-  # After strong semantic matches, fill later pages only from a category or
-  # subcategory explicitly resolved from the query/frontend filters.
+  # Keep the strongest semantic matches first, then continue later pages from
+  # the same predefined Gainr filters (city, locality, price, ad type, etc.).
+  # related_tail_product_ids still requires at least one structured constraint,
+  # so this does not turn a fully unfiltered semantic query into a catalogue dump.
   semantic_related_tail_enabled: true
-  semantic_related_tail_requires_explicit_category: true
+  semantic_related_tail_requires_explicit_category: false
   # Keep results scoring at least 30% of the strongest result. The relative
   # floor also works when Gainr changes reranker providers.
   reranker_relative_score_floor: 0.30

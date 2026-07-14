@@ -105,6 +105,7 @@ class FakeEngine:
 class FakeRepository:
     def __init__(self):
         self.catalog_call = None
+        self.filter_ids_call = None
         self.hydrate_call = None
 
     def suggestions(self, term, limit):
@@ -159,6 +160,21 @@ class FakeRepository:
             }
         ]
 
+    def filter_product_ids(
+        self,
+        product_ids,
+        resolved,
+        request_filter,
+        allowed_ad_types,
+    ):
+        self.filter_ids_call = (
+            product_ids,
+            resolved,
+            request_filter,
+            allowed_ad_types,
+        )
+        return list(product_ids)
+
 
 def service(tmp_path, execution_path="semantic", **compatibility):
     engine = FakeEngine(execution_path)
@@ -208,6 +224,7 @@ def test_explicit_filters_override_only_matching_auto_filters(tmp_path):
     assert effective["max_rental_fee"] == 1000
     assert search_kwargs["allowed_ad_types"] == {"2"}
     assert search_kwargs["ranking_window"] == 40
+    assert repository.filter_ids_call[0] == [1, 2]
     assert repository.hydrate_call[0] == [1, 2]
     assert response["data"][0]["city"] == {
         "id": 456,
@@ -251,6 +268,50 @@ def test_deterministic_result_uses_full_catalog_pagination(tmp_path):
         "response_map",
         "filter_result",
     ]
+
+
+def test_semantic_result_hydrates_only_requested_twenty_row_page(
+    tmp_path,
+    monkeypatch,
+):
+    adapter, engine, repository = service(tmp_path)
+
+    def search(query, limit=None, **kwargs):
+        engine.calls.append((query, limit, kwargs))
+        return {
+            "query_plan": kwargs["planned_result"]["query_plan"],
+            "resolved_filters": kwargs["resolved_filters"],
+            "unresolved_filters": {},
+            "products": [],
+            "product_ids": list(range(1, 46)),
+            "query_model_metrics": {},
+            "reranker_attempts": [],
+        }
+
+    hydrated_pages = []
+
+    def hydrate(product_ids, *_args):
+        hydrated_pages.append(list(product_ids))
+        return [{"id": str(product_id)} for product_id in product_ids]
+
+    monkeypatch.setattr(engine, "search", search)
+    monkeypatch.setattr(repository, "hydrate_filtered", hydrate)
+    request = GainrFilterResultRequest.model_validate(
+        {
+            "searchTerm": "comfortable vehicle",
+            "filter": {"city_id": 456},
+            "page": 2,
+        }
+    )
+
+    response = adapter.filter_results(request)
+
+    assert hydrated_pages == [list(range(21, 41))]
+    assert [card["id"] for card in response["data"]] == list(range(21, 41))
+    assert response["current_page"] == 2
+    assert response["last_page"] == 3
+    assert engine.calls[0][1] == 200
+    assert engine.calls[0][2]["ranking_window"] == 40
 
 
 def test_public_filter_result_matches_gainr_response_envelope(tmp_path):

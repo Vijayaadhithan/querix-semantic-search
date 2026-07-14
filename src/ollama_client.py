@@ -6,6 +6,7 @@ from settings import (
     EMBED_MODEL,
     OLLAMA_BASE_URL,
     OLLAMA_KEEP_ALIVE,
+    OLLAMA_QUERY_TIMEOUT_SECONDS,
 )
 
 
@@ -65,7 +66,10 @@ class OllamaProvider:
         self.last_embedding_metrics: dict[str, float] = {}
 
     def embed_text(self, text: str) -> list[float]:
-        return self.embed_texts([text], timeout=120)[0]
+        return self.embed_texts(
+            [text],
+            timeout=OLLAMA_QUERY_TIMEOUT_SECONDS,
+        )[0]
 
     def embed_texts(
         self,

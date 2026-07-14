@@ -1,0 +1,11 @@
+[Unit]
+Description=Run semantic search ingestion daily around 03:00 IST
+
+[Timer]
+OnCalendar=*-*-* 03:00:00 Asia/Kolkata
+Persistent=true
+RandomizedDelaySec=5m
+Unit=semantic-search-ingest.service
+
+[Install]
+WantedBy=timers.target
