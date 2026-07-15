@@ -12,6 +12,7 @@ from vector_store import (
     clear_tenant_vectors,
     delete_tenant_source,
     list_tenant_vectors,
+    migrate_tenant_source,
 )
 
 
@@ -48,6 +49,14 @@ def main() -> None:
         "--clear",
         action="store_true",
         help="delete the entire vector collection",
+    )
+    actions.add_argument(
+        "--migrate-source",
+        metavar="SOURCE",
+        help=(
+            "re-key one existing vector source to the tenant's configured "
+            "index namespace without recalculating embeddings"
+        ),
     )
     parser.add_argument(
         "--company",
@@ -96,6 +105,12 @@ def main() -> None:
     parser.add_argument(
         "--mysql-primary-key",
         help="override the detected database primary-key column",
+    )
+    parser.add_argument(
+        "--migration-batch-size",
+        type=int,
+        default=1000,
+        help="vectors per source-namespace migration transaction (default: 1000)",
     )
     parser.add_argument(
         "--mysql-replace-source",
@@ -148,6 +163,23 @@ def main() -> None:
         deleted = clear_tenant_vectors(tenant)
         print(f"Deleted {deleted} vectors.")
         return
+    if args.migrate_source:
+        if not confirm(
+            f"Migrate tenant vectors from source {args.migrate_source!r}?",
+            args.yes,
+        ):
+            print("Cancelled.")
+            return
+        migrated, kept_target, target_source = migrate_tenant_source(
+            tenant,
+            args.migrate_source,
+            batch_size=args.migration_batch_size,
+        )
+        print(
+            f"Migrated {migrated} vectors to {target_source}; "
+            f"kept {kept_target} existing target vectors."
+        )
+        return
     if args.database and args.check:
         raise SystemExit(
             0
@@ -179,7 +211,10 @@ def main() -> None:
         )
         return
 
-    raise SystemExit("Choose --database, --bm25-only, --list, --delete, or --clear.")
+    raise SystemExit(
+        "Choose --database, --bm25-only, --list, --delete, "
+        "--migrate-source, or --clear."
+    )
 
 
 if __name__ == "__main__":

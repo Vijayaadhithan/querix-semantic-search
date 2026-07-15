@@ -323,6 +323,12 @@ def load_tenant_profile(path: Path) -> TenantProfile:
             "key_file_env",
             f"{default_prefix}_TLS_KEY_FILE",
         ),
+        index_namespace=_env_value(
+            database,
+            "index_namespace_env",
+            f"{default_prefix}_INDEX_NAMESPACE",
+            default=str(database.get("index_namespace", "")),
+        ).strip(),
     )
     mysql = (
         PostgresRuntimeConfig(

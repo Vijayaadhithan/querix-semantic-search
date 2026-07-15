@@ -24,6 +24,7 @@ database:
   host_env: {prefix}_DB_HOST
   port_env: {prefix}_DB_PORT
   database_env: {prefix}_DB_NAME
+  index_namespace: {company}_index
   user_env: {prefix}_DB_USER
   password_env: {prefix}_DB_PASSWORD
   search_ready_table: search_ready
@@ -130,6 +131,7 @@ def test_tenant_profiles_resolve_separate_storage_and_api_keys(
     assert profiles["alpha"].database.pool_min_size == 1
     assert profiles["alpha"].database.pool_max_size == 3
     assert profiles["alpha"].database.pool_timeout_seconds == 2.5
+    assert profiles["alpha"].database.index_namespace == "alpha_index"
     assert profiles["alpha"].database.tls_mode == "disable"
     assert profiles["alpha"].retrieval.semantic_related_tail_enabled is True
     assert (

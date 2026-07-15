@@ -36,6 +36,9 @@ api:
 
 database:
   backend: mysql
+  # Stable identity of the authoritative Gainr company database. Transferred
+  # indexes must be migrated to this namespace without re-embedding.
+  index_namespace: hvkbynbu_wwwdevsl_slowr_test
   host_env: MYSQL_HOST
   port_env: MYSQL_PORT
   database_env: MYSQL_DATABASE

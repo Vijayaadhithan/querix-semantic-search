@@ -143,6 +143,12 @@ PGVECTOR_DATABASE=rag_workbench
 
 Add the company database hostname, port, database, source table, and result table required by its tenant profile. Do not place passwords in `.env`.
 
+Keep `database.index_namespace` stable when transferring an existing index
+between physical databases. Gainr uses the authoritative company database name
+as its stable namespace. A transferred local index must be re-keyed with the
+namespace-migration command; this preserves embeddings and avoids a full
+recalculation. Do not change the namespace without another explicit migration.
+
 For a remote production database, use certificate verification:
 
 ```dotenv

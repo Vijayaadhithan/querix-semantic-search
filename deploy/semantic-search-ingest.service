@@ -10,7 +10,9 @@ WorkingDirectory=/opt/semantic-search
 Environment=PROJECT_DIR=/opt/semantic-search
 Environment=COMPANY_ID=gainr
 ExecStart=/opt/semantic-search/scripts/run_scheduled_ingestion.sh
-TimeoutStartSec=6h
+# A genuine full re-embedding can exceed one day on the 8 GB CPU host. The
+# script lock prevents overlap, and its signal trap removes the run container.
+TimeoutStartSec=48h
 Nice=10
 IOSchedulingClass=best-effort
 IOSchedulingPriority=7

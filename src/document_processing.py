@@ -255,6 +255,11 @@ def prepare_mysql_row(
         return None
 
     database = mysql_config.database if mysql_config else MYSQL_DATABASE
+    index_namespace = (
+        mysql_config.index_namespace
+        if mysql_config and mysql_config.index_namespace
+        else database
+    )
     search_table = mysql_config.search_table if mysql_config else MYSQL_TABLE
     identity = mysql_row_identity(row, primary_key_column)
     metadata = {
@@ -283,7 +288,7 @@ def prepare_mysql_row(
         mysql_document_id(
             search_table,
             identity,
-            database=database,
+            database=index_namespace,
             company_id=company_id,
             backend=database_backend(mysql_config),
         ),
@@ -305,6 +310,11 @@ def prepare_bm25_index_row(
         return None
 
     database = mysql_config.database if mysql_config else MYSQL_DATABASE
+    index_namespace = (
+        mysql_config.index_namespace
+        if mysql_config and mysql_config.index_namespace
+        else database
+    )
     search_table = mysql_config.search_table if mysql_config else MYSQL_TABLE
     search_id_column = (
         mysql_config.search_id_column
@@ -324,7 +334,7 @@ def prepare_bm25_index_row(
         "doc_id": mysql_document_id(
             search_table,
             identity,
-            database=database,
+            database=index_namespace,
             company_id=company_id,
             backend=database_backend(mysql_config),
         ),

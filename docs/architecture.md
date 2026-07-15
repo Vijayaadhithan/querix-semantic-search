@@ -62,6 +62,12 @@ Startup rejects shared endpoint slugs, API keys, pgvector tables, and BM25 files
 
 The ingestion job reads the configured search-ready table in bounded batches. It upserts BM25 data, skips vectors whose content hash and embedding model are unchanged, embeds only changed rows, and writes to the tenant pgvector table.
 
+Indexed document IDs use the tenant's stable `database.index_namespace`. This
+allows a validated index to move from a local or staging database to production
+without recalculating unchanged embeddings. An explicit namespace migration
+re-keys transferred vectors to the authoritative company's identity while
+preserving their embedding values.
+
 Production runs the guarded incremental job around 03:00 IST. It prevents
 overlap, reconciles deletions after a full scan, and restarts the API only after
 a successful run. An unchanged scan does not advance the BM25 revision.

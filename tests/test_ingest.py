@@ -20,7 +20,7 @@ from ingestion_service import (
     ingest_mysql_source,
     reconcile_deleted_documents,
 )
-from mysql_store import quote_mysql_identifier
+from mysql_store import MySQLRuntimeConfig, quote_mysql_identifier
 from settings import EMBED_MODEL
 
 
@@ -96,6 +96,49 @@ def test_database_document_ids_are_backend_isolated():
     )
 
     assert mysql_id != postgres_id
+
+
+def test_prepare_rows_use_stable_index_namespace_across_databases():
+    common = {
+        "host": "localhost",
+        "port": 3306,
+        "user": "search",
+        "password": "secret",
+        "search_table": "ads_search_ready",
+        "content_column": "embedding_content",
+        "bm25_column": "bm25_content",
+        "search_id_column": "id",
+        "result_table": "ads",
+        "result_id_column": "id",
+        "index_namespace": "rag_ht_test",
+    }
+    local = MySQLRuntimeConfig(database="rag_ht_test", **common)
+    production = MySQLRuntimeConfig(database="production_database", **common)
+    row = {"id": 42, "embedding_content": "Road bike in Chennai"}
+
+    local_id, _, local_metadata = prepare_mysql_row(
+        row,
+        "embedding_content",
+        "id",
+        mysql_config=local,
+        company_id="gainr",
+    )
+    production_id, _, production_metadata = prepare_mysql_row(
+        row,
+        "embedding_content",
+        "id",
+        mysql_config=production,
+        company_id="gainr",
+    )
+
+    assert local_id == production_id
+    assert local_metadata["source_file"] == (
+        "mysql:rag_ht_test.ads_search_ready"
+    )
+    assert production_metadata["source_file"] == (
+        "mysql:rag_ht_test.ads_search_ready"
+    )
+    assert production_metadata["source_database"] == "production_database"
 
 
 def test_prepare_content_document_extracts_json_semantic_text():

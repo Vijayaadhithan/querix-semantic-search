@@ -29,6 +29,24 @@ def mysql_config(**overrides):
     return mysql_store.MySQLRuntimeConfig(**values)
 
 
+def test_mysql_index_namespace_is_stable_across_physical_databases():
+    local = mysql_config(
+        database="rag_ht_test",
+        index_namespace="gainr_index_v1",
+    )
+    production = mysql_config(
+        database="production_database",
+        index_namespace="gainr_index_v1",
+    )
+
+    assert mysql_store.mysql_source_name(local) == (
+        "mysql:gainr_index_v1.search_ready"
+    )
+    assert mysql_store.mysql_source_name(production) == (
+        "mysql:gainr_index_v1.search_ready"
+    )
+
+
 def test_mysql_connection_applies_timeouts_and_tls_disable(monkeypatch):
     captured = {}
 

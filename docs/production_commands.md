@@ -441,6 +441,74 @@ The timer uses `Persistent=true`: if the host is down at 03:00 IST, systemd
 runs the missed job after the host starts. The five-minute randomized delay
 keeps the start near 03:00 while avoiding an exact boundary spike.
 
+The systemd service allows up to 48 hours for a genuine large re-embedding.
+The script uses a stable named run container and removes it when systemd stops
+or times out, so a failed unit cannot leave an orphan that overlaps tomorrow's
+run.
+
+### Migrate a transferred Gainr index to the company namespace
+
+If `--list` shows the validated source
+`mysql:rag_ht_test.ads_search_ready` plus a partial source using the physical
+production database name, stop and disable the timer before cleanup. Deploy the
+stable-index-namespace fix first. The company database source is authoritative.
+Migrate the transferred vectors to that source without recalculating embeddings;
+where a freshly embedded target row already exists, the target row wins. Then
+rebuild BM25 without generating embeddings:
+
+```bash
+sudo systemctl disable --now semantic-search-ingest.timer
+docker stop --time 60 <running-ingestion-container> 2>/dev/null || true
+
+export BACKUP_DIR="$HOME/backups/semantic-search/namespace-repair-$(date +%Y%m%d-%H%M%S)"
+mkdir -p "$BACKUP_DIR"
+docker compose stop api
+docker compose exec -T pgvector sh -c \
+  'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc' \
+  > "$BACKUP_DIR/pgvector.dump"
+tar -czf "$BACKUP_DIR/storage.tar.gz" storage
+
+docker compose run --rm api python src/ingest.py \
+  --company gainr \
+  --migrate-source 'mysql:rag_ht_test.ads_search_ready' \
+  --migration-batch-size 1000 \
+  --yes
+
+docker compose run --rm api python src/ingest.py \
+  --company gainr \
+  --bm25-only \
+  --mysql-batch-size 5000
+docker compose --profile ollama up -d --no-deps api
+```
+
+Verify a 500-row sample before re-enabling the timer. Most unchanged catalogue
+rows should be skipped; it must not classify all 500 as changed/new merely
+because production uses a different physical database name:
+
+```bash
+docker compose run --rm api python src/ingest.py \
+  --company gainr \
+  --database \
+  --limit 500 \
+  --mysql-batch-size 500 \
+  --embed-batch-size 32
+
+docker compose run --rm api python src/ingest.py --company gainr --list
+curl -fsS http://127.0.0.1:8000/api/v1/ready | jq
+
+export PRODUCTION_REPO="$(pwd)"
+sed "s|/opt/semantic-search|$PRODUCTION_REPO|g" \
+  deploy/semantic-search-ingest.service | \
+  sudo tee /etc/systemd/system/semantic-search-ingest.service >/dev/null
+sudo cp deploy/semantic-search-ingest.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now semantic-search-ingest.timer
+```
+
+Do not re-enable the timer if the sample unexpectedly says all 500 rows are
+changed/new. Investigate the embedding model, content hash, primary key, and
+namespace first.
+
 ## 16. Rollback
 
 The previous Git commit is stored in `$BACKUP_DIR/git-commit.txt`. To roll back code during the same maintenance session:

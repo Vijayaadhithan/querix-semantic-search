@@ -44,6 +44,9 @@ class MySQLRuntimeConfig:
     tls_ca_file: str = ""
     tls_cert_file: str = ""
     tls_key_file: str = ""
+    # Stable logical identity for indexed document IDs. This may differ from
+    # the physical database name when a validated index moves between hosts.
+    index_namespace: str = ""
 
     def __post_init__(self) -> None:
         if min(
@@ -166,7 +169,8 @@ def quote_mysql_identifier(identifier: str) -> str:
 
 def mysql_source_name(config: MySQLRuntimeConfig | None = None) -> str:
     config = resolved_mysql_config(config)
-    return f"mysql:{config.database}.{config.search_table}"
+    namespace = config.index_namespace or config.database
+    return f"mysql:{namespace}.{config.search_table}"
 
 
 def fetch_mysql_columns(

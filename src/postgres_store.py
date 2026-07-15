@@ -30,6 +30,9 @@ class PostgresRuntimeConfig:
     tls_ca_file: str = ""
     tls_cert_file: str = ""
     tls_key_file: str = ""
+    # Stable logical identity for indexed document IDs. This may differ from
+    # the physical database name when a validated index moves between hosts.
+    index_namespace: str = ""
 
     def __post_init__(self) -> None:
         if min(
@@ -122,8 +125,9 @@ def qualified_table(config: PostgresRuntimeConfig, table: str) -> str:
 
 
 def postgres_source_name(config: PostgresRuntimeConfig) -> str:
+    namespace = config.index_namespace or config.database
     return (
-        f"postgres:{config.database}.{config.schema}."
+        f"postgres:{namespace}.{config.schema}."
         f"{config.search_table}"
     )
 
