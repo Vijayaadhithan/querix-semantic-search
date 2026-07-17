@@ -1,0 +1,20 @@
+[Unit]
+Description=Semantic search verified daily backup
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/semantic-search
+Environment=PROJECT_DIR=/opt/semantic-search
+Environment=BACKUP_ROOT=/root/backups/semantic-search
+Environment=BACKUP_RETENTION_DAYS=7
+ExecStart=/opt/semantic-search/scripts/backup_production.sh
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+TimeoutStartSec=2h
+
+[Install]
+WantedBy=multi-user.target

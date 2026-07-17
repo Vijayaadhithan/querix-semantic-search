@@ -30,6 +30,10 @@ services:
       pgvector:
         condition: service_healthy
     mem_limit: 1g
+    pids_limit: 256
+    init: true
+    security_opt:
+      - no-new-privileges:true
     logging:
       driver: json-file
       options:
@@ -65,7 +69,16 @@ services:
 
   redis:
     image: redis:7-alpine
-    command: ["redis-server", "--appendonly", "yes"]
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --appendfsync
+      - everysec
+      - --maxmemory
+      - 192mb
+      - --maxmemory-policy
+      - allkeys-lru
     volumes:
       - redis-data:/data
     healthcheck:
@@ -74,6 +87,7 @@ services:
       timeout: 3s
       retries: 10
     mem_limit: 256m
+    pids_limit: 128
     logging:
       driver: json-file
       options:

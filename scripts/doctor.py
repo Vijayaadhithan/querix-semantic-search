@@ -42,6 +42,17 @@ def report(name: str, ok: bool, detail: str) -> bool:
     return ok
 
 
+def production_database_tls_status(mode: str) -> tuple[bool, str]:
+    detail = {
+        "require": "encrypted; server identity is not verified",
+        "verify-ca": "encrypted; CA verified",
+        "verify-full": "encrypted; CA and hostname verified",
+    }.get(mode)
+    if detail is None:
+        return False, f"tls.mode={mode!r}; expected require or stronger"
+    return True, detail
+
+
 def check_ollama() -> bool:
     try:
         response = requests.get(f"{OLLAMA_BASE_URL}/api/tags", timeout=3)
@@ -200,16 +211,12 @@ def check_production_security(profile=None) -> list[bool]:
         ),
     ]
     if config is not None:
-        tls_ok = config.tls_mode == "verify-full"
+        tls_ok, tls_detail = production_database_tls_status(config.tls_mode)
         checks.append(
             report(
                 "Company database TLS",
                 tls_ok,
-                (
-                    "verify-full"
-                    if tls_ok
-                    else f"tls.mode={config.tls_mode!r}; expected verify-full"
-                ),
+                tls_detail,
             )
         )
     return checks

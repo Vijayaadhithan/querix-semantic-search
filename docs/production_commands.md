@@ -37,7 +37,7 @@ git pull --ff-only origin "$BRANCH" && \
 
 The script automatically validates Compose, rebuilds the API image, ensures
 pgvector/Redis/Docker Ollama are running, recreates only the API, waits for real
-readiness, runs the tenant doctor, and shows status and recent logs. Because the
+readiness, runs the strict production tenant doctor, and shows status and recent logs. Because the
 commands use `&&`, deployment does not start if `git pull` fails. It also refuses
 to run over uncommitted production files or concurrently with another deployment.
 
@@ -62,6 +62,41 @@ changed. Never use `docker compose down -v` during deployment.
 The script never edits `.env` or `.env.keys`; Git ignores both. If release notes
 require a new production environment value, edit it before running the script.
 `docker compose config --quiet` will catch invalid or missing required values.
+
+After first setup or any host-level change, run the read-only host audit. It
+checks Compose health, resource headroom, secret-file permissions, restart
+policies, readiness, strict production configuration, index visibility, Chroma
+residue, public port bindings, the ingestion timer, and legacy virtualenv
+references. It does not restart services, ingest data, or delete files.
+
+```bash
+COMPANY_ID=gainr ./scripts/audit_production_host.sh
+```
+
+Install the daily verified backup timer once on the production host. It runs at
+approximately 02:00 IST, before the 03:00 ingestion timer, retains seven days,
+validates the custom-format pgvector dump, uses SQLite's online backup API, and
+writes checksums before publishing a completed backup directory.
+
+```bash
+export PRODUCTION_REPO="$(pwd)"
+sed "s|/opt/semantic-search|$PRODUCTION_REPO|g" \
+  deploy/semantic-search-backup.service | \
+  sudo tee /etc/systemd/system/semantic-search-backup.service >/dev/null
+sudo cp deploy/semantic-search-backup.timer \
+  /etc/systemd/system/semantic-search-backup.timer
+sudo systemctl daemon-reload
+sudo systemctl enable --now semantic-search-backup.timer
+systemctl list-timers semantic-search-backup.timer
+```
+
+Run and verify the first backup immediately:
+
+```bash
+sudo systemctl start semantic-search-backup.service
+sudo systemctl status semantic-search-backup.service --no-pager
+sudo journalctl -u semantic-search-backup.service -n 100 --no-pager
+```
 
 ## 1. Before pushing from development
 
@@ -202,7 +237,7 @@ VOYAGE_API_KEY=<production-voyage-key>
 
 Jina is the primary provider. The two Voyage entries use the same key with separate models. If only one provider is licensed, remove unavailable entries from `RERANK_PROVIDER_ORDER`; at least one matching key is required.
 
-For a remote company database, set the TLS mode variable referenced by the tenant YAML to `verify-full` and configure its CA certificate path in `.env.keys` or the production secret manager.
+For a remote company database, prefer `verify-full` and configure its CA certificate path in `.env.keys` or the production secret manager. If the provider cannot supply the CA and hostname, use `require` as the encrypted fallback. Do not leave production at `disable`.
 
 Do not copy `.env.example` over the production `.env`, and do not copy `.env.keys.example` over production secrets.
 

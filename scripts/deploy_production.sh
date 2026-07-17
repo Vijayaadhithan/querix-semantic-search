@@ -76,7 +76,10 @@ else
 fi
 
 if [[ "$RUN_DOCTOR" == "true" ]]; then
-  docker compose exec -T api python scripts/doctor.py --company "$COMPANY_ID"
+  docker compose exec -T api python scripts/doctor.py \
+    --company "$COMPANY_ID" \
+    --strict \
+    --production
 fi
 
 docker compose ps

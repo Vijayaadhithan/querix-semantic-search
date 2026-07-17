@@ -149,14 +149,14 @@ as its stable namespace. A transferred local index must be re-keyed with the
 namespace-migration command; this preserves embeddings and avoids a full
 recalculation. Do not change the namespace without another explicit migration.
 
-For a remote production database, use certificate verification:
+For a remote production database, prefer certificate and hostname verification:
 
 ```dotenv
 <COMPANY>_DB_TLS_MODE=verify-full
 <COMPANY>_DB_TLS_CA_FILE=<container-visible-ca-path>
 ```
 
-Do not enable `verify-full` until the correct certificate is installed and mounted into the API container. A temporary `disable` value may allow connectivity but does not meet the strict production security check.
+Do not enable `verify-full` until the correct certificate is installed and mounted into the API container. If the database provider cannot supply the CA and hostname, use `require` as the encrypted fallback. `disable` may allow connectivity but does not pass the strict production security check.
 
 Important Docker addresses:
 
