@@ -7,12 +7,6 @@ from collections import deque
 import requests
 
 from settings import (
-    LANGSEARCH_API_KEY,
-    LANGSEARCH_RERANK_MODEL,
-    LANGSEARCH_RERANK_RPD,
-    LANGSEARCH_RERANK_RPM,
-    LANGSEARCH_RERANK_RPS,
-    LANGSEARCH_RERANK_URL,
     RERANK_API_TIMEOUT_SECONDS,
     RERANK_FAILURE_COOLDOWN_SECONDS,
     RERANK_MAX_DOCUMENT_CHARS,
@@ -100,33 +94,23 @@ class HostedReranker:
         model: str,
         timeout_seconds: float = RERANK_API_TIMEOUT_SECONDS,
         max_document_chars: int = RERANK_MAX_DOCUMENT_CHARS,
-        provider_name: str | None = None,
         requests_per_minute: int | None = None,
-        requests_per_second: int | None = None,
-        requests_per_day: int | None = None,
         clock=time.monotonic,
     ):
         self.name = name
-        self.provider_name = provider_name or name
         self.url = url
         self.api_key = api_key
         self.model = model
         self.timeout_seconds = timeout_seconds
         self.max_document_chars = max_document_chars
         self.request_limiters = []
-        for budget, window_seconds in (
-            (requests_per_second, 1),
-            (requests_per_minute, 60),
-            (requests_per_day, 86400),
-        ):
-            if budget is not None:
-                self.request_limiters.append(
-                    RequestWindowLimiter(
-                        budget,
-                        window_seconds=window_seconds,
-                        clock=clock,
-                    )
+        if requests_per_minute is not None:
+            self.request_limiters.append(
+                RequestWindowLimiter(
+                    requests_per_minute,
+                    clock=clock,
                 )
+            )
         self.clock = clock
         self._cooldown_lock = threading.Lock()
         self._unavailable_until = 0.0
@@ -137,20 +121,12 @@ class HostedReranker:
         return dict(getattr(self._state, "last_usage", {}))
 
     def _payload(self, query: str, documents: list[str]) -> dict:
-        if self.provider_name == "voyage":
-            return {
-                "model": self.model,
-                "query": query,
-                "documents": documents,
-                "return_documents": False,
-                "truncation": True,
-            }
         return {
             "model": self.model,
             "query": query,
             "documents": documents,
-            "top_n": len(documents),
             "return_documents": False,
+            "truncation": True,
         }
 
     def _cooldown_retry_after(self) -> float:
@@ -358,26 +334,7 @@ class FallbackReranker:
 def load_reranker():
     providers = []
     for name in RERANK_PROVIDER_ORDER:
-        if name == "langsearch":
-            if LANGSEARCH_API_KEY:
-                providers.append(
-                    HostedReranker(
-                        name="langsearch",
-                        provider_name="langsearch",
-                        url=LANGSEARCH_RERANK_URL,
-                        api_key=LANGSEARCH_API_KEY,
-                        model=LANGSEARCH_RERANK_MODEL,
-                        requests_per_second=LANGSEARCH_RERANK_RPS,
-                        requests_per_minute=LANGSEARCH_RERANK_RPM,
-                        requests_per_day=LANGSEARCH_RERANK_RPD,
-                    )
-                )
-            else:
-                LOGGER.info(
-                    "LangSearch reranker skipped because "
-                    "LANGSEARCH_API_KEY is unset."
-                )
-        elif name in {"voyage", "voyage-2.5", "voyage-2.5-lite"}:
+        if name in {"voyage", "voyage-2.5", "voyage-2.5-lite"}:
             if VOYAGE_API_KEY:
                 model = (
                     VOYAGE_RERANK_LITE_MODEL
@@ -387,7 +344,6 @@ def load_reranker():
                 providers.append(
                     HostedReranker(
                         name=name,
-                        provider_name="voyage",
                         url=VOYAGE_RERANK_URL,
                         api_key=VOYAGE_API_KEY,
                         model=model,
@@ -402,8 +358,8 @@ def load_reranker():
                 )
     if not providers:
         raise RuntimeError(
-            "No hosted reranker is configured. Set LANGSEARCH_API_KEY or "
-            "VOYAGE_API_KEY for a provider in RERANK_PROVIDER_ORDER."
+            "No hosted reranker is configured. Set VOYAGE_API_KEY for a "
+            "provider in RERANK_PROVIDER_ORDER."
         )
     return FallbackReranker(providers)
 

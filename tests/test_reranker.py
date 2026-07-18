@@ -64,10 +64,10 @@ def test_hosted_reranker_captures_provider_usage(monkeypatch):
         lambda *_args, **_kwargs: UsageResponse(),
     )
     provider = HostedReranker(
-        name="langsearch",
-        url="https://langsearch.example/rerank",
+        name="voyage-2.5",
+        url="https://voyage.example/rerank",
         api_key="secret",
-        model="langsearch-reranker-v1",
+        model="rerank-2.5",
     )
 
     provider.compute_score([["query", "first"], ["query", "second"]])
@@ -88,8 +88,8 @@ def test_hosted_reranker_truncates_each_document_before_sending(monkeypatch):
 
     monkeypatch.setattr(reranker.requests, "post", post)
     provider = HostedReranker(
-        name="langsearch",
-        url="https://langsearch.example/rerank",
+        name="voyage-2.5",
+        url="https://voyage.example/rerank",
         api_key="secret",
         model="test-model",
         max_document_chars=5,
@@ -101,28 +101,27 @@ def test_hosted_reranker_truncates_each_document_before_sending(monkeypatch):
 
     assert captured["json"]["query"] == "full query"
     assert captured["json"]["documents"] == ["abcde", "12345"]
-    assert captured["json"]["top_n"] == 2
     assert captured["json"]["return_documents"] is False
+    assert captured["json"]["truncation"] is True
 
 
-def test_langsearch_chain_is_loaded_before_voyage_models(monkeypatch):
+def test_voyage_model_chain_is_loaded_in_configured_order(monkeypatch):
     monkeypatch.setattr(
         reranker,
         "RERANK_PROVIDER_ORDER",
-        ("langsearch", "voyage-2.5", "voyage-2.5-lite"),
+        ("voyage-2.5", "voyage-2.5-lite"),
     )
-    monkeypatch.setattr(reranker, "LANGSEARCH_API_KEY", "langsearch-key")
     monkeypatch.setattr(reranker, "VOYAGE_API_KEY", "voyage-key")
 
     chain = reranker.load_reranker()
 
     assert [provider.name for provider in chain.providers] == [
-        "langsearch",
         "voyage-2.5",
         "voyage-2.5-lite",
     ]
-    assert chain.providers[0].model == "langsearch-reranker-v1"
-    assert len(chain.providers[0].request_limiters) == 3
+    assert chain.providers[0].model == "rerank-2.5"
+    assert chain.providers[1].model == "rerank-2.5-lite"
+    assert len(chain.providers[0].request_limiters) == 1
 
 
 def test_reranker_chain_uses_next_provider_after_failure():
@@ -139,17 +138,16 @@ def test_reranker_chain_uses_next_provider_after_failure():
 
     chain = FallbackReranker(
         [
-            Provider("voyage"),
-            Provider("langsearch", [0.7, 0.1]),
-            Provider("voyage-2.5-lite", [0.1, 0.2]),
+            Provider("voyage-2.5"),
+            Provider("voyage-2.5-lite", [0.7, 0.1]),
         ]
     )
 
     assert chain.compute_score([["q", "a"], ["q", "b"]]) == [0.7, 0.1]
-    assert chain.last_provider == "langsearch"
+    assert chain.last_provider == "voyage-2.5-lite"
     assert [attempt["provider"] for attempt in chain.last_attempts] == [
-        "voyage",
-        "langsearch",
+        "voyage-2.5",
+        "voyage-2.5-lite",
     ]
 
 
@@ -170,8 +168,8 @@ def test_hosted_reranker_cools_down_after_rate_limit(monkeypatch):
 
     monkeypatch.setattr(reranker.requests, "post", post)
     provider = HostedReranker(
-        name="langsearch",
-        url="https://langsearch.example/rerank",
+        name="voyage-2.5",
+        url="https://voyage.example/rerank",
         api_key="test-key",
         model="test-model",
         timeout_seconds=1,
@@ -213,10 +211,10 @@ def test_hosted_reranker_cools_down_after_server_failure(monkeypatch):
 
     monkeypatch.setattr(reranker.requests, "post", post)
     provider = HostedReranker(
-        name="langsearch",
-        url="https://langsearch.example/rerank",
+        name="voyage-2.5",
+        url="https://voyage.example/rerank",
         api_key="test-key",
-        model="langsearch-reranker-v1",
+        model="rerank-2.5",
         timeout_seconds=1,
         clock=lambda: now[0],
     )
@@ -280,7 +278,6 @@ def test_voyage_model_budget_is_counted_independently(monkeypatch):
     monkeypatch.setattr(reranker.requests, "post", post)
     quality = HostedReranker(
         name="voyage-2.5",
-        provider_name="voyage",
         url="https://voyage.example/rerank",
         api_key="secret",
         model="rerank-2.5",
@@ -288,7 +285,6 @@ def test_voyage_model_budget_is_counted_independently(monkeypatch):
     )
     lite = HostedReranker(
         name="voyage-2.5-lite",
-        provider_name="voyage",
         url="https://voyage.example/rerank",
         api_key="secret",
         model="rerank-2.5-lite",

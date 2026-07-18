@@ -12,8 +12,8 @@ def test_monthly_usage_is_aggregated_and_company_isolated(tmp_path):
         store.record(
             month_utc="2026-07",
             company_id="alpha",
-            provider="langsearch",
-            model="langsearch-reranker-v1",
+            provider="voyage",
+            model="rerank-2.5",
             operation="reranking",
             input_tokens=1200,
             total_tokens=1200,
@@ -21,8 +21,8 @@ def test_monthly_usage_is_aggregated_and_company_isolated(tmp_path):
         store.record(
             month_utc="2026-07",
             company_id="alpha",
-            provider="langsearch",
-            model="langsearch-reranker-v1",
+            provider="voyage",
+            model="rerank-2.5",
             operation="reranking",
             input_tokens=800,
             total_tokens=800,
@@ -30,8 +30,8 @@ def test_monthly_usage_is_aggregated_and_company_isolated(tmp_path):
         store.record(
             month_utc="2026-07",
             company_id="beta",
-            provider="langsearch",
-            model="langsearch-reranker-v1",
+            provider="voyage",
+            model="rerank-2.5",
             operation="reranking",
             input_tokens=500,
             total_tokens=500,

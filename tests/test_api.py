@@ -790,8 +790,8 @@ def test_company_usage_endpoint_returns_only_that_company_totals(tmp_path):
             }
             result["reranker_attempts"] = [
                 {
-                    "provider": "langsearch",
-                    "model": "langsearch-test",
+                    "provider": "voyage",
+                    "model": "rerank-2.5",
                     "status": "success",
                     "usage": {
                         "input_tokens": 500,

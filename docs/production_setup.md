@@ -108,18 +108,13 @@ REDIS_KEY_PREFIX=semantic_ads
 REDIS_RESULT_CACHE_ENABLED=true
 REDIS_RESULT_CACHE_TTL_SECONDS=300
 
-RERANK_PROVIDER_ORDER=langsearch,voyage-2.5,voyage-2.5-lite
+RERANK_PROVIDER_ORDER=voyage-2.5,voyage-2.5-lite
 RERANK_API_TIMEOUT_SECONDS=3
 RERANK_MAX_DOCUMENT_CHARS=300
 RERANK_CANDIDATE_K=20
 PRIMARY_RANKED_K=20
 HYBRID_CANDIDATE_K=40
 
-LANGSEARCH_RERANK_URL=https://api.langsearch.com/v1/rerank
-LANGSEARCH_RERANK_MODEL=langsearch-reranker-v1
-LANGSEARCH_RERANK_RPS=1
-LANGSEARCH_RERANK_RPM=60
-LANGSEARCH_RERANK_RPD=1000
 VOYAGE_RERANK_URL=https://api.voyageai.com/v1/rerank
 VOYAGE_RERANK_MODEL=rerank-2.5
 VOYAGE_RERANK_LITE_MODEL=rerank-2.5-lite
@@ -182,7 +177,6 @@ Create `.env.keys` with placeholders replaced on the production server:
 GEMINI_API_KEY=<query-provider-key>
 GROQ_API_KEY=<optional-groq-query-provider-key>
 VOYAGE_API_KEY=<fallback-reranker-key>
-LANGSEARCH_API_KEY=<primary-reranker-key>
 
 <COMPANY>_API_KEY=<customer-api-key>
 API_ADMIN_KEY=<admin-api-key>

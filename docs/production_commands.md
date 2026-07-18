@@ -215,7 +215,7 @@ REDIS_URL=redis://redis:6379/0
 QUERY_EXTRACT_MODELS=groq:openai/gpt-oss-20b,gemini-3.1-flash-lite,gemma-4-26b-a4b-it,gemma-4-31b-it
 GROQ_TIMEOUT_SECONDS=5
 
-RERANK_PROVIDER_ORDER=langsearch,voyage-2.5,voyage-2.5-lite
+RERANK_PROVIDER_ORDER=voyage-2.5,voyage-2.5-lite
 RERANK_API_TIMEOUT_SECONDS=3
 RERANK_MAX_DOCUMENT_CHARS=300
 
@@ -235,11 +235,10 @@ Keep hosted-provider credentials in `.env.keys` or the production secret manager
 
 ```dotenv
 GROQ_API_KEY=<optional-production-groq-key>
-LANGSEARCH_API_KEY=<production-langsearch-key>
 VOYAGE_API_KEY=<production-voyage-key>
 ```
 
-LangSearch is the primary provider. The two Voyage entries use the same key with separate models. If only one provider is available, remove unavailable entries from `RERANK_PROVIDER_ORDER`; at least one matching key is required.
+The two Voyage entries use the same key with separate models. If only one model is available, remove the unavailable entry from `RERANK_PROVIDER_ORDER`.
 
 For a remote company database, prefer `verify-full` and configure its CA certificate path in `.env.keys` or the production secret manager. If the provider cannot supply the CA and hostname, use `require` as the encrypted fallback. Do not leave production at `disable`.
 

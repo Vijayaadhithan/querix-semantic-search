@@ -975,7 +975,7 @@ def test_tenant_reranker_policy_prunes_weak_semantic_results(tmp_path):
 
     class ScoredRanker:
         model_label = "test-reranker"
-        last_provider = "langsearch"
+        last_provider = "voyage-2.5"
         last_attempts = []
 
         def compute_score(self, _pairs, **_kwargs):
@@ -986,7 +986,7 @@ def test_tenant_reranker_policy_prunes_weak_semantic_results(tmp_path):
         bm25_index=index,
         ranker=ScoredRanker(),
         reranker_relative_score_floor=0.30,
-        reranker_min_score_by_provider={"langsearch": 0.05},
+        reranker_min_score_by_provider={"voyage-2.5": 0.05},
     )
     candidates = [
         {
@@ -1011,7 +1011,7 @@ def test_reranker_failure_falls_back_to_fusion_order(tmp_path):
         last_provider = ""
         last_attempts = [
             {
-                "provider": "langsearch",
+                "provider": "voyage-2.5",
                 "status": "fallback",
                 "reason": "ReadTimeout",
             }
@@ -1019,7 +1019,7 @@ def test_reranker_failure_falls_back_to_fusion_order(tmp_path):
 
         def compute_score(self, _pairs, **_kwargs):
             raise RuntimeError(
-                "All reranker providers failed: langsearch=ReadTimeout"
+                "All reranker providers failed: voyage-2.5=ReadTimeout"
             )
 
     engine = ProductSearchEngine(

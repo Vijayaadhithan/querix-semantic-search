@@ -174,7 +174,7 @@ def test_tenant_profile_loads_company_specific_retrieval_policy(
                 "  semantic_related_tail_requires_explicit_category: true\n"
                 "  reranker_relative_score_floor: 0.3\n"
                 "  reranker_min_score_by_provider:\n"
-                "    langsearch: 0.05\n"
+                "    voyage-2.5: 0.05\n"
                 "api:\n"
             ),
             1,
@@ -191,7 +191,7 @@ def test_tenant_profile_loads_company_specific_retrieval_policy(
     )
     assert profile.retrieval.reranker_relative_score_floor == 0.3
     assert profile.retrieval.reranker_min_score_by_provider == {
-        "langsearch": 0.05
+        "voyage-2.5": 0.05
     }
 
 
