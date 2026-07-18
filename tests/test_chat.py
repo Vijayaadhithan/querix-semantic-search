@@ -443,6 +443,52 @@ def test_descriptive_query_keeps_explicit_category_as_hard_filter():
     assert enriched["inferred_categories"]["subcategory"] is None
 
 
+def test_budget_bike_city_rides_rejects_generic_locality():
+    query = "budget bike for city rides under 1000"
+    plan = {
+        "semantic_query": "budget bike for city rides",
+        "keyword_query": "budget bike city rides",
+        "target_ad_type": "offer",
+        "filters": {
+            "main_category": None,
+            "subcategory": None,
+            "state": None,
+            "city": None,
+            "locality": "city",
+            "rental_duration": None,
+            "min_rental_fee": None,
+            "max_rental_fee": 1000,
+        },
+        "inferred_categories": {
+            "main_category": None,
+            "subcategory": None,
+        },
+        "fallback_reason": None,
+    }
+    value_index = {
+        "main_category": {"automobiles": "Automobiles"},
+        "subcategory": {"bike": "Bike"},
+        "state": {},
+        "city": {},
+        "locality": {"city": "city", "town": "town"},
+        "rental_duration": {},
+        "_subcategory_main_category": {"bike": "Automobiles"},
+        "_city_state": {},
+        "_locality_location": {
+            "city": {"city": "Bargarh", "state": "Odisha"}
+        },
+    }
+
+    enriched = enrich_query_plan(query, plan, value_index)
+
+    assert enriched["filters"]["subcategory"] == "Bike"
+    assert enriched["filters"]["main_category"] == "Automobiles"
+    assert enriched["filters"]["locality"] is None
+    assert enriched["filters"]["city"] is None
+    assert enriched["filters"]["state"] is None
+    assert enriched["filters"]["max_rental_fee"] == 1000
+
+
 def test_color_prefixed_category_is_an_explicit_hard_filter():
     plan = {
         "semantic_query": "red bike",

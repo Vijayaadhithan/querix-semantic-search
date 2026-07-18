@@ -63,6 +63,14 @@ LOCATION_STOP_WORDS = {
     "weekly",
     "monthly",
 }
+GENERIC_LOCATION_VALUES = {
+    "area",
+    "city",
+    "locality",
+    "location",
+    "town",
+    "village",
+}
 GENERIC_CATEGORY_HINT_TOKENS = {
     "equipment",
     "hire",
@@ -438,6 +446,8 @@ def is_explicit_category_request(query: str, value: str) -> bool:
         rf"(?<!\w){term}\s+(?:rent|hire|for\s+(?:rent|hire)|rental|"
         rf"in|near|at|under|below|within|between|per\s+hour|"
         rf"per\s+day|per\s+week|per\s+month)\b",
+        rf"\b(?:budget|cheap|affordable|low[\s-]?cost)\s+{term}(?!\w)",
+        rf"(?<!\w){term}\s+for\b",
         rf"\b\d+(?:\.\d+)?\s+{term}(?!\w)",
         rf"(?<!\w){term}\s+\d+(?:\.\d+)?\b",
     )
@@ -462,6 +472,13 @@ def is_category_attribute_usage(
             ):
                 return True
     return False
+
+
+def is_generic_location_value(value: str | None) -> bool:
+    return bool(
+        value
+        and normalize_filter_value(value) in GENERIC_LOCATION_VALUES
+    )
 
 
 def parse_query_plan(content: str, original_query: str) -> dict:
@@ -707,6 +724,8 @@ def find_fuzzy_location(query: str, value_index: dict) -> tuple[str, str] | None
                 match = typo_catalog_match(phrase, value_index[key])
             if match is not None:
                 actual, score = match
+                if is_generic_location_value(actual):
+                    continue
                 candidates.append((score, key_priority[key], key, actual))
     if not candidates:
         return None
@@ -1118,6 +1137,13 @@ def enrich_query_plan(query: str, plan: dict, value_index: dict) -> dict:
     for key in QUERY_FILTER_FIELDS:
         if key == "rental_duration":
             continue
+        if key in {"state", "city", "locality"} and is_generic_location_value(
+            filters.get(key)
+        ):
+            # Catalog data can contain placeholder-like values such as
+            # locality="city". Generic descriptive words must never become a
+            # hard geographic constraint.
+            filters[key] = None
         exact_value = find_catalog_value(
             query,
             value_index[key],
@@ -1125,6 +1151,11 @@ def enrich_query_plan(query: str, plan: dict, value_index: dict) -> dict:
         )
         if exact_value is None:
             exact_value = find_catalog_alias(query, key, value_index[key])
+        if (
+            key in {"state", "city", "locality"}
+            and is_generic_location_value(exact_value)
+        ):
+            exact_value = None
         if (
             key in {"state", "city", "locality"}
             and exact_value is not None
