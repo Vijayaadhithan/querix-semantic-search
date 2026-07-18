@@ -835,6 +835,7 @@ def test_small_rerank_window_preserves_deep_gainr_recall(
     assert captured["vector_candidate_k"] >= 100
     assert len(result["candidates"]) == 20
     assert result["candidates"][0]["id"] == "driver"
+    assert len(result["hybrid_tail_candidates"]) == 60
     index.close()
 
 
@@ -1126,6 +1127,120 @@ def test_tenant_can_disable_unscored_semantic_tail(tmp_path, monkeypatch):
     assert result["primary_product_ids"] == [101]
     assert result["related_product_ids"] == []
     assert result["product_ids"] == [101]
+    index.close()
+
+
+def test_semantic_search_uses_hybrid_continuation_before_catalogue_tail(
+    tmp_path,
+    monkeypatch,
+):
+    index = build_index(tmp_path / "hybrid-before-catalogue.sqlite3")
+    engine = ProductSearchEngine(
+        collection=FakeCollection(),
+        bm25_index=index,
+        semantic_related_tail_enabled=True,
+    )
+
+    def candidate(doc_id, product_id):
+        return {
+            "id": doc_id,
+            "text": f"candidate {product_id}",
+            "metadata": {
+                "source_type": "mysql",
+                "source_table": engine.search_table,
+                engine.search_id_column: product_id,
+            },
+        }
+
+    ranked_candidate = candidate("ranked-doc", 101)
+    rejected_candidate = candidate("rejected-doc", 199)
+    hybrid_candidates = [
+        candidate("hybrid-doc-1", 102),
+        candidate("hybrid-doc-2", 103),
+    ]
+    planned = {
+        "query_plan": {
+            "semantic_query": "comfortable wedding transport",
+            "keyword_query": "wedding car driver",
+            "target_ad_type": "offer",
+            "inferred_categories": {},
+            "execution_path": "semantic",
+            "sort_order": None,
+        },
+        "resolved_filters": {
+            "categorical": {"city_name": "Chennai"}
+        },
+        "unresolved_filters": {},
+    }
+    monkeypatch.setattr(
+        engine,
+        "retrieve",
+        lambda *_args, **_kwargs: {
+            "vector_results": [],
+            "bm25_results": [],
+            "candidates": [ranked_candidate, rejected_candidate],
+            "hybrid_tail_candidates": hybrid_candidates,
+            "vector_seconds": 0.0,
+            "bm25_seconds": 0.0,
+            "embedding_model_metrics": {},
+        },
+    )
+    monkeypatch.setattr(
+        engine,
+        "rank",
+        lambda *_args, **_kwargs: {
+            "results": [ranked_candidate],
+            "load_seconds": 0.0,
+            "seconds": 0.0,
+            "provider": "test",
+            "attempts": [],
+        },
+    )
+    captured = {}
+
+    def catalogue_tail(*args, **kwargs):
+        captured["limit"] = args[4]
+        captured["exclude_doc_ids"] = kwargs["exclude_doc_ids"]
+        captured["exclude_product_ids"] = kwargs["exclude_product_ids"]
+        return [104, 105]
+
+    monkeypatch.setattr(
+        search_engine,
+        "related_tail_product_ids",
+        catalogue_tail,
+    )
+    monkeypatch.setattr(
+        engine,
+        "_fetch_products",
+        lambda ids: [{"id": product_id} for product_id in ids],
+    )
+
+    result = engine.search(
+        "comfortable wedding transport",
+        limit=5,
+        planned_result=planned,
+        ranking_window=20,
+    )
+
+    assert result["primary_product_ids"] == [101]
+    assert result["hybrid_product_ids"] == [102, 103]
+    assert result["related_product_ids"] == [104, 105]
+    assert result["product_ids"] == [101, 102, 103, 104, 105]
+    assert captured["limit"] == 2
+    assert captured["exclude_doc_ids"] == {
+        "ranked-doc",
+        "rejected-doc",
+        "hybrid-doc-1",
+        "hybrid-doc-2",
+    }
+    assert captured["exclude_product_ids"] == {101, 102, 103}
+    assert [product["result_tier"] for product in result["products"]] == [
+        "ranked",
+        "related",
+        "related",
+        "related",
+        "related",
+    ]
     index.close()
 
 

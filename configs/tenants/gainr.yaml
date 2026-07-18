@@ -15,8 +15,8 @@ planner:
     those qualities as requests for safety officers, trainers, or auditors.
 
 retrieval:
-  # Keep the strongest semantic matches first, then continue later pages from
-  # the same predefined Gainr filters (city, locality, price, ad type, etc.).
+  # Keep the strongest reranked matches first, then the remaining fused
+  # vector/BM25 matches, and only then continue from the filtered catalogue.
   # related_tail_product_ids still requires at least one structured constraint,
   # so this does not turn a fully unfiltered semantic query into a catalogue dump.
   semantic_related_tail_enabled: true
@@ -140,7 +140,7 @@ compatibility:
   users_table: users
   page_size: 20
   # Keep the first frontend page inside the bounded hosted rerank window. Later
-  # pages are filled from the filtered catalogue tail for infinite scrolling.
+  # pages use fused vector/BM25 matches before the filtered catalogue tail.
   semantic_ranked_window: 20
   suggestions_limit: 8
   recent_limit: 10

@@ -69,7 +69,7 @@ from settings import (
 )
 
 LOGGER = logging.getLogger("uvicorn.error")
-RESULT_CACHE_SCHEMA_VERSION = "v14"
+RESULT_CACHE_SCHEMA_VERSION = "v15"
 QUERY_PLAN_CACHE_SCHEMA_VERSION = "v2"
 
 GAINR_VEHICLE_INTENT_TERMS = {
@@ -549,6 +549,7 @@ class ProductSearchEngine:
             "vector_results": [],
             "bm25_results": [],
             "candidates": [],
+            "hybrid_tail_candidates": [],
             "vector_seconds": 0.0,
             "bm25_seconds": 0.0,
             "embedding_model_metrics": {},
@@ -559,6 +560,7 @@ class ProductSearchEngine:
             "reranker_attempts": [],
             "related_tail_seconds": 0.0,
             "primary_product_ids": cached["primary_product_ids"],
+            "hybrid_product_ids": cached.get("hybrid_product_ids", []),
             "related_product_ids": cached["related_product_ids"],
             "product_ids": cached["product_ids"],
             "products": products,
@@ -594,6 +596,10 @@ class ProductSearchEngine:
             "primary_product_ids": [
                 str(product_id)
                 for product_id in result.get("primary_product_ids", [])
+            ],
+            "hybrid_product_ids": [
+                str(product_id)
+                for product_id in result.get("hybrid_product_ids", [])
             ],
             "related_product_ids": [
                 str(product_id)
@@ -920,14 +926,20 @@ class ProductSearchEngine:
         # Apply ad intent before truncating the candidate window. Otherwise a
         # page can be short merely because unwanted ad types occupied the K
         # slots ahead of valid products.
-        candidates = filter_candidates_by_ad_type(
+        eligible_candidates = filter_candidates_by_ad_type(
             merged,
             query_plan["target_ad_type"],
             type_fetcher=self._fetch_product_types,
             search_table=self.search_table,
             search_id_column=self.search_id_column,
             allowed_ad_types=allowed_ad_types,
-        )[:hybrid_top_k]
+        )
+        candidates = eligible_candidates[:hybrid_top_k]
+        # Keep the rest of the fused pool for later pages without increasing
+        # the hosted reranker payload. These candidates remain in reciprocal-
+        # rank-fusion order and have passed the same hard filters and ad-type
+        # validation as the reranked window.
+        hybrid_tail_candidates = eligible_candidates[hybrid_top_k:]
         embedding_metrics = (
             last_ollama_embedding_metrics()
             if self.embedding_provider is None
@@ -935,13 +947,14 @@ class ProductSearchEngine:
         )
         LOGGER.info(
             "[search:%s] step=retrieve status=complete vector=%d bm25=%d "
-            "merged=%d candidates=%d vector_ms=%.0f bm25_ms=%.0f "
+            "merged=%d candidates=%d hybrid_tail=%d vector_ms=%.0f bm25_ms=%.0f "
             "embed_total_ms=%.0f embed_load_ms=%.0f",
             trace_id,
             len(vector_results),
             len(bm25_results),
             len(merged),
             len(candidates),
+            len(hybrid_tail_candidates),
             vector_seconds * 1000,
             bm25_seconds * 1000,
             embedding_metrics.get("total_ms", 0.0),
@@ -951,6 +964,7 @@ class ProductSearchEngine:
             "vector_results": vector_results,
             "bm25_results": bm25_results,
             "candidates": candidates,
+            "hybrid_tail_candidates": hybrid_tail_candidates,
             "vector_seconds": vector_seconds,
             "bm25_seconds": bm25_seconds,
             "embedding_model_metrics": embedding_metrics,
@@ -1196,6 +1210,7 @@ class ProductSearchEngine:
             "vector_results": [],
             "bm25_results": [],
             "candidates": [],
+            "hybrid_tail_candidates": [],
             "vector_seconds": 0.0,
             "bm25_seconds": 0.0,
             "embedding_model_metrics": {},
@@ -1206,6 +1221,7 @@ class ProductSearchEngine:
             "reranker_attempts": [],
             "related_tail_seconds": browse_seconds,
             "primary_product_ids": [],
+            "hybrid_product_ids": [],
             "related_product_ids": product_ids,
             "product_ids": product_ids,
             "products": products,
@@ -1353,38 +1369,70 @@ class ProductSearchEngine:
             else 0
         )
         tail_started = time.perf_counter()
+        hybrid_product_ids = []
         related_product_ids = []
         tail_allowed = self._semantic_related_tail_allowed(
             planned["resolved_filters"]
         )
         if tail_allowed and tail_limit:
+            primary_identities = {
+                str(product_id)
+                for product_id in primary_product_ids
+            }
+            hybrid_product_ids = [
+                product_id
+                for product_id in extract_product_ids(
+                    retrieved.get("hybrid_tail_candidates", []),
+                    search_table=self.search_table,
+                    search_id_column=self.search_id_column,
+                )
+                if str(product_id) not in primary_identities
+            ][:tail_limit]
+        catalogue_tail_limit = max(
+            tail_limit - len(hybrid_product_ids),
+            0,
+        )
+        if tail_allowed and catalogue_tail_limit:
+            excluded_candidates = (
+                candidates
+                + retrieved.get("hybrid_tail_candidates", [])
+            )
             related_product_ids = related_tail_product_ids(
                 self.bm25_index,
                 planned["resolved_filters"],
                 planned["query_plan"].get("inferred_categories"),
                 planned["query_plan"]["target_ad_type"],
-                tail_limit,
+                catalogue_tail_limit,
                 exclude_doc_ids={
                     result["id"]
-                    for result in ranked["results"]
+                    for result in excluded_candidates
                 },
-                exclude_product_ids=set(primary_product_ids),
+                exclude_product_ids=set(
+                    (*primary_product_ids, *hybrid_product_ids)
+                ),
                 type_fetcher=self._fetch_product_types,
                 sort_order=planned["query_plan"].get("sort_order"),
                 allowed_ad_types=allowed_ad_types,
             )
         related_tail_seconds = time.perf_counter() - tail_started
         product_ids = list(
-            dict.fromkeys((*primary_product_ids, *related_product_ids))
+            dict.fromkeys(
+                (
+                    *primary_product_ids,
+                    *hybrid_product_ids,
+                    *related_product_ids,
+                )
+            )
         )
         LOGGER.info(
             "[search:%s] step=related_tail status=complete filters=%s "
-            "primary=%d related=%d duration_ms=%.0f",
+            "primary=%d hybrid=%d related=%d duration_ms=%.0f",
             trace_id,
             ",".join(
                 active_filter_names(planned["resolved_filters"])
             ) or "none",
             len(primary_product_ids),
+            len(hybrid_product_ids),
             len(related_product_ids),
             related_tail_seconds * 1000,
         )
@@ -1453,6 +1501,7 @@ class ProductSearchEngine:
             "reranker_error_type": ranked.get("error_type"),
             "related_tail_seconds": related_tail_seconds,
             "primary_product_ids": primary_product_ids,
+            "hybrid_product_ids": hybrid_product_ids,
             "related_product_ids": related_product_ids,
             "product_ids": product_ids,
             "products": products,

@@ -99,7 +99,8 @@ api:
   default_page_size: 20
   max_page_size: 20
   preload_embedding: true
-  # Combined cached window: 20 reranked results plus related catalogue rows.
+  # Combined cached window: 20 reranked results, the remaining fused hybrid
+  # matches, and finally related catalogue rows.
   max_results: 200
   session_ttl_seconds: 600
   max_sessions: 500
