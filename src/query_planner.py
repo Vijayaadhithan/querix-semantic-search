@@ -77,13 +77,7 @@ MASSAGE_EQUIPMENT_TERMS = {
     "machine",
     "massager",
 }
-CATEGORY_DERIVATIONAL_SUFFIXES = {
-    "ian",
-    "ist",
-    "or",
-    "er",
-    "r",
-}
+CATEGORY_DERIVATIONAL_SUFFIXES = {"ian", "ist", "or", "er", "r"}
 FUZZY_MATCH_THRESHOLDS = {
     "main_category": 0.90,
     "subcategory": 0.90,
@@ -602,13 +596,27 @@ def normalize_transliterated_query(query: str) -> str:
     return " ".join(normalized.split())
 
 
-def is_derivational_category_match(source: str, actual: str) -> bool:
-    """Return true when a fuzzy match changes a concept into a role/item."""
+def is_safe_category_typo_match(source: str, actual: str) -> bool:
+    """Accept only typo shapes that preserve the intended word boundaries."""
     source = normalize_filter_value(source)
     actual = normalize_filter_value(actual)
-    if " " in source or " " in actual or not actual.startswith(source):
+    if " " in source or " " in actual:
         return False
-    return actual[len(source) :] in CATEGORY_DERIVATIONAL_SUFFIXES
+    variants = [source]
+    if source.endswith("s") and len(source) > 3:
+        variants.append(source[:-1])
+    for variant in variants:
+        if not variant or variant[0] != actual[0] or variant[-1] != actual[-1]:
+            continue
+        if (
+            actual.startswith(variant)
+            and actual[len(variant) :] in CATEGORY_DERIVATIONAL_SUFFIXES
+        ):
+            continue
+        max_edits = 1 if max(len(variant), len(actual)) <= 5 else 2
+        if edit_distance(variant, actual) <= max_edits:
+            return True
+    return False
 
 
 def find_catalog_value(
@@ -822,7 +830,7 @@ def correct_explicit_query_typos(
     query: str,
     value_index: dict,
 ) -> tuple[str, list[dict[str, str]]]:
-    """Correct high-confidence catalog typos before deterministic planning."""
+    """Correct conservative catalog typos before deterministic planning."""
     if not QUERY_FUZZY_MATCHING:
         return query, []
 
@@ -901,17 +909,18 @@ def correct_explicit_query_typos(
                     value_index[key],
                     single_token_only=True,
                 )
-                if match is not None:
-                    actual, score = match
-                    # Words such as "massage" are not misspellings of the
-                    # catalog item "Massager". Forcing that correction turns
-                    # an ambiguous service query into an exact product filter
-                    # and can eliminate all valid local service listings.
-                    if is_derivational_category_match(token, actual):
-                        continue
-                    category_candidates.append(
-                        (score, priority, key, token, actual)
-                    )
+                if match is None:
+                    continue
+                actual, score = match
+                # A correction must resemble an internal typo, not a separate
+                # valid concept. This retains bke->Bike and
+                # techcician->Technician while rejecting escort->Resort and
+                # massage->Massager.
+                if not is_safe_category_typo_match(token, actual):
+                    continue
+                category_candidates.append(
+                    (score, priority, key, token, actual)
+                )
         category_candidates.sort(reverse=True)
         if category_candidates and (
             len(category_candidates) == 1
@@ -1528,6 +1537,10 @@ def extract_query_plan(
         "asking for a mathematics teacher wants a teacher or tutor service, not a "
         "mathematics book. A camera for a wedding means wedding photography use, "
         "not a person or place named Kalyan. "
+        "Never change a valid user concept into a similar-spelled catalog word. "
+        "Escort means an escort or security escort service, not a resort. Massage "
+        "means a massage service unless the user explicitly asks for a massager, "
+        "massage gun, chair, machine, device, or equipment. "
         "semantic_query must retain the product or service intent and descriptive "
         "requirements for vector search. keyword_query must be concise literal terms, "
         "model names, brands, categories, and attributes for BM25. Extract filters only "

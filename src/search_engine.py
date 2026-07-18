@@ -68,8 +68,8 @@ from settings import (
 )
 
 LOGGER = logging.getLogger("uvicorn.error")
-RESULT_CACHE_SCHEMA_VERSION = "v20"
-QUERY_PLAN_CACHE_SCHEMA_VERSION = "v7"
+RESULT_CACHE_SCHEMA_VERSION = "v21"
+QUERY_PLAN_CACHE_SCHEMA_VERSION = "v8"
 
 GAINR_VEHICLE_INTENT_TERMS = {
     "automobile",

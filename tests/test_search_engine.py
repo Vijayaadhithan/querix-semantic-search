@@ -337,6 +337,45 @@ def test_bare_massage_is_not_corrected_to_massager_product(tmp_path):
     index.close()
 
 
+def test_separate_word_is_not_corrected_to_similar_category(tmp_path):
+    index = build_index(tmp_path / "escort-intent.sqlite3")
+    index.upsert(
+        [
+            product_row(
+                "resort",
+                main_category_name="Accommodation & Spaces",
+                subcategory_name="Resort",
+                city_name="Coimbatore",
+            ),
+            product_row(
+                "security-escort",
+                main_category_name="Security Services",
+                subcategory_name="Security Escort",
+                city_name="Coimbatore",
+            ),
+            product_row(
+                "technician",
+                main_category_name="Repair & Technical Services",
+                subcategory_name="Technician",
+                city_name="Coimbatore",
+            ),
+        ]
+    )
+    value_index = query_filter_value_index(index)
+
+    assert deterministic_filter_query_plan("escort", value_index) is None
+    resort = deterministic_filter_query_plan("resort", value_index)
+    assert resort["execution_path"] == "deterministic_filter"
+    assert resort["filters"]["subcategory"] == "Resort"
+    technician_typo = deterministic_filter_query_plan(
+        "techcician",
+        value_index,
+    )
+    assert technician_typo["execution_path"] == "deterministic_filter"
+    assert technician_typo["filters"]["subcategory"] == "Technician"
+    index.close()
+
+
 def test_bare_massage_uses_semantic_service_plan_with_location(tmp_path):
     index = build_index(tmp_path / "massage-semantic-plan.sqlite3")
     index.upsert(
