@@ -239,6 +239,79 @@ def test_explicit_filters_override_only_matching_auto_filters(tmp_path):
     }
 
 
+def test_explicit_ids_clear_conflicting_inferred_filter_hierarchy(tmp_path):
+    adapter, engine, _repository = service(tmp_path)
+
+    def plan(_query):
+        planned = FakeEngine().plan(_query)
+        planned["resolved_filters"]["categorical"].update(
+            {
+                "main_category_name": "Audio & Video Equipments",
+                "state_name": "Tamil Nadu",
+                "locality_name": "T Nagar",
+            }
+        )
+        return planned
+
+    engine.plan = plan
+    request = adapter.parse_filter_result(
+        {
+            "searchTerm": "camera in Chennai",
+            "filter": {
+                "city_id": 81,
+                "subcategory_id": 313,
+            },
+            "page": 1,
+        }
+    )
+
+    _planned, effective, meta = adapter._effective_plan(request)
+
+    assert effective["categorical"] == {
+        "rental_duration": "Per Day",
+        "city_id": 81,
+        "subcategory_id": 313,
+    }
+    assert meta["ignored_auto_filters"] == {
+        "state_name": "Tamil Nadu",
+        "city_name": "Chennai",
+        "locality_name": "T Nagar",
+        "main_category_name": "Audio & Video Equipments",
+        "subcategory_name": "Bike",
+    }
+
+
+def test_explicit_locality_id_clears_inferred_location_hierarchy(tmp_path):
+    adapter, engine, _repository = service(tmp_path)
+
+    def plan(_query):
+        planned = FakeEngine().plan(_query)
+        planned["resolved_filters"]["categorical"].update(
+            {
+                "state_name": "Tamil Nadu",
+                "locality_name": "T Nagar",
+            }
+        )
+        return planned
+
+    engine.plan = plan
+    request = adapter.parse_filter_result(
+        {
+            "searchTerm": "bike near T Nagar",
+            "filter": {"locality_id": [163496]},
+            "page": 1,
+        }
+    )
+
+    _planned, effective, _meta = adapter._effective_plan(request)
+
+    assert effective["categorical"] == {
+        "subcategory_name": "Bike",
+        "rental_duration": "Per Day",
+        "locality_id": [163496],
+    }
+
+
 def test_deterministic_result_uses_full_catalog_pagination(tmp_path):
     adapter, engine, repository = service(
         tmp_path,

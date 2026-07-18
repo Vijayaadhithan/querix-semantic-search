@@ -892,32 +892,38 @@ class GainrCompatibilityService:
         replacements = (
             (
                 explicit.city_id,
-                "city_name",
+                ("state_name", "city_name", "locality_name"),
                 "city_id",
             ),
             (
                 explicit.subcategory_id
                 if explicit.subcategory_id not in ("", None)
                 else None,
-                "subcategory_name",
+                ("main_category_name", "subcategory_name"),
                 "subcategory_id",
             ),
             (
                 explicit.locality_id or None,
-                "locality_name",
+                ("state_name", "city_name", "locality_name"),
                 "locality_id",
             ),
             (
                 explicit.rental_duration or None,
-                "rental_duration",
+                ("rental_duration",),
                 "rental_duration",
             ),
         )
-        for value, auto_key, structured_key in replacements:
+        for value, auto_keys, structured_key in replacements:
             if value is None:
                 continue
-            if auto_key in categorical:
-                ignored[auto_key] = categorical.pop(auto_key)
+            # Frontend ID filters are authoritative. Clear both the inferred
+            # field and related inferred parents/children; otherwise a user
+            # changing Camera to Car can retain Audio & Video as the parent,
+            # or changing Chennai to Bengaluru can retain Tamil Nadu/locality
+            # constraints and incorrectly produce an empty result set.
+            for auto_key in auto_keys:
+                if auto_key in categorical:
+                    ignored[auto_key] = categorical.pop(auto_key)
             categorical[structured_key] = value
         for field_name, value in (
             ("min_rental_fee", explicit.min_fee),
