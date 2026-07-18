@@ -69,6 +69,21 @@ TRANSLITERATED_QUERY_REWRITES = (
         "for wedding",
     ),
 )
+MASSAGE_EQUIPMENT_TERMS = {
+    "chair",
+    "device",
+    "equipment",
+    "gun",
+    "machine",
+    "massager",
+}
+CATEGORY_DERIVATIONAL_SUFFIXES = {
+    "ian",
+    "ist",
+    "or",
+    "er",
+    "r",
+}
 FUZZY_MATCH_THRESHOLDS = {
     "main_category": 0.90,
     "subcategory": 0.90,
@@ -567,11 +582,33 @@ def parse_query_plan(content: str, original_query: str) -> dict:
 
 
 def normalize_transliterated_query(query: str) -> str:
-    """Replace only confirmed romanized phrases with their search meaning."""
+    """Normalize confirmed marketplace phrases to their search meaning."""
     normalized = query
     for pattern, replacement in TRANSLITERATED_QUERY_REWRITES:
         normalized = pattern.sub(replacement, normalized)
+    tokens = set(re.findall(r"[^\W_]+", normalize_filter_value(normalized)))
+    if "massage" in tokens and not tokens.intersection(MASSAGE_EQUIPMENT_TERMS):
+        # The catalog contains both a Massager product category and a much
+        # larger Massage Therapist service category. A bare "massage" is a
+        # service request; equipment remains available when the user says
+        # massager, gun, machine, chair, device, or equipment explicitly.
+        normalized = re.sub(
+            r"(?<!\w)massage(?!\w)",
+            "massage therapist service",
+            normalized,
+            count=1,
+            flags=re.IGNORECASE,
+        )
     return " ".join(normalized.split())
+
+
+def is_derivational_category_match(source: str, actual: str) -> bool:
+    """Return true when a fuzzy match changes a concept into a role/item."""
+    source = normalize_filter_value(source)
+    actual = normalize_filter_value(actual)
+    if " " in source or " " in actual or not actual.startswith(source):
+        return False
+    return actual[len(source) :] in CATEGORY_DERIVATIONAL_SUFFIXES
 
 
 def find_catalog_value(
@@ -866,6 +903,12 @@ def correct_explicit_query_typos(
                 )
                 if match is not None:
                     actual, score = match
+                    # Words such as "massage" are not misspellings of the
+                    # catalog item "Massager". Forcing that correction turns
+                    # an ambiguous service query into an exact product filter
+                    # and can eliminate all valid local service listings.
+                    if is_derivational_category_match(token, actual):
+                        continue
                     category_candidates.append(
                         (score, priority, key, token, actual)
                     )

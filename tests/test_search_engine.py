@@ -191,6 +191,19 @@ def test_transliterated_query_normalization_is_narrow_and_spelling_tolerant():
     )
 
 
+def test_bare_massage_normalizes_to_service_but_equipment_stays_explicit():
+    assert normalize_transliterated_query("massage in Coimbatore") == (
+        "massage therapist service in Coimbatore"
+    )
+    assert normalize_transliterated_query("body massage") == (
+        "body massage therapist service"
+    )
+    assert normalize_transliterated_query("massage gun in Coimbatore") == (
+        "massage gun in Coimbatore"
+    )
+    assert normalize_transliterated_query("body massager") == "body massager"
+
+
 def test_transliterated_phrase_tokens_do_not_become_fuzzy_locations(tmp_path):
     index = build_index(tmp_path / "transliterated-location.sqlite3")
     index.upsert(
@@ -295,6 +308,77 @@ def test_deterministic_filter_plan_corrects_category_and_city_typos(tmp_path):
         {"field": "subcategory", "input": "bkes", "value": "Bike"},
     ]
     index.close()
+
+
+def test_bare_massage_is_not_corrected_to_massager_product(tmp_path):
+    index = build_index(tmp_path / "massage-intent.sqlite3")
+    index.upsert(
+        [
+            product_row(
+                "massager",
+                main_category_name="Life Style Products",
+                subcategory_name="Massager",
+                city_name="Coimbatore",
+            ),
+            product_row(
+                "massage-therapist",
+                main_category_name="Health & Wellness",
+                subcategory_name="Massage Therapist",
+                city_name="Coimbatore",
+            ),
+        ]
+    )
+    value_index = query_filter_value_index(index)
+
+    assert deterministic_filter_query_plan("massage", value_index) is None
+    equipment = deterministic_filter_query_plan("massager", value_index)
+    assert equipment["execution_path"] == "deterministic_filter"
+    assert equipment["filters"]["subcategory"] == "Massager"
+    index.close()
+
+
+def test_bare_massage_uses_semantic_service_plan_with_location(tmp_path):
+    index = build_index(tmp_path / "massage-semantic-plan.sqlite3")
+    index.upsert(
+        [
+            product_row(
+                "massager",
+                main_category_name="Life Style Products",
+                subcategory_name="Massager",
+                state_name="Tamil Nadu",
+                city_name="Coimbatore",
+            ),
+            product_row(
+                "massage-therapist",
+                main_category_name="Health & Wellness",
+                subcategory_name="Massage Therapist",
+                state_name="Tamil Nadu",
+                city_name="Coimbatore",
+            ),
+        ]
+    )
+    provider = CapturingQueryProvider()
+    engine = ProductSearchEngine(
+        collection=FakeCollection(),
+        bm25_index=index,
+        query_provider=provider,
+    )
+    try:
+        result = engine.plan("massage in Coimbatore")
+    finally:
+        engine.close()
+        index.close()
+
+    assert provider.calls == 1
+    assert result["query_plan"]["execution_path"] == "semantic"
+    assert "massage therapist service in Coimbatore" in provider.user_prompt
+    assert result["resolved_filters"]["categorical"] == {
+        "state_name": "Tamil Nadu",
+        "city_name": "Coimbatore",
+    }
+    assert result["query_plan"]["inferred_categories"]["subcategory"] == (
+        "Massage Therapist"
+    )
 
 
 def test_deterministic_filter_plan_accepts_reordered_bare_budget_query(
