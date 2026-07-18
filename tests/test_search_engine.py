@@ -975,7 +975,7 @@ def test_tenant_reranker_policy_prunes_weak_semantic_results(tmp_path):
 
     class ScoredRanker:
         model_label = "test-reranker"
-        last_provider = "jina"
+        last_provider = "langsearch"
         last_attempts = []
 
         def compute_score(self, _pairs, **_kwargs):
@@ -986,7 +986,7 @@ def test_tenant_reranker_policy_prunes_weak_semantic_results(tmp_path):
         bm25_index=index,
         ranker=ScoredRanker(),
         reranker_relative_score_floor=0.30,
-        reranker_min_score_by_provider={"jina": 0.05},
+        reranker_min_score_by_provider={"langsearch": 0.05},
     )
     candidates = [
         {
@@ -1011,14 +1011,16 @@ def test_reranker_failure_falls_back_to_fusion_order(tmp_path):
         last_provider = ""
         last_attempts = [
             {
-                "provider": "jina",
+                "provider": "langsearch",
                 "status": "fallback",
                 "reason": "ReadTimeout",
             }
         ]
 
         def compute_score(self, _pairs, **_kwargs):
-            raise RuntimeError("All reranker providers failed: jina=ReadTimeout")
+            raise RuntimeError(
+                "All reranker providers failed: langsearch=ReadTimeout"
+            )
 
     engine = ProductSearchEngine(
         collection=FakeCollection(),

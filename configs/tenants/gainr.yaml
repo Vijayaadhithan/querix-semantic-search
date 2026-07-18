@@ -27,7 +27,7 @@ retrieval:
   # Jina uses positive relevance scores. If every candidate is below this
   # floor, return no semantic matches instead of noise.
   reranker_min_score_by_provider:
-    jina: 0.05
+    langsearch: 0.05
 
 api:
   endpoint_slug: gainr

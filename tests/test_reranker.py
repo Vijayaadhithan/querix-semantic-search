@@ -64,10 +64,10 @@ def test_hosted_reranker_captures_provider_usage(monkeypatch):
         lambda *_args, **_kwargs: UsageResponse(),
     )
     provider = HostedReranker(
-        name="jina",
-        url="https://jina.example/rerank",
+        name="langsearch",
+        url="https://langsearch.example/rerank",
         api_key="secret",
-        model="jina-reranker-v2-base-multilingual",
+        model="langsearch-reranker-v1",
     )
 
     provider.compute_score([["query", "first"], ["query", "second"]])
@@ -88,8 +88,8 @@ def test_hosted_reranker_truncates_each_document_before_sending(monkeypatch):
 
     monkeypatch.setattr(reranker.requests, "post", post)
     provider = HostedReranker(
-        name="jina",
-        url="https://jina.example/rerank",
+        name="langsearch",
+        url="https://langsearch.example/rerank",
         api_key="secret",
         model="test-model",
         max_document_chars=5,
@@ -101,6 +101,28 @@ def test_hosted_reranker_truncates_each_document_before_sending(monkeypatch):
 
     assert captured["json"]["query"] == "full query"
     assert captured["json"]["documents"] == ["abcde", "12345"]
+    assert captured["json"]["top_n"] == 2
+    assert captured["json"]["return_documents"] is False
+
+
+def test_langsearch_chain_is_loaded_before_voyage_models(monkeypatch):
+    monkeypatch.setattr(
+        reranker,
+        "RERANK_PROVIDER_ORDER",
+        ("langsearch", "voyage-2.5", "voyage-2.5-lite"),
+    )
+    monkeypatch.setattr(reranker, "LANGSEARCH_API_KEY", "langsearch-key")
+    monkeypatch.setattr(reranker, "VOYAGE_API_KEY", "voyage-key")
+
+    chain = reranker.load_reranker()
+
+    assert [provider.name for provider in chain.providers] == [
+        "langsearch",
+        "voyage-2.5",
+        "voyage-2.5-lite",
+    ]
+    assert chain.providers[0].model == "langsearch-reranker-v1"
+    assert len(chain.providers[0].request_limiters) == 3
 
 
 def test_reranker_chain_uses_next_provider_after_failure():
@@ -118,16 +140,16 @@ def test_reranker_chain_uses_next_provider_after_failure():
     chain = FallbackReranker(
         [
             Provider("voyage"),
-            Provider("jina", [0.7, 0.1]),
+            Provider("langsearch", [0.7, 0.1]),
             Provider("voyage-2.5-lite", [0.1, 0.2]),
         ]
     )
 
     assert chain.compute_score([["q", "a"], ["q", "b"]]) == [0.7, 0.1]
-    assert chain.last_provider == "jina"
+    assert chain.last_provider == "langsearch"
     assert [attempt["provider"] for attempt in chain.last_attempts] == [
         "voyage",
-        "jina",
+        "langsearch",
     ]
 
 
@@ -148,8 +170,8 @@ def test_hosted_reranker_cools_down_after_rate_limit(monkeypatch):
 
     monkeypatch.setattr(reranker.requests, "post", post)
     provider = HostedReranker(
-        name="jina",
-        url="https://jina.example/rerank",
+        name="langsearch",
+        url="https://langsearch.example/rerank",
         api_key="test-key",
         model="test-model",
         timeout_seconds=1,
@@ -174,6 +196,48 @@ def test_hosted_reranker_cools_down_after_rate_limit(monkeypatch):
     assert calls == ["post"]
 
 
+def test_hosted_reranker_cools_down_after_server_failure(monkeypatch):
+    now = [100.0]
+    calls = []
+
+    class ServerErrorResponse:
+        status_code = 500
+        headers = {}
+
+        def raise_for_status(self):
+            raise reranker.requests.HTTPError(response=self)
+
+    def post(*_args, **_kwargs):
+        calls.append("post")
+        return ServerErrorResponse()
+
+    monkeypatch.setattr(reranker.requests, "post", post)
+    provider = HostedReranker(
+        name="langsearch",
+        url="https://langsearch.example/rerank",
+        api_key="test-key",
+        model="langsearch-reranker-v1",
+        timeout_seconds=1,
+        clock=lambda: now[0],
+    )
+
+    try:
+        provider.compute_score([["query", "doc"]])
+    except RuntimeError as exc:
+        assert "http_500" in str(exc)
+    else:
+        raise AssertionError("Expected first request to fail with http_500.")
+
+    try:
+        provider.compute_score([["query", "doc"]])
+    except RuntimeError as exc:
+        assert "cooldown active" in str(exc)
+    else:
+        raise AssertionError("Expected second request to use cooldown.")
+
+    assert calls == ["post"]
+
+
 def test_request_window_limiter_enforces_per_model_budget():
     now = [100.0]
     limiter = RequestWindowLimiter(3, clock=lambda: now[0])
@@ -186,6 +250,23 @@ def test_request_window_limiter_enforces_per_model_budget():
     assert retry_after == 60.0
 
     now[0] = 161.0
+    assert limiter.allow() == (True, 0.0)
+
+
+def test_request_window_limiter_supports_one_request_per_second():
+    now = [100.0]
+    limiter = RequestWindowLimiter(
+        1,
+        window_seconds=1,
+        clock=lambda: now[0],
+    )
+
+    assert limiter.allow() == (True, 0.0)
+    allowed, retry_after = limiter.allow()
+    assert allowed is False
+    assert retry_after == 1.0
+
+    now[0] = 101.0
     assert limiter.allow() == (True, 0.0)
 
 

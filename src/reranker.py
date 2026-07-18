@@ -7,9 +7,12 @@ from collections import deque
 import requests
 
 from settings import (
-    JINA_API_KEY,
-    JINA_RERANK_MODEL,
-    JINA_RERANK_URL,
+    LANGSEARCH_API_KEY,
+    LANGSEARCH_RERANK_MODEL,
+    LANGSEARCH_RERANK_RPD,
+    LANGSEARCH_RERANK_RPM,
+    LANGSEARCH_RERANK_RPS,
+    LANGSEARCH_RERANK_URL,
     RERANK_API_TIMEOUT_SECONDS,
     RERANK_FAILURE_COOLDOWN_SECONDS,
     RERANK_MAX_DOCUMENT_CHARS,
@@ -27,24 +30,34 @@ LOGGER = logging.getLogger("uvicorn.error")
 
 
 class RequestWindowLimiter:
-    """Thread-safe rolling one-minute request budget."""
+    """Thread-safe rolling request budget for a configurable time window."""
 
-    def __init__(self, requests_per_minute: int, clock=time.monotonic):
-        if requests_per_minute <= 0:
-            raise ValueError("requests_per_minute must be greater than zero")
-        self.requests_per_minute = requests_per_minute
+    def __init__(
+        self,
+        requests_per_window: int,
+        *,
+        window_seconds: float = 60,
+        clock=time.monotonic,
+    ):
+        if requests_per_window <= 0 or window_seconds <= 0:
+            raise ValueError("request budget and window must be greater than zero")
+        self.requests_per_window = requests_per_window
+        self.window_seconds = window_seconds
         self.clock = clock
         self._requests = deque()
         self._lock = threading.Lock()
 
     def allow(self) -> tuple[bool, float]:
         now = self.clock()
-        cutoff = now - 60
+        cutoff = now - self.window_seconds
         with self._lock:
             while self._requests and self._requests[0] <= cutoff:
                 self._requests.popleft()
-            if len(self._requests) >= self.requests_per_minute:
-                return False, max(60 - (now - self._requests[0]), 0)
+            if len(self._requests) >= self.requests_per_window:
+                return False, max(
+                    self.window_seconds - (now - self._requests[0]),
+                    0,
+                )
             self._requests.append(now)
             return True, 0.0
 
@@ -89,6 +102,8 @@ class HostedReranker:
         max_document_chars: int = RERANK_MAX_DOCUMENT_CHARS,
         provider_name: str | None = None,
         requests_per_minute: int | None = None,
+        requests_per_second: int | None = None,
+        requests_per_day: int | None = None,
         clock=time.monotonic,
     ):
         self.name = name
@@ -98,11 +113,20 @@ class HostedReranker:
         self.model = model
         self.timeout_seconds = timeout_seconds
         self.max_document_chars = max_document_chars
-        self.request_limiter = (
-            RequestWindowLimiter(requests_per_minute, clock=clock)
-            if requests_per_minute is not None
-            else None
-        )
+        self.request_limiters = []
+        for budget, window_seconds in (
+            (requests_per_second, 1),
+            (requests_per_minute, 60),
+            (requests_per_day, 86400),
+        ):
+            if budget is not None:
+                self.request_limiters.append(
+                    RequestWindowLimiter(
+                        budget,
+                        window_seconds=window_seconds,
+                        clock=clock,
+                    )
+                )
         self.clock = clock
         self._cooldown_lock = threading.Lock()
         self._unavailable_until = 0.0
@@ -178,8 +202,8 @@ class HostedReranker:
             str(pair[1])[: self.max_document_chars]
             for pair in pairs
         ]
-        if self.request_limiter is not None:
-            allowed, retry_after = self.request_limiter.allow()
+        for request_limiter in self.request_limiters:
+            allowed, retry_after = request_limiter.allow()
             if not allowed:
                 raise RuntimeError(
                     f"{self.name} provider request budget exhausted; "
@@ -213,6 +237,8 @@ class HostedReranker:
                     self._retry_after_seconds(response)
                     or RERANK_RATE_LIMIT_COOLDOWN_SECONDS
                 )
+            elif status is not None:
+                self._set_cooldown(RERANK_FAILURE_COOLDOWN_SECONDS)
             elif isinstance(exc, (requests.Timeout, requests.ConnectionError)):
                 self._set_cooldown(RERANK_FAILURE_COOLDOWN_SECONDS)
             raise RuntimeError(
@@ -332,7 +358,26 @@ class FallbackReranker:
 def load_reranker():
     providers = []
     for name in RERANK_PROVIDER_ORDER:
-        if name in {"voyage", "voyage-2.5", "voyage-2.5-lite"}:
+        if name == "langsearch":
+            if LANGSEARCH_API_KEY:
+                providers.append(
+                    HostedReranker(
+                        name="langsearch",
+                        provider_name="langsearch",
+                        url=LANGSEARCH_RERANK_URL,
+                        api_key=LANGSEARCH_API_KEY,
+                        model=LANGSEARCH_RERANK_MODEL,
+                        requests_per_second=LANGSEARCH_RERANK_RPS,
+                        requests_per_minute=LANGSEARCH_RERANK_RPM,
+                        requests_per_day=LANGSEARCH_RERANK_RPD,
+                    )
+                )
+            else:
+                LOGGER.info(
+                    "LangSearch reranker skipped because "
+                    "LANGSEARCH_API_KEY is unset."
+                )
+        elif name in {"voyage", "voyage-2.5", "voyage-2.5-lite"}:
             if VOYAGE_API_KEY:
                 model = (
                     VOYAGE_RERANK_LITE_MODEL
@@ -355,23 +400,9 @@ def load_reranker():
                 LOGGER.info(
                     "Voyage reranker skipped because VOYAGE_API_KEY is unset."
                 )
-        elif name == "jina":
-            if JINA_API_KEY:
-                providers.append(
-                    HostedReranker(
-                        name="jina",
-                        url=JINA_RERANK_URL,
-                        api_key=JINA_API_KEY,
-                        model=JINA_RERANK_MODEL,
-                    )
-                )
-            else:
-                LOGGER.info(
-                    "Jina reranker skipped because JINA_API_KEY is unset."
-                )
     if not providers:
         raise RuntimeError(
-            "No hosted reranker is configured. Set JINA_API_KEY or "
+            "No hosted reranker is configured. Set LANGSEARCH_API_KEY or "
             "VOYAGE_API_KEY for a provider in RERANK_PROVIDER_ORDER."
         )
     return FallbackReranker(providers)

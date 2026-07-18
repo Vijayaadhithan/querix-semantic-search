@@ -64,19 +64,22 @@ retrieval:
   final_top_k: 10
   reranker_model: hosted-reranker-chain
   reranker_providers:
-    # Voyage is the latency-stable primary. Keep Jina as a quality-preserving
-    # fallback instead of making every Jina timeout delay the Voyage result.
+    # LangSearch provides the larger request budget. Voyage quality and lite
+    # models preserve semantic ranking if LangSearch is limited or unavailable.
     order:
+      - langsearch
       - voyage-2.5
       - voyage-2.5-lite
-      - jina
     timeout_seconds: 3
     # Bounds provider tokens/cost while retaining titles and strongest fields.
     max_document_chars: 300
+    langsearch_model: langsearch-reranker-v1
+    langsearch_requests_per_second: 1
+    langsearch_requests_per_minute: 60
+    langsearch_requests_per_day: 1000
     voyage_model: rerank-2.5
     voyage_lite_model: rerank-2.5-lite
     voyage_requests_per_minute_per_model: 3
-    jina_model: jina-reranker-v2-base-multilingual
 
 api:
   host: 127.0.0.1

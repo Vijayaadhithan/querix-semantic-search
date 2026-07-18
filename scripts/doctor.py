@@ -23,7 +23,7 @@ from settings import (
     API_TENANT_MAX_CONCURRENT_SEARCHES,
     EMBED_MODEL,
     GEMINI_API_KEY,
-    JINA_API_KEY,
+    LANGSEARCH_API_KEY,
     MYSQL_RESULT_TABLE,
     MYSQL_TABLE,
     OLLAMA_BASE_URL,
@@ -133,8 +133,8 @@ def check_vectors(profile=None) -> bool:
 
 def check_reranker() -> bool:
     available = []
-    if "jina" in RERANK_PROVIDER_ORDER and JINA_API_KEY:
-        available.append("jina")
+    if "langsearch" in RERANK_PROVIDER_ORDER and LANGSEARCH_API_KEY:
+        available.append("langsearch")
     if (
         {"voyage", "voyage-2.5"} & set(RERANK_PROVIDER_ORDER)
         and VOYAGE_API_KEY

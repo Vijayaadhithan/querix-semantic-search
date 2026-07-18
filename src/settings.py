@@ -245,7 +245,7 @@ _rerank_provider_order = os.getenv(
     ",".join(
         RERANK_PROVIDER_CONFIG.get(
             "order",
-            ["jina", "voyage-2.5", "voyage-2.5-lite"],
+            ["langsearch", "voyage-2.5", "voyage-2.5-lite"],
         )
     ),
 )
@@ -257,7 +257,7 @@ RERANK_PROVIDER_ORDER = tuple(
 _invalid_rerank_providers = sorted(
     set(RERANK_PROVIDER_ORDER)
     - {
-        "jina",
+        "langsearch",
         "voyage",
         "voyage-2.5",
         "voyage-2.5-lite",
@@ -334,20 +334,44 @@ VOYAGE_RERANK_RPM_PER_MODEL = int(
 )
 if VOYAGE_RERANK_RPM_PER_MODEL <= 0:
     raise ValueError("VOYAGE_RERANK_RPM_PER_MODEL must be greater than zero.")
-JINA_API_KEY = os.getenv("JINA_API_KEY", "")
-JINA_RERANK_URL = os.getenv(
-    "JINA_RERANK_URL",
-    "https://api.jina.ai/v1/rerank",
+LANGSEARCH_API_KEY = os.getenv("LANGSEARCH_API_KEY", "")
+LANGSEARCH_RERANK_URL = os.getenv(
+    "LANGSEARCH_RERANK_URL",
+    "https://api.langsearch.com/v1/rerank",
 )
-JINA_RERANK_MODEL = os.getenv(
-    "JINA_RERANK_MODEL",
+LANGSEARCH_RERANK_MODEL = os.getenv(
+    "LANGSEARCH_RERANK_MODEL",
     str(
         RERANK_PROVIDER_CONFIG.get(
-            "jina_model",
-            "jina-reranker-v2-base-multilingual",
+            "langsearch_model",
+            "langsearch-reranker-v1",
         )
     ),
 )
+LANGSEARCH_RERANK_RPS = int(
+    os.getenv(
+        "LANGSEARCH_RERANK_RPS",
+        str(RERANK_PROVIDER_CONFIG.get("langsearch_requests_per_second", 1)),
+    )
+)
+LANGSEARCH_RERANK_RPM = int(
+    os.getenv(
+        "LANGSEARCH_RERANK_RPM",
+        str(RERANK_PROVIDER_CONFIG.get("langsearch_requests_per_minute", 60)),
+    )
+)
+LANGSEARCH_RERANK_RPD = int(
+    os.getenv(
+        "LANGSEARCH_RERANK_RPD",
+        str(RERANK_PROVIDER_CONFIG.get("langsearch_requests_per_day", 1000)),
+    )
+)
+if (
+    LANGSEARCH_RERANK_RPS <= 0
+    or LANGSEARCH_RERANK_RPM <= 0
+    or LANGSEARCH_RERANK_RPD <= 0
+):
+    raise ValueError("LangSearch reranker request limits must be positive.")
 
 API_HOST = os.getenv(
     "API_HOST",
