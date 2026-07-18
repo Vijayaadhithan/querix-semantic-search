@@ -26,6 +26,7 @@ from settings import (
     MYSQL_RESULT_TABLE,
     MYSQL_TABLE,
     OLLAMA_BASE_URL,
+    OPENROUTER_API_KEY,
     RERANK_PROVIDER_ORDER,
     REDIS_ENABLED,
     REDIS_URL,
@@ -132,13 +133,14 @@ def check_vectors(profile=None) -> bool:
 
 def check_reranker() -> bool:
     available = []
-    if (
-        {"voyage", "voyage-2.5"} & set(RERANK_PROVIDER_ORDER)
-        and VOYAGE_API_KEY
-    ):
-        available.append("voyage-2.5")
-    if "voyage-2.5-lite" in RERANK_PROVIDER_ORDER and VOYAGE_API_KEY:
-        available.append("voyage-2.5-lite")
+    for provider in RERANK_PROVIDER_ORDER:
+        if provider in {"voyage", "voyage-2.5", "voyage-2.5-lite"}:
+            if VOYAGE_API_KEY:
+                available.append(
+                    "voyage-2.5" if provider == "voyage" else provider
+                )
+        elif provider == "openrouter-nemotron" and OPENROUTER_API_KEY:
+            available.append(provider)
     return report(
         "Reranker chain",
         bool(available),

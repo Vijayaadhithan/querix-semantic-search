@@ -273,6 +273,7 @@ _invalid_rerank_providers = sorted(
         "voyage",
         "voyage-2.5",
         "voyage-2.5-lite",
+        "openrouter-nemotron",
     }
 )
 if _invalid_rerank_providers:
@@ -346,6 +347,49 @@ VOYAGE_RERANK_RPM_PER_MODEL = int(
 )
 if VOYAGE_RERANK_RPM_PER_MODEL <= 0:
     raise ValueError("VOYAGE_RERANK_RPM_PER_MODEL must be greater than zero.")
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
+OPENROUTER_RERANK_URL = os.getenv(
+    "OPENROUTER_RERANK_URL",
+    str(
+        RERANK_PROVIDER_CONFIG.get(
+            "openrouter_url",
+            "https://openrouter.ai/api/v1/rerank",
+        )
+    ),
+)
+OPENROUTER_RERANK_MODEL = os.getenv(
+    "OPENROUTER_RERANK_MODEL",
+    str(
+        RERANK_PROVIDER_CONFIG.get(
+            "openrouter_model",
+            "nvidia/llama-nemotron-rerank-vl-1b-v2:free",
+        )
+    ),
+)
+OPENROUTER_RERANK_RPM = int(
+    os.getenv(
+        "OPENROUTER_RERANK_RPM",
+        str(
+            RERANK_PROVIDER_CONFIG.get(
+                "openrouter_requests_per_minute",
+                20,
+            )
+        ),
+    )
+)
+OPENROUTER_RERANK_RPD = int(
+    os.getenv(
+        "OPENROUTER_RERANK_RPD",
+        str(
+            RERANK_PROVIDER_CONFIG.get(
+                "openrouter_requests_per_day",
+                50,
+            )
+        ),
+    )
+)
+if OPENROUTER_RERANK_RPM <= 0 or OPENROUTER_RERANK_RPD <= 0:
+    raise ValueError("OpenRouter reranker request limits must be greater than zero.")
 
 API_HOST = os.getenv(
     "API_HOST",

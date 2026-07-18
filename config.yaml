@@ -66,9 +66,11 @@ retrieval:
   final_top_k: 10
   reranker_model: hosted-reranker-chain
   reranker_providers:
-    # Try the higher-quality Voyage model first and its lite model second.
+    # Use free Nemotron only when primary Voyage fails, then keep Voyage Lite
+    # as the final hosted fallback.
     order:
       - voyage-2.5
+      - openrouter-nemotron
       - voyage-2.5-lite
     timeout_seconds: 3
     # Bounds provider tokens/cost while retaining titles and strongest fields.
@@ -76,6 +78,10 @@ retrieval:
     voyage_model: rerank-2.5
     voyage_lite_model: rerank-2.5-lite
     voyage_requests_per_minute_per_model: 3
+    openrouter_url: https://openrouter.ai/api/v1/rerank
+    openrouter_model: nvidia/llama-nemotron-rerank-vl-1b-v2:free
+    openrouter_requests_per_minute: 20
+    openrouter_requests_per_day: 50
 
 api:
   host: 127.0.0.1

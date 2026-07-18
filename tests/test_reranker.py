@@ -124,6 +124,73 @@ def test_voyage_model_chain_is_loaded_in_configured_order(monkeypatch):
     assert len(chain.providers[0].request_limiters) == 1
 
 
+def test_openrouter_nemotron_is_loaded_between_voyage_models(monkeypatch):
+    monkeypatch.setattr(
+        reranker,
+        "RERANK_PROVIDER_ORDER",
+        ("voyage-2.5", "openrouter-nemotron", "voyage-2.5-lite"),
+    )
+    monkeypatch.setattr(reranker, "VOYAGE_API_KEY", "voyage-key")
+    monkeypatch.setattr(reranker, "OPENROUTER_API_KEY", "openrouter-key")
+    monkeypatch.setattr(
+        reranker,
+        "OPENROUTER_RERANK_MODEL",
+        "nvidia/llama-nemotron-rerank-vl-1b-v2:free",
+    )
+    monkeypatch.setattr(reranker, "OPENROUTER_RERANK_RPM", 20)
+    monkeypatch.setattr(reranker, "OPENROUTER_RERANK_RPD", 50)
+
+    chain = reranker.load_reranker()
+
+    assert [provider.name for provider in chain.providers] == [
+        "voyage-2.5",
+        "openrouter-nemotron",
+        "voyage-2.5-lite",
+    ]
+    openrouter = chain.providers[1]
+    assert openrouter.model == (
+        "nvidia/llama-nemotron-rerank-vl-1b-v2:free"
+    )
+    assert [
+        limiter.requests_per_window
+        for limiter in openrouter.request_limiters
+    ] == [20, 50]
+    assert [
+        limiter.window_seconds for limiter in openrouter.request_limiters
+    ] == [60, 86400]
+
+
+def test_hosted_reranker_enforces_daily_request_budget(monkeypatch):
+    now = [100.0]
+    calls = []
+
+    def post(*_args, **_kwargs):
+        calls.append(1)
+        return FakeResponse()
+
+    monkeypatch.setattr(reranker.requests, "post", post)
+    provider = HostedReranker(
+        name="openrouter-nemotron",
+        url="https://openrouter.example/rerank",
+        api_key="secret",
+        model="nemotron-free",
+        requests_per_day=1,
+        clock=lambda: now[0],
+    )
+    pairs = [["query", "first"], ["query", "second"]]
+
+    provider.compute_score(pairs)
+
+    try:
+        provider.compute_score(pairs)
+    except RuntimeError as exc:
+        assert "request budget exhausted" in str(exc)
+        assert "retry_after=86400.0s" in str(exc)
+    else:
+        raise AssertionError("daily request budget should be exhausted")
+    assert len(calls) == 1
+
+
 def test_reranker_chain_uses_next_provider_after_failure():
     class Provider:
         def __init__(self, name, result=None):

@@ -7,6 +7,11 @@ from collections import deque
 import requests
 
 from settings import (
+    OPENROUTER_API_KEY,
+    OPENROUTER_RERANK_MODEL,
+    OPENROUTER_RERANK_RPD,
+    OPENROUTER_RERANK_RPM,
+    OPENROUTER_RERANK_URL,
     RERANK_API_TIMEOUT_SECONDS,
     RERANK_FAILURE_COOLDOWN_SECONDS,
     RERANK_MAX_DOCUMENT_CHARS,
@@ -95,6 +100,7 @@ class HostedReranker:
         timeout_seconds: float = RERANK_API_TIMEOUT_SECONDS,
         max_document_chars: int = RERANK_MAX_DOCUMENT_CHARS,
         requests_per_minute: int | None = None,
+        requests_per_day: int | None = None,
         clock=time.monotonic,
     ):
         self.name = name
@@ -108,6 +114,14 @@ class HostedReranker:
             self.request_limiters.append(
                 RequestWindowLimiter(
                     requests_per_minute,
+                    clock=clock,
+                )
+            )
+        if requests_per_day is not None:
+            self.request_limiters.append(
+                RequestWindowLimiter(
+                    requests_per_day,
+                    window_seconds=86400,
                     clock=clock,
                 )
             )
@@ -356,10 +370,27 @@ def load_reranker():
                 LOGGER.info(
                     "Voyage reranker skipped because VOYAGE_API_KEY is unset."
                 )
+        elif name == "openrouter-nemotron":
+            if OPENROUTER_API_KEY:
+                providers.append(
+                    HostedReranker(
+                        name=name,
+                        url=OPENROUTER_RERANK_URL,
+                        api_key=OPENROUTER_API_KEY,
+                        model=OPENROUTER_RERANK_MODEL,
+                        requests_per_minute=OPENROUTER_RERANK_RPM,
+                        requests_per_day=OPENROUTER_RERANK_RPD,
+                    )
+                )
+            else:
+                LOGGER.info(
+                    "OpenRouter reranker skipped because "
+                    "OPENROUTER_API_KEY is unset."
+                )
     if not providers:
         raise RuntimeError(
-            "No hosted reranker is configured. Set VOYAGE_API_KEY for a "
-            "provider in RERANK_PROVIDER_ORDER."
+            "No hosted reranker is configured. Set the API key required by "
+            "a provider in RERANK_PROVIDER_ORDER."
         )
     return FallbackReranker(providers)
 
