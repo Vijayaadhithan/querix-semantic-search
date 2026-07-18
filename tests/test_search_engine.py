@@ -10,6 +10,7 @@ from bm25_index import PersistentBM25Index
 from query_planner import (
     deterministic_filter_query_plan,
     extract_sort_order,
+    normalize_transliterated_query,
     query_filter_value_index,
 )
 from search_engine import ProductSearchEngine
@@ -39,17 +40,19 @@ class CapturingQueryProvider(CountingQueryProvider):
     def __init__(self):
         super().__init__()
         self.system_prompt = ""
+        self.user_prompt = ""
 
     def structured_chat(
         self,
         _model,
         system_prompt,
-        _user_prompt,
+        user_prompt,
         _schema,
         _temperature,
     ):
         self.calls += 1
         self.system_prompt = system_prompt
+        self.user_prompt = user_prompt
         return json.dumps(
             {
                 "semantic_query": "portable recording equipment",
@@ -145,6 +148,105 @@ def test_tenant_prompt_context_is_added_only_to_llm_planning(tmp_path):
         "This tenant rents professional event equipment."
         in provider.system_prompt
     )
+
+
+def test_transliterated_queries_receive_trusted_semantic_normalization(tmp_path):
+    index = build_index(tmp_path / "transliterated-plan.sqlite3")
+    provider = CapturingQueryProvider()
+    engine = ProductSearchEngine(
+        collection=FakeCollection(),
+        bm25_index=index,
+        query_provider=provider,
+    )
+    try:
+        result = engine.plan("veetu vela kaari in Chennai")
+    finally:
+        engine.close()
+        index.close()
+
+    assert result["query_plan"]["execution_path"] == "semantic"
+    assert "romanized/transliterated" in provider.system_prompt
+    assert "not a car" in provider.system_prompt
+    assert "Original user query:\nveetu vela kaari in Chennai" in (
+        provider.user_prompt
+    )
+    assert "house maid domestic worker in Chennai" in provider.user_prompt
+
+
+def test_transliterated_query_normalization_is_narrow_and_spelling_tolerant():
+    assert normalize_transliterated_query("veetu vela kaari") == (
+        "house maid domestic worker"
+    )
+    assert normalize_transliterated_query("veettu velai kari Chennai") == (
+        "house maid domestic worker Chennai"
+    )
+    assert normalize_transliterated_query("kaam wali bai") == (
+        "house maid domestic worker"
+    )
+    assert normalize_transliterated_query("kalyanathuku camera venum") == (
+        "for wedding camera venum"
+    )
+    assert normalize_transliterated_query("Ford car for rent") == (
+        "Ford car for rent"
+    )
+
+
+def test_transliterated_phrase_tokens_do_not_become_fuzzy_locations(tmp_path):
+    index = build_index(tmp_path / "transliterated-location.sqlite3")
+    index.upsert(
+        [
+            product_row(
+                "wali-locality",
+                main_category_name="Other Services",
+                subcategory_name="Designer",
+                state_name="Rajasthan",
+                city_name="Udaipur",
+                locality_name="Wali",
+            )
+        ]
+    )
+    engine = ProductSearchEngine(
+        collection=FakeCollection(),
+        bm25_index=index,
+        query_provider=CapturingQueryProvider(),
+    )
+    try:
+        result = engine.plan("kaam wali bai")
+    finally:
+        engine.close()
+        index.close()
+
+    assert result["resolved_filters"] == {"categorical": {}}
+
+
+def test_translated_concepts_are_not_promoted_to_hard_category_filters(tmp_path):
+    index = build_index(tmp_path / "translated-category.sqlite3")
+    index.upsert(
+        [
+            product_row(
+                "worker-chennai",
+                main_category_name="Personal & Home Services",
+                subcategory_name="Worker",
+                state_name="Tamil Nadu",
+                city_name="Chennai",
+            )
+        ]
+    )
+    engine = ProductSearchEngine(
+        collection=FakeCollection(),
+        bm25_index=index,
+        query_provider=CapturingQueryProvider(),
+    )
+    try:
+        result = engine.plan("veettu velai kari in Chennai")
+    finally:
+        engine.close()
+        index.close()
+
+    categorical = result["resolved_filters"]["categorical"]
+    assert "subcategory_name" not in categorical
+    assert categorical["city_name"] == "Chennai"
+    assert categorical["state_name"] == "Tamil Nadu"
 
 
 def test_disabled_tenant_llm_planner_keeps_semantic_retrieval_available(tmp_path):

@@ -39,6 +39,36 @@ QUERY_FILTER_ALIASES = {
         "gurugram": "gurgaon",
     },
 }
+
+# Small, high-confidence phrase normalizations protect retrieval from a model
+# treating romanized Indian-language words as similarly spelled English product
+# names. Keep these replacements narrow: the LLM planner remains responsible for
+# general multilingual interpretation, while confirmed marketplace phrases can be
+# added here without changing the public request or response contract.
+TRANSLITERATED_QUERY_REWRITES = (
+    (
+        re.compile(
+            r"(?<!\w)ve{1,2}t{1,2}u\s+ve(?:lai|la)\s*kaa?ri(?!\w)",
+            re.IGNORECASE,
+        ),
+        "house maid domestic worker",
+    ),
+    (
+        re.compile(
+            r"(?<!\w)(?:ghar\s+k[ai]\s+)?kaam\s+wali\s+bai(?!\w)",
+            re.IGNORECASE,
+        ),
+        "house maid domestic worker",
+    ),
+    (
+        re.compile(
+            r"(?<!\w)(?:kalyanathuku|kalyanathukku|"
+            r"kalyaanathuku|kalyaanathukku)(?!\w)",
+            re.IGNORECASE,
+        ),
+        "for wedding",
+    ),
+)
 FUZZY_MATCH_THRESHOLDS = {
     "main_category": 0.90,
     "subcategory": 0.90,
@@ -536,6 +566,14 @@ def parse_query_plan(content: str, original_query: str) -> dict:
     }
 
 
+def normalize_transliterated_query(query: str) -> str:
+    """Replace only confirmed romanized phrases with their search meaning."""
+    normalized = query
+    for pattern, replacement in TRANSLITERATED_QUERY_REWRITES:
+        normalized = pattern.sub(replacement, normalized)
+    return " ".join(normalized.split())
+
+
 def find_catalog_value(
     query: str,
     values: dict,
@@ -866,6 +904,15 @@ def infer_keyword_subcategory(keyword_query: str, values: dict) -> str | None:
         category_tokens = set(
             re.findall(r"[^\W_]+", normalize_filter_value(actual_value))
         )
+        # A single shared token must not promote a more specific multiword
+        # profession or service. For example, "fridge home appliance" does
+        # not imply the catalog category "Fridge Mechanic" unless mechanic is
+        # also present. Exact one-word concepts and fully supported phrases
+        # remain eligible as soft hints.
+        if len(category_tokens) > 1 and not category_tokens.issubset(
+            query_tokens
+        ):
+            continue
         for token in query_tokens.intersection(category_tokens):
             token_categories.setdefault(token, set()).add(actual_value)
 
@@ -1119,6 +1166,13 @@ def infer_functional_subcategory(query: str, values: dict) -> str | None:
 
 
 def enrich_query_plan(query: str, plan: dict, value_index: dict) -> dict:
+    # Known transliterated phrases must be normalized before exact/fuzzy catalog
+    # inference. Otherwise a word inside a phrase (for example, Hindi "wali")
+    # can be mistaken for a similarly named locality. Any real location, price,
+    # or duration outside the replaced phrase remains in the normalized query.
+    original_query = query
+    query = normalize_transliterated_query(query)
+    query_was_normalized = query.casefold() != original_query.casefold()
     plan["semantic_query"] = expand_functional_semantic_query(
         query,
         plan["semantic_query"],
@@ -1170,7 +1224,10 @@ def enrich_query_plan(query: str, plan: dict, value_index: dict) -> dict:
         category_is_explicit = (
             key not in inferred_categories
             or exact_value is None
-            or is_explicit_category_request(query, exact_value)
+            or is_explicit_category_request(
+                original_query if query_was_normalized else query,
+                exact_value,
+            )
         )
         if exact_value is not None and not category_is_explicit:
             filters[key] = None
@@ -1411,8 +1468,23 @@ def extract_query_plan(
     query_provider=None,
     prompt_context: str = "",
 ) -> dict:
+    normalized_query = normalize_transliterated_query(query)
     system_prompt = (
         "You convert product-search requests into a retrieval plan. "
+        "Queries may be written in any language or script, may mix languages, "
+        "or may use colloquial romanized/transliterated Indian-language wording. "
+        "Determine the underlying meaning before choosing any product, service, "
+        "or category. Write semantic_query and keyword_query in clear English "
+        "search language while preserving brands and model names. Never interpret "
+        "a transliterated syllable as a similar-looking English product word merely "
+        "because of its spelling. For example, Tamil romanization 'veetu vela "
+        "kaari' means a house maid or domestic worker, not a car. "
+        "Identify the requested listing separately from its subject, use case, or "
+        "related profession. Someone asking for a fridge wants a refrigerator "
+        "appliance, not a fridge mechanic, unless repair is requested. Someone "
+        "asking for a mathematics teacher wants a teacher or tutor service, not a "
+        "mathematics book. A camera for a wedding means wedding photography use, "
+        "not a person or place named Kalyan. "
         "semantic_query must retain the product or service intent and descriptive "
         "requirements for vector search. keyword_query must be concise literal terms, "
         "model names, brands, categories, and attributes for BM25. Extract filters only "
@@ -1457,8 +1529,18 @@ def extract_query_plan(
             "\nFor catalogued fields, use only these exact indexed values:\n"
             f"{json.dumps(filter_catalog, ensure_ascii=False)}\n"
         )
+    normalization_text = ""
+    if normalized_query.casefold() != query.casefold():
+        normalization_text = (
+            "\nTrusted phrase normalization:\n"
+            f"{normalized_query}\n"
+            "Use this normalization for semantic intent. Continue extracting "
+            "locations, price, duration, and ad perspective from the complete "
+            "original request.\n"
+        )
     user_prompt = (
-        f"User query:\n{query}\n\n"
+        f"Original user query:\n{query}\n"
+        f"{normalization_text}\n"
         f"{catalog_text}"
         "Return only JSON matching this schema:\n"
         f"{json.dumps(QUERY_PLAN_SCHEMA, separators=(',', ':'))}"

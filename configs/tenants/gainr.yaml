@@ -13,6 +13,10 @@ planner:
     interpret comfort and safety as desired vehicle qualities. Prefer usable
     vehicle, cab, taxi, driver, van, bus, or traveller listings; do not treat
     those qualities as requests for safety officers, trainers, or auditors.
+    Users may search in Indian-language scripts, code-switching, or informal
+    romanized wording. Translate the intended product or service meaning into
+    English retrieval concepts before selecting catalog categories; do not guess
+    an English product from phonetic spelling alone.
 
 retrieval:
   # Keep the strongest reranked matches first, then the remaining fused

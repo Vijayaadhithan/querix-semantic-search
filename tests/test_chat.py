@@ -576,6 +576,51 @@ def test_unique_keyword_concept_becomes_soft_subcategory_hint():
     assert enriched["inferred_categories"]["main_category"] == "Sports & Toys"
 
 
+def test_partial_multiword_category_is_not_used_as_soft_hint():
+    plan = {
+        "semantic_query": "refrigerator appliance for home use",
+        "keyword_query": "fridge home appliance",
+        "target_ad_type": "offer",
+        "filters": {
+            "main_category": None,
+            "subcategory": None,
+            "state": None,
+            "city": None,
+            "locality": None,
+            "rental_duration": None,
+            "min_rental_fee": None,
+            "max_rental_fee": None,
+        },
+        "inferred_categories": {
+            "main_category": None,
+            "subcategory": None,
+        },
+        "fallback_reason": None,
+    }
+    value_index = {
+        "main_category": {"home appliances": "Home Appliances"},
+        "subcategory": {"fridge mechanic": "Fridge Mechanic"},
+        "state": {},
+        "city": {},
+        "locality": {},
+        "rental_duration": {},
+        "_subcategory_main_category": {
+            "fridge mechanic": "Personal & Home Services"
+        },
+        "_city_state": {},
+        "_locality_location": {},
+    }
+
+    enriched = enrich_query_plan(
+        "ghar ke liye fridge chahiye",
+        plan,
+        value_index,
+    )
+
+    assert enriched["inferred_categories"]["subcategory"] is None
+    assert enriched["inferred_categories"]["main_category"] is None
+
+
 def test_rough_terrain_query_gets_deterministic_atv_expansion():
     plan = {
         "semantic_query": "vehicle for recreational driving on rough terrain",
