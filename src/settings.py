@@ -171,6 +171,19 @@ if UNPRICED_RENTAL_FEE_CEILING < 0:
 VECTOR_CANDIDATE_K = int(
     CONFIG.get("retrieval", {}).get("vector_candidate_k", 100)
 )
+VECTOR_EXACT_FILTER_MAX_ROWS = int(
+    os.getenv(
+        "VECTOR_EXACT_FILTER_MAX_ROWS",
+        str(
+            CONFIG.get("retrieval", {}).get(
+                "vector_exact_filter_max_rows",
+                10000,
+            )
+        ),
+    )
+)
+if VECTOR_EXACT_FILTER_MAX_ROWS <= 0:
+    raise ValueError("VECTOR_EXACT_FILTER_MAX_ROWS must be greater than zero.")
 VECTOR_POST_FILTER_OVERFETCH_FACTOR = int(
     CONFIG.get("retrieval", {}).get(
         "vector_post_filter_overfetch_factor",

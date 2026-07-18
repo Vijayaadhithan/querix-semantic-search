@@ -76,9 +76,11 @@ class CapturingVectorCollection:
     def __init__(self, metadata, count=1):
         self.metadata = metadata
         self.count_value = count
+        self.count_calls = 0
         self.query_options = None
 
     def count(self):
+        self.count_calls += 1
         return self.count_value
 
     def query(self, **options):
@@ -118,6 +120,7 @@ def test_unfiltered_vector_query_skips_redundant_tenant_metadata_where():
     )
 
     assert "where" not in collection.query_options
+    assert collection.count_calls == 1
     assert [result["id"] for result in results] == ["doc-1"]
 
 

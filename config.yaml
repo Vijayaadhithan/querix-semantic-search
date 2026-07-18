@@ -40,6 +40,8 @@ retrieval:
   # searchable but rank after every genuine price in price-sorted searches.
   unpriced_rental_fee_ceiling: 1
   vector_candidate_k: 100
+  # Exact-rank selective filtered subsets; broader searches keep using HNSW.
+  vector_exact_filter_max_rows: 10000
   # A bounded post-filter window can avoid expensive complex metadata
   # predicates while preserving exact checks in the retrieval layer.
   vector_post_filter_overfetch_factor: 10

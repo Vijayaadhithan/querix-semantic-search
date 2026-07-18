@@ -844,8 +844,9 @@ class ProductSearchEngine:
             ",".join(active_filter_names(resolved_filters)) or "none",
         )
 
-        def run_vector() -> tuple[list[dict], float]:
+        def run_vector() -> tuple[list[dict], float, dict]:
             started = time.perf_counter()
+            vector_metrics = {}
             results = vector_search(
                 query_plan["semantic_query"],
                 self.collection,
@@ -857,8 +858,9 @@ class ProductSearchEngine:
                 company_id=self.company_id,
                 post_filter_metadata=self.vector_post_filter_metadata,
                 include_unpriced=include_unpriced,
+                metrics=vector_metrics,
             )
-            return results, time.perf_counter() - started
+            return results, time.perf_counter() - started, vector_metrics
 
         def run_bm25() -> tuple[list[dict], float]:
             started = time.perf_counter()
@@ -885,9 +887,14 @@ class ProductSearchEngine:
             bm25_future = executor.submit(run_bm25)
             retrieval_errors = []
             try:
-                vector_results, vector_seconds = vector_future.result()
+                (
+                    vector_results,
+                    vector_seconds,
+                    vector_metrics,
+                ) = vector_future.result()
             except Exception as exc:
                 vector_results, vector_seconds = [], 0.0
+                vector_metrics = {}
                 retrieval_errors.append(("vector", exc))
                 LOGGER.exception(
                     "[search:%s] step=vector status=degraded error_type=%s",
@@ -946,6 +953,8 @@ class ProductSearchEngine:
         LOGGER.info(
             "[search:%s] step=retrieve status=complete vector=%d bm25=%d "
             "merged=%d candidates=%d hybrid_tail=%d vector_ms=%.0f bm25_ms=%.0f "
+            "vector_count_ms=%.0f vector_embed_ms=%.0f vector_db_ms=%.0f "
+            "vector_filter_ms=%.0f vector_strategy=%s vector_eligible=%s "
             "embed_total_ms=%.0f embed_load_ms=%.0f",
             trace_id,
             len(vector_results),
@@ -955,6 +964,12 @@ class ProductSearchEngine:
             len(hybrid_tail_candidates),
             vector_seconds * 1000,
             bm25_seconds * 1000,
+            vector_metrics.get("count_ms", 0.0),
+            vector_metrics.get("embedding_ms", 0.0),
+            vector_metrics.get("database_ms", 0.0),
+            vector_metrics.get("post_filter_ms", 0.0),
+            vector_metrics.get("strategy", "unknown"),
+            vector_metrics.get("eligible_rows", "unknown"),
             embedding_metrics.get("total_ms", 0.0),
             embedding_metrics.get("load_ms", 0.0),
         )

@@ -1,3 +1,5 @@
+import time
+
 from ollama_client import embed_text
 from mysql_store import fetch_product_types_by_ids
 from query_planner import OFFER_AD_TYPE, WANTED_AD_TYPE
@@ -8,6 +10,7 @@ from settings import (
     MYSQL_TABLE,
     RRF_CONSTANT,
     SOFT_CATEGORY_BOOST,
+    VECTOR_EXACT_FILTER_MAX_ROWS,
     VECTOR_POST_FILTER_MAX_CANDIDATES,
     VECTOR_POST_FILTER_OVERFETCH_FACTOR,
     VECTOR_WEIGHT,
@@ -98,18 +101,25 @@ def vector_search(
     company_id=None,
     post_filter_metadata=False,
     include_unpriced=False,
+    metrics=None,
 ):
-    if collection.count() <= 0:
+    metrics = metrics if metrics is not None else {}
+    count_started = time.perf_counter()
+    row_count = collection.count()
+    metrics["count_ms"] = (time.perf_counter() - count_started) * 1000
+    if row_count <= 0:
         return []
 
+    embedding_started = time.perf_counter()
     query_embedding = (
         embedding_provider.embed_text(query)
         if embedding_provider is not None
         else embed_text(query)
     )
+    metrics["embedding_ms"] = (time.perf_counter() - embedding_started) * 1000
     query_options = {
         "query_embeddings": [query_embedding],
-        "n_results": min(max(candidate_k, top_k), collection.count()),
+        "n_results": min(max(candidate_k, top_k), row_count),
         "include": ["documents", "metadatas", "distances"],
     }
     if source_name is not None and resolved_filters is not None:
@@ -127,20 +137,38 @@ def vector_search(
                 max(candidate_k, top_k)
                 * VECTOR_POST_FILTER_OVERFETCH_FACTOR,
                 VECTOR_POST_FILTER_MAX_CANDIDATES,
-                collection.count(),
+                row_count,
             )
         elif where_filter is not None:
             query_options["where"] = where_filter
-    try:
-        results = collection.query(**query_options)
-    except TypeError as exc:
-        # Older pgvector adapters did not expose the `where` keyword. Keep the
-        # correctness-preserving metadata check below as a fallback.
-        if "where" not in str(exc):
+            query_options["exact_filter_max_rows"] = VECTOR_EXACT_FILTER_MAX_ROWS
+    database_started = time.perf_counter()
+    while True:
+        try:
+            results = collection.query(**query_options)
+            break
+        except TypeError as exc:
+            message = str(exc)
+            if (
+                "exact_filter_max_rows" in message
+                and "exact_filter_max_rows" in query_options
+            ):
+                # Keep the database filter when an older adapter only lacks
+                # the adaptive exact-ranking option.
+                query_options.pop("exact_filter_max_rows")
+                continue
+            if "where" in message and "where" in query_options:
+                # Older adapters may not expose metadata filters at all. The
+                # exact metadata check below remains the correctness fallback.
+                query_options.pop("where")
+                continue
             raise
-        query_options.pop("where", None)
-        results = collection.query(**query_options)
+    metrics["database_ms"] = (time.perf_counter() - database_started) * 1000
+    collection_metrics = getattr(collection, "last_query_metrics", None)
+    if callable(collection_metrics):
+        metrics.update(collection_metrics())
 
+    filter_started = time.perf_counter()
     output = []
     for doc_id, text, metadata, distance in zip(
         results["ids"][0],
@@ -171,6 +199,7 @@ def vector_search(
         )
         if len(output) >= top_k:
             break
+    metrics["post_filter_ms"] = (time.perf_counter() - filter_started) * 1000
     return output
 
 

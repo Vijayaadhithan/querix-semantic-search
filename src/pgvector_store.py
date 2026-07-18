@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import threading
+import time
 from collections.abc import Callable
 from typing import Any
 
@@ -9,6 +12,22 @@ from postgres_store import (
     postgres_connection,
     qualified_table,
     quote_postgres_identifier,
+)
+
+
+# These are the categorical fields accepted by the Gainr planner and explicit
+# API compatibility layer. B-tree expression indexes preserve the existing
+# text-comparison semantics for both string and numeric JSON values.
+FILTER_INDEX_KEYS = (
+    "main_category_name",
+    "subcategory_name",
+    "state_name",
+    "city_name",
+    "locality_name",
+    "rental_duration",
+    "city_id",
+    "subcategory_id",
+    "locality_id",
 )
 
 
@@ -32,6 +51,7 @@ class PgVectorCollection:
         self.hnsw_m = hnsw_m
         self.hnsw_ef_construction = hnsw_ef_construction
         self.hnsw_ef_search = hnsw_ef_search
+        self._query_state = threading.local()
         if create:
             self.initialize()
         else:
@@ -101,6 +121,37 @@ class PgVectorCollection:
                     ON {self._qualified()} ((metadata ->> 'source_file'))
                     """
                 )
+        self.ensure_filter_indexes()
+
+    @staticmethod
+    def _metadata_key_literal(key: str) -> str:
+        if "\x00" in key:
+            raise ValueError("PostgreSQL metadata keys cannot contain null bytes")
+        return "'" + key.replace("'", "''") + "'"
+
+    def _filter_index_name(self, key: str) -> str:
+        raw_name = f"{self.table}_filter_{key}"
+        if len(raw_name) <= 63:
+            return raw_name
+        digest = hashlib.sha256(raw_name.encode("utf-8")).hexdigest()[:10]
+        return f"{raw_name[:52]}_{digest}"
+
+    def ensure_filter_indexes(self, *, concurrently: bool = False) -> list[str]:
+        """Create the expression indexes used by exact filtered retrieval."""
+        created = []
+        concurrency = "CONCURRENTLY " if concurrently else ""
+        with postgres_connection(self.config) as connection:
+            with connection.cursor() as cursor:
+                for key in FILTER_INDEX_KEYS:
+                    index_name = self._filter_index_name(key)
+                    cursor.execute(
+                        f"CREATE INDEX {concurrency}IF NOT EXISTS "
+                        f"{quote_postgres_identifier(index_name)} "
+                        f"ON {self._qualified()} "
+                        f"((metadata ->> {self._metadata_key_literal(key)}))"
+                    )
+                    created.append(index_name)
+        return created
 
     @staticmethod
     def _vector_literal(vector: list[float]) -> str:
@@ -122,9 +173,10 @@ class PgVectorCollection:
         clauses = []
         params: list[Any] = []
         for key, expected in where.items():
+            key_literal = cls._metadata_key_literal(str(key))
             if not isinstance(expected, dict):
-                clauses.append("metadata ->> %s = %s")
-                params.extend((str(key), str(expected)))
+                clauses.append(f"metadata ->> {key_literal} = %s")
+                params.append(str(expected))
                 continue
             for operator, value in expected.items():
                 if operator == "$in":
@@ -133,25 +185,37 @@ class PgVectorCollection:
                         clauses.append("FALSE")
                     else:
                         placeholders = ", ".join(["%s"] * len(values))
-                        clauses.append(f"metadata ->> %s IN ({placeholders})")
-                        params.extend((str(key), *values))
+                        clauses.append(
+                            f"metadata ->> {key_literal} IN ({placeholders})"
+                        )
+                        params.extend(values)
                 elif operator in {"$gte", "$lte"}:
                     comparator = ">=" if operator == "$gte" else "<="
                     clauses.append(
-                        "(metadata ->> %s) ~ %s "
-                        f"AND (metadata ->> %s)::double precision {comparator} %s"
+                        f"(metadata ->> {key_literal}) ~ %s "
+                        f"AND (metadata ->> {key_literal})::double precision "
+                        f"{comparator} %s"
                     )
                     params.extend(
                         (
-                            str(key),
                             r"^-?[0-9]+(\.[0-9]+)?$",
-                            str(key),
                             float(value),
                         )
                     )
                 else:
                     raise ValueError(f"Unsupported pgvector metadata operator {operator!r}")
         return " AND ".join(clauses), params
+
+    @classmethod
+    def _filter_uses_index(cls, where: dict[str, Any] | None) -> bool:
+        if not where:
+            return False
+        if "$and" in where:
+            return any(cls._filter_uses_index(child) for child in where["$and"])
+        return any(str(key) in FILTER_INDEX_KEYS for key in where)
+
+    def last_query_metrics(self) -> dict[str, Any]:
+        return dict(getattr(self._query_state, "metrics", {}))
 
     def count(self) -> int:
         with postgres_connection(self.config, dict_rows=True) as connection:
@@ -401,12 +465,16 @@ class PgVectorCollection:
         n_results: int,
         where: dict[str, Any] | None = None,
         include: list[str] | None = None,
+        exact_filter_max_rows: int | None = None,
     ) -> dict[str, list[list]]:
         include = include or []
         all_ids = []
         all_documents = []
         all_metadatas = []
         all_distances = []
+        query_started = time.perf_counter()
+        strategy = "hnsw"
+        eligible_rows: int | None = None
         with postgres_connection(self.config, dict_rows=True) as connection:
             with connection.cursor() as cursor:
                 cursor.execute("SET hnsw.iterative_scan = strict_order")
@@ -419,29 +487,99 @@ class PgVectorCollection:
                             f"Expected {self.dimensions} query dimensions, "
                             f"received {len(embedding)}."
                         )
-                    cursor.execute(
-                        f"""
-                        SELECT id, document, metadata,
-                               embedding <=> %s::vector AS distance
-                        FROM {self._qualified()}
-                        {where_clause}
-                        ORDER BY embedding <=> %s::vector
-                        LIMIT %s
-                        """,
-                        (
-                            self._vector_literal(embedding),
-                            *filter_params,
-                            self._vector_literal(embedding),
-                            n_results,
-                        ),
-                    )
-                    rows = cursor.fetchall()
+                    vector_literal = self._vector_literal(embedding)
+                    rows = None
+                    if (
+                        filter_clause
+                        and exact_filter_max_rows is not None
+                        and exact_filter_max_rows > 0
+                        and self._filter_uses_index(where)
+                    ):
+                        # The limited ID CTE is cheap with the expression
+                        # indexes. If every eligible ID fits under the bound,
+                        # rank the complete set exactly. Otherwise fall back to
+                        # filtered HNSW without dropping any filter predicates.
+                        cursor.execute(
+                            f"""
+                            WITH eligible AS MATERIALIZED (
+                                SELECT id
+                                FROM {self._qualified()}
+                                {where_clause}
+                                LIMIT %s
+                            ),
+                            eligibility AS (
+                                SELECT COUNT(*) AS eligible_count
+                                FROM eligible
+                            ),
+                            ranked AS (
+                                SELECT vectors.id,
+                                       vectors.document,
+                                       vectors.metadata,
+                                       vectors.embedding <=> %s::vector AS distance
+                                FROM {self._qualified()} AS vectors
+                                JOIN eligible USING (id)
+                                WHERE (
+                                    SELECT eligible_count FROM eligibility
+                                ) <= %s
+                                ORDER BY vectors.embedding <=> %s::vector
+                                LIMIT %s
+                            )
+                            SELECT ranked.id,
+                                   ranked.document,
+                                   ranked.metadata,
+                                   ranked.distance,
+                                   eligibility.eligible_count
+                            FROM eligibility
+                            LEFT JOIN ranked ON TRUE
+                            ORDER BY ranked.distance NULLS LAST
+                            """,
+                            (
+                                *filter_params,
+                                exact_filter_max_rows + 1,
+                                vector_literal,
+                                exact_filter_max_rows,
+                                vector_literal,
+                                n_results,
+                            ),
+                        )
+                        exact_rows = cursor.fetchall()
+                        eligible_rows = int(exact_rows[0]["eligible_count"])
+                        if eligible_rows <= exact_filter_max_rows:
+                            strategy = "exact_filtered"
+                            rows = [
+                                row
+                                for row in exact_rows
+                                if row["id"] is not None
+                            ]
+                    if rows is None:
+                        cursor.execute(
+                            f"""
+                            SELECT id, document, metadata,
+                                   embedding <=> %s::vector AS distance
+                            FROM {self._qualified()}
+                            {where_clause}
+                            ORDER BY embedding <=> %s::vector
+                            LIMIT %s
+                            """,
+                            (
+                                vector_literal,
+                                *filter_params,
+                                vector_literal,
+                                n_results,
+                            ),
+                        )
+                        rows = cursor.fetchall()
                     all_ids.append([str(row["id"]) for row in rows])
                     all_documents.append([row["document"] for row in rows])
                     all_metadatas.append([row["metadata"] for row in rows])
                     all_distances.append(
                         [float(row["distance"]) for row in rows]
                     )
+        self._query_state.metrics = {
+            "strategy": strategy,
+            "eligible_rows": eligible_rows,
+            "database_ms": (time.perf_counter() - query_started) * 1000,
+        }
         result = {"ids": all_ids}
         if "documents" in include:
             result["documents"] = all_documents

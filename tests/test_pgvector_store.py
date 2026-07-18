@@ -1,5 +1,6 @@
 import sys
 import json
+import threading
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
@@ -20,23 +21,17 @@ def test_pgvector_metadata_filter_supports_collection_where_shape():
         }
     )
 
-    assert "metadata ->> %s = %s" in clause
-    assert "metadata ->> %s IN (%s, %s)" in clause
+    assert "metadata ->> 'city_name' = %s" in clause
+    assert "metadata ->> 'subcategory_name' IN (%s, %s)" in clause
     assert "::double precision >=" in clause
     assert "::double precision <=" in clause
     assert params == [
-        "city_name",
         "Chennai",
-        "subcategory_name",
         "Bike",
         "Car",
-        "rental_fee",
         r"^-?[0-9]+(\.[0-9]+)?$",
-        "rental_fee",
         100.0,
-        "rental_fee",
         r"^-?[0-9]+(\.[0-9]+)?$",
-        "rental_fee",
         1000.0,
     ]
 
@@ -48,6 +43,170 @@ def test_pgvector_metadata_filter_rejects_unknown_operator():
         assert "$ne" in str(exc)
     else:
         raise AssertionError("Expected unsupported pgvector operator to fail.")
+
+
+def test_pgvector_exact_ranks_complete_selective_filter(monkeypatch):
+    statements = []
+
+    class FakeCursor:
+        rows = []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, query, params=None):
+            compact = " ".join(query.split())
+            statements.append((compact, params))
+            if compact.startswith("WITH eligible AS MATERIALIZED"):
+                self.rows = [
+                    {
+                        "id": "nearest",
+                        "document": "nearest car",
+                        "metadata": {"city_name": "Chennai"},
+                        "distance": 0.05,
+                        "eligible_count": 2,
+                    },
+                    {
+                        "id": "second",
+                        "document": "second car",
+                        "metadata": {"city_name": "Chennai"},
+                        "distance": 0.1,
+                        "eligible_count": 2,
+                    },
+                ]
+
+        def fetchall(self):
+            return self.rows
+
+    class FakeConnection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def cursor(self):
+            return FakeCursor()
+
+    monkeypatch.setattr(
+        pgvector_store,
+        "postgres_connection",
+        lambda *_args, **_kwargs: FakeConnection(),
+    )
+    collection = PgVectorCollection.__new__(PgVectorCollection)
+    collection.config = PostgresRuntimeConfig(
+        host="localhost",
+        port=5432,
+        database="vectors",
+        user="vectors",
+        password="secret",
+    )
+    collection.table = "gainr_vectors"
+    collection.dimensions = 2
+    collection.hnsw_ef_search = 100
+    collection._query_state = threading.local()
+
+    results = collection.query(
+        query_embeddings=[[0.1, 0.2]],
+        n_results=2,
+        where={"city_name": "Chennai"},
+        include=["documents", "metadatas", "distances"],
+        exact_filter_max_rows=100,
+    )
+
+    assert results["ids"] == [["nearest", "second"]]
+    assert collection.last_query_metrics()["strategy"] == "exact_filtered"
+    assert collection.last_query_metrics()["eligible_rows"] == 2
+    exact_sql, exact_params = next(
+        entry for entry in statements if entry[0].startswith("WITH eligible")
+    )
+    assert "metadata ->> 'city_name' = %s" in exact_sql
+    assert exact_params[0] == "Chennai"
+
+
+def test_pgvector_broad_filtered_subset_falls_back_to_hnsw(monkeypatch):
+    statements = []
+
+    class FakeCursor:
+        rows = []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, query, params=None):
+            compact = " ".join(query.split())
+            statements.append(compact)
+            if compact.startswith("WITH eligible AS MATERIALIZED"):
+                self.rows = [
+                    {
+                        "id": None,
+                        "document": None,
+                        "metadata": None,
+                        "distance": None,
+                        "eligible_count": 101,
+                    }
+                ]
+            elif compact.startswith("SELECT id, document, metadata"):
+                self.rows = [
+                    {
+                        "id": "hnsw-result",
+                        "document": "broad match",
+                        "metadata": {"state_name": "Tamil Nadu"},
+                        "distance": 0.2,
+                    }
+                ]
+
+        def fetchall(self):
+            return self.rows
+
+    class FakeConnection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def cursor(self):
+            return FakeCursor()
+
+    monkeypatch.setattr(
+        pgvector_store,
+        "postgres_connection",
+        lambda *_args, **_kwargs: FakeConnection(),
+    )
+    collection = PgVectorCollection.__new__(PgVectorCollection)
+    collection.config = PostgresRuntimeConfig(
+        host="localhost",
+        port=5432,
+        database="vectors",
+        user="vectors",
+        password="secret",
+    )
+    collection.table = "gainr_vectors"
+    collection.dimensions = 2
+    collection.hnsw_ef_search = 100
+    collection._query_state = threading.local()
+
+    results = collection.query(
+        query_embeddings=[[0.1, 0.2]],
+        n_results=1,
+        where={"state_name": "Tamil Nadu"},
+        include=["documents", "metadatas", "distances"],
+        exact_filter_max_rows=100,
+    )
+
+    assert results["ids"] == [["hnsw-result"]]
+    assert collection.last_query_metrics()["strategy"] == "hnsw"
+    assert collection.last_query_metrics()["eligible_rows"] == 101
+    assert sum(
+        sql.startswith("SELECT id, document, metadata") for sql in statements
+    ) == 1
 
 
 def test_pgvector_source_migration_keeps_existing_target_rows(monkeypatch):
