@@ -68,8 +68,8 @@ from settings import (
 )
 
 LOGGER = logging.getLogger("uvicorn.error")
-RESULT_CACHE_SCHEMA_VERSION = "v21"
-QUERY_PLAN_CACHE_SCHEMA_VERSION = "v8"
+RESULT_CACHE_SCHEMA_VERSION = "v22"
+QUERY_PLAN_CACHE_SCHEMA_VERSION = "v9"
 
 GAINR_VEHICLE_INTENT_TERMS = {
     "automobile",
@@ -292,6 +292,7 @@ class ProductSearchEngine:
         close_bm25_index: bool = False,
         planner_enabled: bool = True,
         planner_prompt_context: str = "",
+        planner_query_aliases: dict[str, str] | None = None,
         vector_post_filter_metadata: bool = False,
         semantic_related_tail_enabled: bool = RELATED_TAIL_ENABLED,
         semantic_related_tail_requires_explicit_category: bool = False,
@@ -313,6 +314,14 @@ class ProductSearchEngine:
         self.company_id = company_id
         self.planner_enabled = planner_enabled
         self.planner_prompt_context = planner_prompt_context
+        self.planner_query_aliases = dict(planner_query_aliases or {})
+        self.planner_alias_fingerprint = hashlib.sha256(
+            json.dumps(
+                self.planner_query_aliases,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()[:16]
         self.vector_post_filter_metadata = vector_post_filter_metadata
         self.semantic_related_tail_enabled = semantic_related_tail_enabled
         self.semantic_related_tail_requires_explicit_category = (
@@ -357,9 +366,9 @@ class ProductSearchEngine:
         if self._owns_bm25_index:
             self.bm25_index.close()
 
-    @staticmethod
-    def _query_cache_key(query: str) -> str:
-        return " ".join(query.casefold().split())
+    def _query_cache_key(self, query: str) -> str:
+        normalized = " ".join(query.casefold().split())
+        return f"{self.planner_alias_fingerprint}:{normalized}"
 
     def set_shared_plan_cache(self, cache) -> None:
         self.shared_plan_cache = cache
@@ -711,6 +720,7 @@ class ProductSearchEngine:
                     self.filter_catalog,
                     query_provider=self.query_provider,
                     prompt_context=self.planner_prompt_context,
+                    query_aliases=self.planner_query_aliases,
                 )
                 if self.planner_enabled
                 else default_query_plan(query)
@@ -719,6 +729,7 @@ class ProductSearchEngine:
                 query,
                 query_plan,
                 self.filter_value_index,
+                self.planner_query_aliases,
             )
             query_plan["execution_path"] = "semantic"
         resolved, unresolved = resolve_query_filters(

@@ -4,6 +4,64 @@ company:
 
 planner:
   enabled: true
+  # Gainr-specific spelling variants are semantic rewrites only. They never
+  # create hard category filters, and they do not affect another tenant.
+  query_aliases:
+    appartment: apartment
+    bke: bike
+    bkes: bike
+    botany: botony
+    camara: camera
+    carpantar: carpenter
+    cemara: camera
+    consultent: consultant
+    contracter: contractor
+    contrator: contractor
+    corpenter: carpenter
+    councellor: counsellor
+    counselor: counsellor
+    decorater: decorator
+    desginer: designer
+    desiner: designer
+    dumbbell: dumbell
+    dumbbells: dumbell
+    electrican: electrician
+    electician: electrician
+    electricion: electrician
+    electriction: electrician
+    electrlcian: electrician
+    electrition: electrician
+    eletrician: electrician
+    genarator: generator
+    helpar: helper
+    invertor: inverter
+    jewelry: jewellery
+    jwellery: jewellery
+    jwellerys: jewellery
+    jewllary: jewellery
+    labtop: laptop
+    labor: labour
+    machanic: mechanic
+    meccanic: mechanic
+    oporater: operator
+    opretor: operator
+    photograher: photographer
+    plambar: plumber
+    plumper: plumber
+    projecter: projector
+    restaurent: restaurant
+    rotavater: rotavator
+    talior: tailor
+    techcician: technician
+    technision: technician
+    technition: technician
+    tecnician: technician
+    terapist: therapist
+    theropist: therapist
+    therpist: therapist
+    traineer: trainer
+    trolly: trolley
+    truk: truck
   prompt_context: >-
     Gainr is a rental advertisement marketplace. Results can represent
     products, equipment, properties, vehicles, or services. Preserve the
@@ -16,7 +74,10 @@ planner:
     Users may search in Indian-language scripts, code-switching, or informal
     romanized wording. Translate the intended product or service meaning into
     English retrieval concepts before selecting catalog categories; do not guess
-    an English product from phonetic spelling alone.
+    an English product from phonetic spelling alone. On Gainr, a bare massage
+    query means massage therapist or massage service; only interpret it as
+    equipment when the user explicitly says massager, massage gun, chair,
+    machine, device, or equipment.
 
 retrieval:
   # Keep the strongest reranked matches first, then the remaining fused

@@ -69,15 +69,6 @@ TRANSLITERATED_QUERY_REWRITES = (
         "for wedding",
     ),
 )
-MASSAGE_EQUIPMENT_TERMS = {
-    "chair",
-    "device",
-    "equipment",
-    "gun",
-    "machine",
-    "massager",
-}
-CATEGORY_DERIVATIONAL_SUFFIXES = {"ian", "ist", "or", "er", "r"}
 FUZZY_MATCH_THRESHOLDS = {
     "main_category": 0.90,
     "subcategory": 0.90,
@@ -575,48 +566,26 @@ def parse_query_plan(content: str, original_query: str) -> dict:
     }
 
 
-def normalize_transliterated_query(query: str) -> str:
+def normalize_transliterated_query(
+    query: str,
+    query_aliases: dict[str, str] | None = None,
+) -> str:
     """Normalize confirmed marketplace phrases to their search meaning."""
     normalized = query
     for pattern, replacement in TRANSLITERATED_QUERY_REWRITES:
         normalized = pattern.sub(replacement, normalized)
-    tokens = set(re.findall(r"[^\W_]+", normalize_filter_value(normalized)))
-    if "massage" in tokens and not tokens.intersection(MASSAGE_EQUIPMENT_TERMS):
-        # The catalog contains both a Massager product category and a much
-        # larger Massage Therapist service category. A bare "massage" is a
-        # service request; equipment remains available when the user says
-        # massager, gun, machine, chair, device, or equipment explicitly.
+    for source, target in sorted(
+        (query_aliases or {}).items(),
+        key=lambda item: len(item[0]),
+        reverse=True,
+    ):
         normalized = re.sub(
-            r"(?<!\w)massage(?!\w)",
-            "massage therapist service",
+            rf"(?<!\w){re.escape(source)}(?!\w)",
+            target,
             normalized,
-            count=1,
             flags=re.IGNORECASE,
         )
     return " ".join(normalized.split())
-
-
-def is_safe_category_typo_match(source: str, actual: str) -> bool:
-    """Accept only typo shapes that preserve the intended word boundaries."""
-    source = normalize_filter_value(source)
-    actual = normalize_filter_value(actual)
-    if " " in source or " " in actual:
-        return False
-    variants = [source]
-    if source.endswith("s") and len(source) > 3:
-        variants.append(source[:-1])
-    for variant in variants:
-        if not variant or variant[0] != actual[0] or variant[-1] != actual[-1]:
-            continue
-        if (
-            actual.startswith(variant)
-            and actual[len(variant) :] in CATEGORY_DERIVATIONAL_SUFFIXES
-        ):
-            continue
-        max_edits = 1 if max(len(variant), len(actual)) <= 5 else 2
-        if edit_distance(variant, actual) <= max_edits:
-            return True
-    return False
 
 
 def find_catalog_value(
@@ -830,7 +799,7 @@ def correct_explicit_query_typos(
     query: str,
     value_index: dict,
 ) -> tuple[str, list[dict[str, str]]]:
-    """Correct conservative catalog typos before deterministic planning."""
+    """Correct conservative location typos before deterministic planning."""
     if not QUERY_FUZZY_MATCHING:
         return query, []
 
@@ -871,73 +840,6 @@ def correct_explicit_query_typos(
         corrections.append(
             {"field": key, "input": source, "value": actual}
         )
-
-    has_exact_category = any(
-        find_catalog_value(
-            corrected,
-            value_index[key],
-            allow_plural=True,
-        )
-        for key in ("main_category", "subcategory")
-    )
-    if not has_exact_category:
-        ignored_tokens = (
-            FAST_PATH_FILLER_TOKENS
-            | FAST_PATH_WANTED_TOKENS
-            | FAST_PATH_PRICE_TOKENS
-            | FAST_PATH_DURATION_TOKENS
-            | LOCATION_PREPOSITIONS
-            | LOCATION_STOP_WORDS
-        )
-        location_tokens = {
-            part
-            for location_key in ("city", "state", "locality")
-            for value in value_index[location_key]
-            for part in value.split()
-        }
-        category_candidates = []
-        for token in re.findall(r"[^\W_]+", corrected):
-            if (
-                token in ignored_tokens
-                or token.isdigit()
-                or token in location_tokens
-            ):
-                continue
-            for key, priority in (("subcategory", 2), ("main_category", 1)):
-                match = typo_catalog_match(
-                    token,
-                    value_index[key],
-                    single_token_only=True,
-                )
-                if match is None:
-                    continue
-                actual, score = match
-                # A correction must resemble an internal typo, not a separate
-                # valid concept. This retains bke->Bike and
-                # techcician->Technician while rejecting escort->Resort and
-                # massage->Massager.
-                if not is_safe_category_typo_match(token, actual):
-                    continue
-                category_candidates.append(
-                    (score, priority, key, token, actual)
-                )
-        category_candidates.sort(reverse=True)
-        if category_candidates and (
-            len(category_candidates) == 1
-            or category_candidates[0][0] - category_candidates[1][0] >= 0.04
-            or normalize_filter_value(category_candidates[0][4])
-            == normalize_filter_value(category_candidates[1][4])
-        ):
-            _, _, key, source, actual = category_candidates[0]
-            corrected = re.sub(
-                rf"(?<!\w){re.escape(source)}(?!\w)",
-                normalize_filter_value(actual),
-                corrected,
-                count=1,
-            )
-            corrections.append(
-                {"field": key, "input": source, "value": actual}
-            )
 
     return corrected, corrections
 
@@ -1217,14 +1119,25 @@ def infer_functional_subcategory(query: str, values: dict) -> str | None:
     return None
 
 
-def enrich_query_plan(query: str, plan: dict, value_index: dict) -> dict:
+def enrich_query_plan(
+    query: str,
+    plan: dict,
+    value_index: dict,
+    query_aliases: dict[str, str] | None = None,
+) -> dict:
     # Known transliterated phrases must be normalized before exact/fuzzy catalog
     # inference. Otherwise a word inside a phrase (for example, Hindi "wali")
     # can be mistaken for a similarly named locality. Any real location, price,
     # or duration outside the replaced phrase remains in the normalized query.
     original_query = query
-    query = normalize_transliterated_query(query)
+    query = normalize_transliterated_query(query, query_aliases)
     query_was_normalized = query.casefold() != original_query.casefold()
+    if query_was_normalized:
+        for field in ("semantic_query", "keyword_query"):
+            if normalize_filter_value(plan[field]) == normalize_filter_value(
+                original_query
+            ):
+                plan[field] = query
     plan["semantic_query"] = expand_functional_semantic_query(
         query,
         plan["semantic_query"],
@@ -1519,8 +1432,9 @@ def extract_query_plan(
     filter_catalog: dict | None = None,
     query_provider=None,
     prompt_context: str = "",
+    query_aliases: dict[str, str] | None = None,
 ) -> dict:
-    normalized_query = normalize_transliterated_query(query)
+    normalized_query = normalize_transliterated_query(query, query_aliases)
     system_prompt = (
         "You convert product-search requests into a retrieval plan. "
         "Queries may be written in any language or script, may mix languages, "
@@ -1538,9 +1452,7 @@ def extract_query_plan(
         "mathematics book. A camera for a wedding means wedding photography use, "
         "not a person or place named Kalyan. "
         "Never change a valid user concept into a similar-spelled catalog word. "
-        "Escort means an escort or security escort service, not a resort. Massage "
-        "means a massage service unless the user explicitly asks for a massager, "
-        "massage gun, chair, machine, device, or equipment. "
+        "Escort means an escort or security escort service, not a resort. "
         "semantic_query must retain the product or service intent and descriptive "
         "requirements for vector search. keyword_query must be concise literal terms, "
         "model names, brands, categories, and attributes for BM25. Extract filters only "

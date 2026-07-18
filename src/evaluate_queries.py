@@ -27,13 +27,20 @@ def evaluate_case(
     value_index: dict,
     catalog: dict,
     prompt_context: str = "",
+    query_aliases: dict[str, str] | None = None,
 ) -> tuple[dict, list]:
     plan = extract_query_plan(
         case["query"],
         catalog,
         prompt_context=prompt_context,
+        query_aliases=query_aliases,
     )
-    plan = enrich_query_plan(case["query"], plan, value_index)
+    plan = enrich_query_plan(
+        case["query"],
+        plan,
+        value_index,
+        query_aliases,
+    )
     failures = []
     for path, expected in case["expected"].items():
         actual = nested_value(plan, path)
@@ -96,6 +103,7 @@ def main() -> None:
                 value_index,
                 catalog,
                 profile.planner_prompt_context if profile else "",
+                profile.planner_query_aliases if profile else None,
             )
             if failures:
                 failed += 1

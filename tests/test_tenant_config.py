@@ -158,6 +158,36 @@ def test_tenant_profile_allows_tls_env_override(tmp_path, monkeypatch):
     assert profile.database.tls_ca_file == "/run/secrets/alpha-ca.pem"
 
 
+def test_tenant_profile_loads_company_specific_query_aliases(
+    tmp_path,
+    monkeypatch,
+):
+    write_profile(tmp_path, "alpha")
+    set_database_environment(monkeypatch, "alpha")
+    path = tmp_path / "alpha.yaml"
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            "api:\n",
+            (
+                "planner:\n"
+                "  query_aliases:\n"
+                "    BKE: Bike\n"
+                "    techcician: technician\n"
+                "api:\n"
+            ),
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    profile = discover_tenant_profiles(tmp_path)["alpha"]
+
+    assert profile.planner_query_aliases == {
+        "bke": "bike",
+        "techcician": "technician",
+    }
+
+
 def test_tenant_profile_loads_company_specific_retrieval_policy(
     tmp_path,
     monkeypatch,

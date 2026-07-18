@@ -1178,6 +1178,7 @@ class TenantServicePool:
                 close_bm25_index=True,
                 planner_enabled=profile.planner_enabled,
                 planner_prompt_context=profile.planner_prompt_context,
+                planner_query_aliases=profile.planner_query_aliases,
                 vector_post_filter_metadata=False,
                 semantic_related_tail_enabled=(
                     profile.retrieval.semantic_related_tail_enabled

@@ -191,17 +191,73 @@ def test_transliterated_query_normalization_is_narrow_and_spelling_tolerant():
     )
 
 
-def test_bare_massage_normalizes_to_service_but_equipment_stays_explicit():
+def test_company_intent_is_not_rewritten_by_shared_normalization():
     assert normalize_transliterated_query("massage in Coimbatore") == (
-        "massage therapist service in Coimbatore"
+        "massage in Coimbatore"
     )
-    assert normalize_transliterated_query("body massage") == (
-        "body massage therapist service"
-    )
+    assert normalize_transliterated_query("body massage") == "body massage"
     assert normalize_transliterated_query("massage gun in Coimbatore") == (
         "massage gun in Coimbatore"
     )
     assert normalize_transliterated_query("body massager") == "body massager"
+
+
+def test_reviewed_category_typos_are_semantically_normalized():
+    gainr_aliases = {
+        "bke": "bike",
+        "techcician": "technician",
+    }
+    assert normalize_transliterated_query("bke in Chennai", gainr_aliases) == (
+        "bike in Chennai"
+    )
+    assert normalize_transliterated_query(
+        "techcician in Coimbatore",
+        gainr_aliases,
+    ) == "technician in Coimbatore"
+    assert normalize_transliterated_query("Ford in Coimbatore") == (
+        "Ford in Coimbatore"
+    )
+    assert normalize_transliterated_query("bke in Chennai") == (
+        "bke in Chennai"
+    )
+
+
+def test_query_aliases_are_scoped_to_the_engine_instance(tmp_path):
+    index = build_index(tmp_path / "tenant-alias-plan.sqlite3")
+    provider = CapturingQueryProvider()
+    engine = ProductSearchEngine(
+        collection=FakeCollection(),
+        bm25_index=index,
+        query_provider=provider,
+        planner_query_aliases={"bke": "bike"},
+    )
+    try:
+        result = engine.plan("bke in Chennai")
+    finally:
+        engine.close()
+        index.close()
+
+    assert result["query_plan"]["execution_path"] == "semantic"
+    assert "bike in Chennai" in provider.user_prompt
+
+
+def test_query_aliases_support_semantic_fallback_without_planner(tmp_path):
+    index = build_index(tmp_path / "tenant-alias-fallback.sqlite3")
+    engine = ProductSearchEngine(
+        collection=FakeCollection(),
+        bm25_index=index,
+        planner_enabled=False,
+        planner_query_aliases={"bke": "bike"},
+    )
+    try:
+        result = engine.plan("red bke with ABS")
+    finally:
+        engine.close()
+        index.close()
+
+    assert result["query_plan"]["execution_path"] == "semantic"
+    assert result["query_plan"]["semantic_query"] == "red bike with ABS"
+    assert result["query_plan"]["keyword_query"] == "red bike with ABS"
 
 
 def test_transliterated_phrase_tokens_do_not_become_fuzzy_locations(tmp_path):
@@ -284,20 +340,17 @@ def test_disabled_tenant_llm_planner_keeps_semantic_retrieval_available(tmp_path
     assert provider.calls == 0
 
 
-def test_deterministic_filter_plan_corrects_category_and_city_typos(tmp_path):
+def test_category_typos_stay_semantic_while_location_typos_are_corrected(tmp_path):
     index = build_index(tmp_path / "fuzzy-fast-plan.sqlite3")
     value_index = query_filter_value_index(index)
 
     category = deterministic_filter_query_plan("bke", value_index)
     combined = deterministic_filter_query_plan(
-        "bkes in chni under 1000",
+        "bikes in chni under 1000",
         value_index,
     )
 
-    assert category["filters"]["subcategory"] == "Bike"
-    assert category["query_corrections"] == [
-        {"field": "subcategory", "input": "bke", "value": "Bike"}
-    ]
+    assert category is None
     assert combined["execution_path"] == "deterministic_filter"
     assert combined["filters"]["subcategory"] == "Bike"
     assert combined["filters"]["city"] == "Chennai"
@@ -305,7 +358,6 @@ def test_deterministic_filter_plan_corrects_category_and_city_typos(tmp_path):
     assert combined["filters"]["max_rental_fee"] == 1000
     assert combined["query_corrections"] == [
         {"field": "city", "input": "chni", "value": "Chennai"},
-        {"field": "subcategory", "input": "bkes", "value": "Bike"},
     ]
     index.close()
 
@@ -359,11 +411,61 @@ def test_separate_word_is_not_corrected_to_similar_category(tmp_path):
                 subcategory_name="Technician",
                 city_name="Coimbatore",
             ),
+            product_row(
+                "energy",
+                main_category_name="Other Services",
+                subcategory_name="Energy",
+                city_name="Coimbatore",
+            ),
+            product_row(
+                "mask",
+                main_category_name="Costumes",
+                subcategory_name="Mask",
+                city_name="Coimbatore",
+            ),
+            product_row(
+                "driving",
+                main_category_name="Transport Services",
+                subcategory_name="Driving",
+                city_name="Coimbatore",
+            ),
+            product_row(
+                "food",
+                main_category_name="Food Services",
+                subcategory_name="Food",
+                city_name="Coimbatore",
+            ),
+            product_row(
+                "doll",
+                main_category_name="Toys",
+                subcategory_name="Doll",
+                city_name="Coimbatore",
+            ),
+            product_row(
+                "doctor",
+                main_category_name="Health Services",
+                subcategory_name="Doctor",
+                city_name="Coimbatore",
+            ),
         ]
     )
     value_index = query_filter_value_index(index)
 
-    assert deterministic_filter_query_plan("escort", value_index) is None
+    for separate_word in (
+        "escort",
+        "entry",
+        "mark",
+        "drawing",
+        "draping",
+        "drilling",
+        "ford",
+        "dell",
+        "door",
+    ):
+        assert (
+            deterministic_filter_query_plan(separate_word, value_index)
+            is None
+        )
     resort = deterministic_filter_query_plan("resort", value_index)
     assert resort["execution_path"] == "deterministic_filter"
     assert resort["filters"]["subcategory"] == "Resort"
@@ -371,12 +473,15 @@ def test_separate_word_is_not_corrected_to_similar_category(tmp_path):
         "techcician",
         value_index,
     )
-    assert technician_typo["execution_path"] == "deterministic_filter"
-    assert technician_typo["filters"]["subcategory"] == "Technician"
+    assert technician_typo is None
+    assert normalize_transliterated_query(
+        "techcician",
+        {"techcician": "technician"},
+    ) == "technician"
     index.close()
 
 
-def test_bare_massage_uses_semantic_service_plan_with_location(tmp_path):
+def test_bare_massage_stays_semantic_without_a_hard_product_filter(tmp_path):
     index = build_index(tmp_path / "massage-semantic-plan.sqlite3")
     index.upsert(
         [
@@ -410,14 +515,12 @@ def test_bare_massage_uses_semantic_service_plan_with_location(tmp_path):
 
     assert provider.calls == 1
     assert result["query_plan"]["execution_path"] == "semantic"
-    assert "massage therapist service in Coimbatore" in provider.user_prompt
+    assert "Original user query:\nmassage in Coimbatore" in provider.user_prompt
     assert result["resolved_filters"]["categorical"] == {
         "state_name": "Tamil Nadu",
         "city_name": "Coimbatore",
     }
-    assert result["query_plan"]["inferred_categories"]["subcategory"] == (
-        "Massage Therapist"
-    )
+    assert "subcategory_name" not in result["resolved_filters"]["categorical"]
 
 
 def test_deterministic_filter_plan_accepts_reordered_bare_budget_query(
@@ -457,9 +560,13 @@ def test_deterministic_filter_plan_accepts_reordered_bare_budget_query(
     assert reordered["filters"]["subcategory"] == "Car"
     assert reordered["filters"]["city"] == "Chennai"
     assert reordered["filters"]["max_rental_fee"] == 1000
-    assert typo["filters"]["subcategory"] == "Bike"
-    assert typo["filters"]["city"] == "Chennai"
-    assert typo["filters"]["max_rental_fee"] == 1000
+    assert typo is None
+    assert normalize_transliterated_query(
+        "1000 bke rent in chni",
+        {"bke": "bike"},
+    ) == (
+        "1000 bike rent in chni"
+    )
     index.close()
 
 

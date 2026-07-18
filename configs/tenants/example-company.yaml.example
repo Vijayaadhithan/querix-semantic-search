@@ -8,6 +8,9 @@ planner:
   # Disable only the hosted LLM planner; deterministic filters and semantic
   # retrieval still work with the original query.
   enabled: true
+  # Optional semantic-only aliases belong to this company and never become
+  # hard filters. Example: tehcnician: technician
+  query_aliases: {}
   prompt_context: >-
     Acme is an equipment-rental marketplace. The public payload calls the
     rental fee "price". Only extract filters represented by this company's

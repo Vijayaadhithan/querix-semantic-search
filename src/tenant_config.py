@@ -153,6 +153,7 @@ class TenantProfile:
     endpoint_slug: str = ""
     planner_enabled: bool = True
     planner_prompt_context: str = ""
+    planner_query_aliases: dict[str, str] = field(default_factory=dict)
     retrieval: TenantRetrievalConfig = field(
         default_factory=TenantRetrievalConfig
     )
@@ -234,6 +235,29 @@ def load_tenant_profile(path: Path) -> TenantProfile:
         raise ValueError(
             f"Tenant {company_id!r} planner prompt context exceeds 4000 characters"
         )
+    raw_query_aliases = planner.get("query_aliases", {})
+    if not isinstance(raw_query_aliases, dict):
+        raise ValueError(
+            f"Tenant {company_id!r} planner query_aliases must be an object"
+        )
+    if len(raw_query_aliases) > 500:
+        raise ValueError(
+            f"Tenant {company_id!r} planner query_aliases exceeds 500 entries"
+        )
+    planner_query_aliases = {}
+    for source, target in raw_query_aliases.items():
+        normalized_source = " ".join(str(source).casefold().split())
+        normalized_target = " ".join(str(target).casefold().split())
+        if (
+            not normalized_source
+            or not normalized_target
+            or len(normalized_source) > 100
+            or len(normalized_target) > 200
+        ):
+            raise ValueError(
+                f"Tenant {company_id!r} has an invalid planner query alias"
+            )
+        planner_query_aliases[normalized_source] = normalized_target
 
     database = dict(raw.get("database", {}))
     backend = str(database.get("backend", "mysql")).strip().casefold()
@@ -616,6 +640,7 @@ def load_tenant_profile(path: Path) -> TenantProfile:
         endpoint_slug=endpoint_slug,
         planner_enabled=planner_enabled,
         planner_prompt_context=planner_prompt_context,
+        planner_query_aliases=planner_query_aliases,
         retrieval=retrieval_config,
         compatibility=compatibility_config,
     )
