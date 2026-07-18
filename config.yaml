@@ -61,9 +61,11 @@ retrieval:
   final_top_k: 10
   reranker_model: hosted-reranker-chain
   reranker_providers:
+    # Voyage is the latency-stable primary. Keep Jina as a quality-preserving
+    # fallback instead of making every Jina timeout delay the Voyage result.
     order:
-      - jina
       - voyage-2.5
+      - jina
       - voyage-2.5-lite
     timeout_seconds: 3
     # Bounds provider tokens/cost while retaining titles and strongest fields.
