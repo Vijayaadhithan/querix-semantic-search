@@ -212,7 +212,7 @@ OLLAMA_KEEP_ALIVE=-1
 
 REDIS_URL=redis://redis:6379/0
 
-RERANK_PROVIDER_ORDER=voyage-2.5,jina,voyage-2.5-lite
+RERANK_PROVIDER_ORDER=voyage-2.5,voyage-2.5-lite,jina
 RERANK_API_TIMEOUT_SECONDS=3
 RERANK_MAX_DOCUMENT_CHARS=300
 
@@ -231,6 +231,7 @@ OLLAMA_QUERY_TIMEOUT_SECONDS=10
 Keep hosted-provider credentials in `.env.keys` or the production secret manager:
 
 ```dotenv
+GROQ_API_KEY=<optional-production-groq-key>
 JINA_API_KEY=<production-jina-key>
 VOYAGE_API_KEY=<production-voyage-key>
 ```

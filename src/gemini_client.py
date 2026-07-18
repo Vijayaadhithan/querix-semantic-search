@@ -8,6 +8,9 @@ import requests
 from settings import (
     GEMINI_API_BASE_URL,
     GEMINI_API_KEY,
+    GROQ_API_BASE_URL,
+    GROQ_API_KEY,
+    GROQ_TIMEOUT_SECONDS,
     QUERY_EXTRACT_MODELS,
     QUERY_EXTRACT_TIMEOUT_SECONDS,
 )
@@ -29,7 +32,7 @@ class GeminiModelUnavailableError(RuntimeError):
             f"http_{status_code}" if status_code is not None else "unavailable"
         )
         super().__init__(
-            f"Google model '{model}' is temporarily unavailable "
+            f"Query model '{model}' is temporarily unavailable "
             f"({self.reason})."
         )
 
@@ -171,6 +174,150 @@ class GeminiProvider:
 DEFAULT_GEMINI_PROVIDER = GeminiProvider()
 
 
+class GroqProvider:
+    def __init__(
+        self,
+        api_key: str = GROQ_API_KEY,
+        base_url: str = GROQ_API_BASE_URL,
+        timeout_seconds: float = GROQ_TIMEOUT_SECONDS,
+    ):
+        self.api_key = api_key
+        self.base_url = base_url.rstrip("/")
+        self.timeout_seconds = timeout_seconds
+        self._state = threading.local()
+
+    @property
+    def last_chat_metrics(self) -> dict[str, object]:
+        return getattr(self._state, "last_chat_metrics", {})
+
+    @last_chat_metrics.setter
+    def last_chat_metrics(self, value: dict[str, object]) -> None:
+        self._state.last_chat_metrics = value
+
+    @staticmethod
+    def _output_text(payload: dict) -> str:
+        direct = payload.get("output_text")
+        if isinstance(direct, str) and direct.strip():
+            return direct.strip()
+        parts = []
+        for item in payload.get("output") or []:
+            for content in item.get("content") or []:
+                if content.get("type") == "output_text":
+                    parts.append(str(content.get("text", "")))
+        text = "".join(parts).strip()
+        if not text:
+            raise ValueError("Groq returned an empty response.")
+        return text
+
+    def structured_chat(
+        self,
+        model: str,
+        system_prompt: str,
+        user_prompt: str,
+        schema: dict,
+        temperature: float = 0,
+    ) -> str:
+        if not self.api_key:
+            raise GeminiModelUnavailableError(
+                model,
+                reason="missing_api_key",
+            )
+
+        started = time.perf_counter()
+        metrics: dict[str, float | int | str | list] = {
+            "load_ms": 0.0,
+            "model": model,
+            "provider": "groq",
+        }
+        request_body = {
+            "model": model,
+            "instructions": system_prompt,
+            "input": user_prompt,
+            "text": {
+                "format": {
+                    "type": "json_schema",
+                    "name": "query_plan",
+                    "strict": True,
+                    "schema": schema,
+                }
+            },
+        }
+        if model.startswith("openai/gpt-oss-"):
+            request_body["reasoning"] = {"effort": "low"}
+        elif temperature > 0:
+            request_body["temperature"] = temperature
+        try:
+            response = requests.post(
+                f"{self.base_url}/responses",
+                headers={
+                    "Authorization": f"Bearer {self.api_key}",
+                    "Content-Type": "application/json",
+                    "Groq-Beta": "inference-metrics",
+                },
+                json=request_body,
+                timeout=self.timeout_seconds,
+            )
+            response.raise_for_status()
+            payload = response.json()
+            usage = payload.get("usage") or {}
+            metrics.update(
+                {
+                    "input_tokens": int(
+                        usage.get("input_tokens", 0) or 0
+                    ),
+                    "output_tokens": int(
+                        usage.get("output_tokens", 0) or 0
+                    ),
+                    "total_tokens": int(
+                        usage.get("total_tokens", 0) or 0
+                    ),
+                }
+            )
+            for key, value in (payload.get("metadata") or {}).items():
+                if key.endswith("_time"):
+                    try:
+                        metrics[f"groq_{key}_ms"] = float(value) * 1000
+                    except (TypeError, ValueError):
+                        pass
+            return strip_json_fence(self._output_text(payload))
+        except requests.HTTPError as exc:
+            status_code = (
+                exc.response.status_code
+                if exc.response is not None
+                else 0
+            )
+            raise GeminiModelUnavailableError(
+                model,
+                status_code=status_code,
+            ) from exc
+        except requests.Timeout as exc:
+            raise GeminiModelUnavailableError(
+                model,
+                reason="timeout",
+            ) from exc
+        except requests.ConnectionError as exc:
+            raise GeminiModelUnavailableError(
+                model,
+                reason="connection_error",
+            ) from exc
+        except (
+            requests.RequestException,
+            KeyError,
+            TypeError,
+            ValueError,
+        ) as exc:
+            raise RuntimeError(
+                f"Cannot extract a structured query with Groq model "
+                f"'{model}'."
+            ) from exc
+        finally:
+            metrics["total_ms"] = (time.perf_counter() - started) * 1000
+            self.last_chat_metrics = metrics
+
+
+DEFAULT_GROQ_PROVIDER = GroqProvider()
+
+
 def strip_json_fence(text: str) -> str:
     stripped = text.strip()
     if stripped.startswith("```"):
@@ -200,6 +347,15 @@ def structured_chat(
     last_error = None
     for position, candidate_model in enumerate(models, start=1):
         attempted_models.append(candidate_model)
+        is_groq = candidate_model.startswith("groq:")
+        provider = (
+            DEFAULT_GROQ_PROVIDER if is_groq else DEFAULT_GEMINI_PROVIDER
+        )
+        provider_model = (
+            candidate_model.split(":", 1)[1]
+            if is_groq
+            else candidate_model
+        )
         LOGGER.info(
             "step=query_model status=attempt model=%s position=%d/%d",
             candidate_model,
@@ -207,13 +363,18 @@ def structured_chat(
             len(models),
         )
         try:
-            content = DEFAULT_GEMINI_PROVIDER.structured_chat(
-                candidate_model,
+            content = provider.structured_chat(
+                provider_model,
                 system_prompt,
                 user_prompt,
                 schema,
                 temperature,
             )
+            attempt_metrics = {
+                **provider.last_chat_metrics,
+                "model": candidate_model,
+            }
+            DEFAULT_GEMINI_PROVIDER.last_chat_metrics = attempt_metrics
             DEFAULT_GEMINI_PROVIDER.last_chat_metrics.update(
                 {
                     "total_ms": (time.perf_counter() - started) * 1000,
@@ -235,9 +396,14 @@ def structured_chat(
             return content
         except GeminiModelUnavailableError as exc:
             last_error = exc
+            attempt_metrics = {
+                **provider.last_chat_metrics,
+                "model": candidate_model,
+            }
+            DEFAULT_GEMINI_PROVIDER.last_chat_metrics = attempt_metrics
             attempts.append(
                 {
-                    **DEFAULT_GEMINI_PROVIDER.last_chat_metrics,
+                    **attempt_metrics,
                     "status": "fallback",
                     "reason": exc.reason,
                 }

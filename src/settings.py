@@ -75,6 +75,17 @@ GEMINI_API_BASE_URL = os.getenv(
     "GEMINI_API_BASE_URL",
     "https://generativelanguage.googleapis.com/v1beta",
 ).rstrip("/")
+GROQ_API_KEY = os.getenv(
+    "GROQ_API_KEY",
+    os.getenv("grok_key", ""),
+)
+GROQ_API_BASE_URL = os.getenv(
+    "GROQ_API_BASE_URL",
+    "https://api.groq.com/openai/v1",
+).rstrip("/")
+GROQ_TIMEOUT_SECONDS = float(os.getenv("GROQ_TIMEOUT_SECONDS", "5"))
+if GROQ_TIMEOUT_SECONDS <= 0:
+    raise ValueError("GROQ_TIMEOUT_SECONDS must be greater than zero.")
 QUERY_EXTRACT_CONFIG = CONFIG.get("query_extraction", {})
 _query_extract_models = QUERY_EXTRACT_CONFIG.get("models")
 if not _query_extract_models:

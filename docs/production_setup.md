@@ -108,7 +108,7 @@ REDIS_KEY_PREFIX=semantic_ads
 REDIS_RESULT_CACHE_ENABLED=true
 REDIS_RESULT_CACHE_TTL_SECONDS=300
 
-RERANK_PROVIDER_ORDER=voyage-2.5,jina,voyage-2.5-lite
+RERANK_PROVIDER_ORDER=voyage-2.5,voyage-2.5-lite,jina
 RERANK_API_TIMEOUT_SECONDS=3
 RERANK_MAX_DOCUMENT_CHARS=300
 RERANK_CANDIDATE_K=20
@@ -177,8 +177,9 @@ Create `.env.keys` with placeholders replaced on the production server:
 
 ```dotenv
 GEMINI_API_KEY=<query-provider-key>
-JINA_API_KEY=<primary-reranker-key>
-VOYAGE_API_KEY=<fallback-reranker-key>
+GROQ_API_KEY=<optional-groq-query-provider-key>
+VOYAGE_API_KEY=<primary-reranker-key>
+JINA_API_KEY=<final-fallback-reranker-key>
 
 <COMPANY>_API_KEY=<customer-api-key>
 API_ADMIN_KEY=<admin-api-key>
@@ -191,6 +192,12 @@ POSTGRES_PASSWORD=<pgvector-container-password>
 PGVECTOR_USER=<pgvector-api-user>
 PGVECTOR_PASSWORD=<pgvector-api-password>
 ```
+
+Groq query models use the `groq:` configuration prefix. After validating the
+key and the Gainr planner evaluation, `groq:openai/gpt-oss-20b` can be placed
+before the Gemini models in `query_extraction.models`. Query plans are cached
+in Redis plus bounded process memory for one hour, so repeated normalized
+queries do not call either hosted planner.
 
 Protect and verify the files:
 

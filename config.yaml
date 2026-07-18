@@ -6,6 +6,9 @@ ollama:
 query_extraction:
   # Try the next model only when the current model is rate-limited or
   # temporarily unavailable.
+  # Prefix Groq model IDs with `groq:` when enabling that provider, for example
+  # `groq:openai/gpt-oss-20b`. Keep Gemini first until the Groq key and Gainr
+  # planner evaluation have both passed.
   models:
     - gemini-3.1-flash-lite
     - gemma-4-26b-a4b-it
@@ -16,7 +19,7 @@ query_extraction:
   deterministic_fast_path: true
   fuzzy_matching: true
   cache_size: 500
-  cache_ttl_seconds: 900
+  cache_ttl_seconds: 3600
 
 redis:
   # Redis shares query plans across API workers and survives API restarts.
@@ -65,8 +68,8 @@ retrieval:
     # fallback instead of making every Jina timeout delay the Voyage result.
     order:
       - voyage-2.5
-      - jina
       - voyage-2.5-lite
+      - jina
     timeout_seconds: 3
     # Bounds provider tokens/cost while retaining titles and strongest fields.
     max_document_chars: 300

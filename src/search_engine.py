@@ -674,6 +674,24 @@ class ProductSearchEngine:
             len(query),
             " -> ".join(QUERY_EXTRACT_MODELS),
         )
+        cached = self._cached_plan(query)
+        if cached is not None:
+            elapsed = time.perf_counter() - started
+            cached.update(
+                {
+                    "query_model_metrics": {},
+                    "seconds": elapsed,
+                    "plan_cache_hit": True,
+                }
+            )
+            LOGGER.info(
+                "[search:%s] step=plan status=cache_hit path=%s "
+                "duration_ms=%.0f",
+                trace_id,
+                cached["query_plan"].get("execution_path", "semantic"),
+                elapsed * 1000,
+            )
+            return cached
         query_plan = (
             deterministic_filter_query_plan(
                 query,
@@ -683,24 +701,6 @@ class ProductSearchEngine:
             else None
         )
         if query_plan is None:
-            cached = self._cached_plan(query)
-            if cached is not None:
-                elapsed = time.perf_counter() - started
-                cached.update(
-                    {
-                        "query_model_metrics": {},
-                        "seconds": elapsed,
-                        "plan_cache_hit": True,
-                    }
-                )
-                LOGGER.info(
-                    "[search:%s] step=plan status=cache_hit path=%s "
-                    "duration_ms=%.0f",
-                    trace_id,
-                    cached["query_plan"].get("execution_path", "semantic"),
-                    elapsed * 1000,
-                )
-                return cached
             query_plan = (
                 extract_query_plan(
                     query,

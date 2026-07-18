@@ -11,6 +11,7 @@ import gemini_client
 from gemini_client import (
     GeminiModelUnavailableError,
     GeminiProvider,
+    GroqProvider,
     strip_json_fence,
 )
 from settings import QUERY_EXTRACT_MODELS
@@ -105,6 +106,85 @@ def test_structured_chat_requires_api_key():
             "user",
             {"type": "object"},
         )
+
+
+def test_groq_structured_chat_uses_responses_json_schema(monkeypatch):
+    captured = {}
+    schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {"query": {"type": "string"}},
+        "required": ["query"],
+    }
+
+    def fake_post(url, headers, json, timeout):
+        captured.update(
+            {
+                "url": url,
+                "headers": headers,
+                "json": json,
+                "timeout": timeout,
+            }
+        )
+        return FakeResponse(
+            {
+                "output": [
+                    {
+                        "content": [
+                            {
+                                "type": "output_text",
+                                "text": '{"query":"camera"}',
+                            }
+                        ]
+                    }
+                ],
+                "usage": {
+                    "input_tokens": 100,
+                    "output_tokens": 20,
+                    "total_tokens": 120,
+                },
+            }
+        )
+
+    monkeypatch.setattr("gemini_client.requests.post", fake_post)
+    provider = GroqProvider(
+        api_key="test-key",
+        base_url="https://api.groq.test/openai/v1",
+    )
+
+    content = provider.structured_chat(
+        "openai/gpt-oss-20b",
+        "system",
+        "user",
+        schema,
+    )
+
+    assert content == '{"query":"camera"}'
+    assert captured["url"].endswith("/openai/v1/responses")
+    assert captured["headers"]["Authorization"] == "Bearer test-key"
+    assert captured["json"]["reasoning"] == {"effort": "low"}
+    assert captured["json"]["text"]["format"] == {
+        "type": "json_schema",
+        "name": "query_plan",
+        "strict": True,
+        "schema": schema,
+    }
+    assert captured["timeout"] == 5
+    assert provider.last_chat_metrics["total_tokens"] == 120
+
+
+def test_groq_missing_key_is_a_fallback_model_failure():
+    provider = GroqProvider(api_key="")
+
+    with pytest.raises(GeminiModelUnavailableError) as caught:
+        provider.structured_chat(
+            "openai/gpt-oss-20b",
+            "system",
+            "user",
+            {"type": "object"},
+        )
+
+    assert caught.value.reason == "missing_api_key"
 
 
 def test_provider_captures_google_usage_metadata(monkeypatch):
@@ -221,6 +301,48 @@ def test_default_structured_chat_falls_back_for_unavailable_models(monkeypatch):
         "model-b",
         "model-c",
     ]
+
+
+def test_default_structured_chat_routes_prefixed_model_to_groq(monkeypatch):
+    class FakeGroqProvider:
+        def __init__(self):
+            self.calls = []
+            self.last_chat_metrics = {}
+
+        def structured_chat(self, model, *_args):
+            self.calls.append(model)
+            self.last_chat_metrics = {
+                "total_ms": 1.0,
+                "provider": "groq",
+                "model": model,
+            }
+            return '{"query":"camera"}'
+
+    groq_provider = FakeGroqProvider()
+    monkeypatch.setattr(
+        gemini_client,
+        "QUERY_EXTRACT_MODELS",
+        ("groq:openai/gpt-oss-20b", "gemini-test"),
+    )
+    monkeypatch.setattr(
+        gemini_client,
+        "DEFAULT_GROQ_PROVIDER",
+        groq_provider,
+    )
+
+    content = gemini_client.structured_chat(
+        "groq:openai/gpt-oss-20b",
+        "system",
+        "user",
+        {"type": "object"},
+    )
+
+    assert content == '{"query":"camera"}'
+    assert groq_provider.calls == ["openai/gpt-oss-20b"]
+    assert gemini_client.last_gemini_metrics()["model"] == (
+        "groq:openai/gpt-oss-20b"
+    )
+    assert gemini_client.last_gemini_metrics()["provider"] == "groq"
 
 
 def test_provider_timeout_becomes_retryable_model_failure(monkeypatch):

@@ -476,9 +476,26 @@ def test_deterministic_filter_plan_rejects_descriptive_queries(tmp_path):
     index.close()
 
 
-def test_normalized_query_plan_cache_skips_repeated_provider_call(tmp_path):
+def test_normalized_query_plan_cache_skips_repeated_planner_work(
+    tmp_path,
+    monkeypatch,
+):
     index = build_index(tmp_path / "plan-cache.sqlite3")
     provider = CountingQueryProvider()
+    deterministic_calls = []
+    original_deterministic_plan = (
+        search_engine.deterministic_filter_query_plan
+    )
+
+    def deterministic_plan(*args, **kwargs):
+        deterministic_calls.append(True)
+        return original_deterministic_plan(*args, **kwargs)
+
+    monkeypatch.setattr(
+        search_engine,
+        "deterministic_filter_query_plan",
+        deterministic_plan,
+    )
     engine = ProductSearchEngine(
         collection=FakeCollection(),
         bm25_index=index,
@@ -489,6 +506,7 @@ def test_normalized_query_plan_cache_skips_repeated_provider_call(tmp_path):
     second = engine.plan("  RED   BIKE ")
 
     assert provider.calls == 1
+    assert len(deterministic_calls) == 1
     assert first["plan_cache_hit"] is False
     assert second["plan_cache_hit"] is True
     assert second["query_model_metrics"] == {}
