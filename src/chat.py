@@ -1,42 +1,12 @@
 import argparse
 import json
 
-from api import (
-    PUBLIC_PRODUCT_FIELDS,
-    product_is_visible,
-    public_product,
-)
+from api import product_is_visible, public_product
 from bm25_index import PersistentBM25Index
-from mysql_store import fetch_products_by_ids
-from query_planner import (
-    enrich_query_plan,
-    extract_duration_filter,
-    extract_price_constraints,
-    infer_target_ad_type,
-    parse_query_plan,
-    query_filter_value_index,
-    resolve_query_filters,
-)
-from reranker import rerank
-from retrieval import (
-    extract_product_ids,
-    filter_candidates_by_ad_type,
-    merge_results,
-    metadata_matches_filters,
-)
 from search_engine import ProductSearchEngine
-from settings import (
-    APP_NAME,
-    MYSQL_RESULT_ID_COLUMN,
-    MYSQL_RESULT_TABLE,
-    MYSQL_SEARCH_ID_COLUMN,
-    MYSQL_TABLE,
-)
+from settings import APP_NAME
 from tenant_config import discover_tenant_profiles
 from vector_store import get_tenant_vector_collection
-
-# Keep the imports above available for older callers of `chat`; the executable
-# CLI now delegates the implementation to the focused modules directly.
 
 
 def build_engine(company: str) -> ProductSearchEngine:

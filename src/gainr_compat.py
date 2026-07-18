@@ -732,7 +732,6 @@ class GainrCompatibilityService:
             getattr(self.engine, "database_pool", None),
         )
         self._memory_cache: dict[str, tuple[float, dict[str, Any]]] = {}
-        self._recent: dict[str, list[dict[str, Any]]] = {}
         self._lock = threading.RLock()
 
     def parse_filter_result(

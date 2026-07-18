@@ -6,29 +6,31 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from bm25_index import PersistentBM25Index
-from chat import (
+from mysql_store import fetch_products_by_ids
+from query_planner import (
+    enrich_query_plan,
+    extract_duration_filter,
+    extract_price_constraints,
+    infer_target_ad_type,
+    parse_query_plan,
+    query_filter_value_index,
+    resolve_query_filters,
+)
+from reranker import rerank
+from retrieval import (
+    extract_product_ids,
+    filter_candidates_by_ad_type,
+    merge_results,
+    metadata_matches_filters,
+    related_tail_product_ids,
+    vector_search,
+    vector_where_filter,
+)
+from settings import (
     MYSQL_RESULT_ID_COLUMN,
     MYSQL_RESULT_TABLE,
     MYSQL_SEARCH_ID_COLUMN,
     MYSQL_TABLE,
-    enrich_query_plan,
-    extract_duration_filter,
-    extract_price_constraints,
-    extract_product_ids,
-    fetch_products_by_ids,
-    filter_candidates_by_ad_type,
-    infer_target_ad_type,
-    merge_results,
-    metadata_matches_filters,
-    parse_query_plan,
-    query_filter_value_index,
-    rerank,
-    resolve_query_filters,
-)
-from retrieval import (
-    related_tail_product_ids,
-    vector_search,
-    vector_where_filter,
 )
 
 
