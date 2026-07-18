@@ -212,6 +212,9 @@ OLLAMA_KEEP_ALIVE=-1
 
 REDIS_URL=redis://redis:6379/0
 
+QUERY_EXTRACT_MODELS=groq:openai/gpt-oss-20b,gemini-3.1-flash-lite,gemma-4-26b-a4b-it,gemma-4-31b-it
+GROQ_TIMEOUT_SECONDS=5
+
 RERANK_PROVIDER_ORDER=voyage-2.5,voyage-2.5-lite,jina
 RERANK_API_TIMEOUT_SECONDS=3
 RERANK_MAX_DOCUMENT_CHARS=300

@@ -87,7 +87,16 @@ GROQ_TIMEOUT_SECONDS = float(os.getenv("GROQ_TIMEOUT_SECONDS", "5"))
 if GROQ_TIMEOUT_SECONDS <= 0:
     raise ValueError("GROQ_TIMEOUT_SECONDS must be greater than zero.")
 QUERY_EXTRACT_CONFIG = CONFIG.get("query_extraction", {})
-_query_extract_models = QUERY_EXTRACT_CONFIG.get("models")
+_query_extract_models_env = os.getenv("QUERY_EXTRACT_MODELS")
+_query_extract_models = (
+    [
+        model.strip()
+        for model in _query_extract_models_env.split(",")
+        if model.strip()
+    ]
+    if _query_extract_models_env
+    else QUERY_EXTRACT_CONFIG.get("models")
+)
 if not _query_extract_models:
     _query_extract_models = [
         QUERY_EXTRACT_CONFIG.get("model", "gemma-4-26b-a4b-it")
