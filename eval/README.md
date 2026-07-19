@@ -28,6 +28,21 @@ Each case can use the existing `relevant_ids`, `expected_filters`,
 Only add thresholds and forbidden IDs after a human has reviewed the labels;
 generated category matches alone are not a reliable relevance judgment.
 
+The reviewed set should contain all routing classes:
+
+- exact category and simple-filter queries expected to use deterministic
+  database lookup;
+- descriptive English semantic queries;
+- typos, colloquial language, and multilingual or romanized queries;
+- explicit location, price, duration, and offer/wanted constraints;
+- negative pairs where a similar spelling must not become a hard filter, such
+  as `escort` versus `resort`;
+- tenant aliases that must improve only the configured company's semantics.
+
+For relevance checks, verify that unrelated ads are absent or below relevant
+ads, not merely that one expected ID appears somewhere in a large result set.
+Routing and payload-contract tests should run alongside retrieval evaluation.
+
 Evaluation reads the existing indexes. It does not require re-ingestion after
 an API-only, pagination, caching, fallback, Docker, or documentation change.
 Run ingestion first only when the evaluated source/index contract changed.

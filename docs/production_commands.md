@@ -6,6 +6,50 @@ Complete [Production Setup](production_setup.md) first on a new host or when mig
 
 The Docker services use `restart: unless-stopped`. When started with `docker compose up -d`, they continue after the SSH session or terminal closes and restart after a server reboot, provided the Docker service is enabled.
 
+## Docker quick reference
+
+Use these commands on the production host from the repository root:
+
+```bash
+# Start or restore API, pgvector, Redis, and Docker-managed Ollama.
+docker compose --profile ollama up -d
+
+# Restart the current API image only; no rebuild or ingestion.
+docker compose restart api
+
+# Rebuild/recreate after code or tenant-YAML changes.
+docker compose build api
+docker compose --profile ollama up -d --no-deps --force-recreate api
+
+# Recreate after environment-only changes; a rebuild is unnecessary.
+docker compose --profile ollama up -d --no-deps --force-recreate api
+
+# Status and dependency checks.
+docker compose ps
+docker compose exec -T redis redis-cli ping
+docker compose exec -T pgvector pg_isready
+
+# Last 500 API lines and live logs.
+docker compose logs --tail=500 --no-color api
+docker compose logs -f --tail=200 api
+
+# Serving-path readiness.
+curl -fsS http://127.0.0.1:8000/api/v1/ready | jq
+```
+
+For search-stage timings rather than only container output:
+
+```bash
+curl -fsS \
+  "http://127.0.0.1:8000/api/v1/$COMPANY_ID/admin/search-events?limit=20" \
+  -H "X-Admin-Key: $API_ADMIN_KEY" | jq
+```
+
+`docker compose restart api` reuses the existing image and environment.
+Recreate the container after `.env` or `.env.keys` changes. Rebuild it after
+source code, dependencies, or tenant YAML changes. None of these commands runs
+ingestion. Never use `docker compose down -v` during routine operations.
+
 ## Routine code change: use this every time
 
 For an ordinary code/configuration change, push from development and recreate

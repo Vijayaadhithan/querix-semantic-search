@@ -79,6 +79,24 @@ The canonical request fields are:
 
 Supply exactly one of `query` or `cursor`. A tenant profile may map different external field names to this internal contract.
 
+## How a query is executed
+
+Routing changes internal work, not the request or response contract:
+
+- An exact catalogue category with simple user-stated filters uses the
+  deterministic indexed-database path. It does not call an LLM, embedding
+  model, vector search, BM25, or a reranker.
+- Descriptive, ambiguous, misspelled, colloquial, or multilingual wording uses
+  semantic search: tenant-aware planning, query embedding, pgvector and BM25,
+  fusion, intent shaping, and hosted reranking.
+- Explicit request filters are authoritative. Model-inferred categories and
+  tenant aliases are soft relevance signals and never fuzzy hard filters.
+
+The planner has one common base prompt. A tenant profile may add its own
+`planner.prompt_context` and `planner.query_aliases`. Those settings and both
+plan/result caches are tenant-scoped, so one company's vocabulary cannot alter
+another company's search behavior.
+
 ## Search response
 
 ```json
@@ -164,10 +182,16 @@ These routes are adapter-specific and are not part of the canonical integration 
 
 Gainr's `filter-result` adapter uses page-number pagination rather than the
 canonical cursor contract. Resend the same `searchTerm` and `filter` object and
-change only `page`. It returns 20 rows per normal page: the first semantic page
-is reranked, and later pages continue from inventory satisfying the same
-predefined city, locality, price, duration, and ad-type constraints. The final
-page may contain fewer than 20 rows when eligible inventory is exhausted.
+change only `page`. Exact deterministic requests use the direct catalogue path.
+Semantic requests keep the ranked vector/BM25 results first, then eligible
+filtered continuation inventory satisfying the same predefined city, locality,
+price, duration, and ad-type constraints. The final page may contain fewer than
+20 rows when eligible inventory is exhausted.
+
+These routing and relevance changes do not alter Gainr's legacy input or output
+payload. The adapter still emits only its configured public fields and keeps
+internal search metadata out of the frontend response unless explicitly
+enabled in tenant configuration.
 
 ## Backend proxy example
 

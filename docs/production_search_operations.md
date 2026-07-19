@@ -17,7 +17,25 @@ The production service should provide:
 
 Use one API worker, a tenant engine cache of one, and one concurrent search per tenant as the safe starting point. Keep pgvector and Redis on private Docker networking and expose the API only through a TLS reverse proxy.
 
-The hosted profile uses Jina first, followed by Voyage quality and lite fallbacks. It reranks 20 candidates, caps each candidate document at 300 characters, and uses a 40-item hybrid recall window. Gainr retains those 20 ranked results as its first page and fills later pages only from inventory that satisfies the same predefined filters. Current observed production latency is roughly three seconds for uncached semantic search and below one second for deterministic search, but these are observations rather than service guarantees.
+The hosted profile uses Voyage 2.5 first, OpenRouter Nemotron free second, and
+Voyage 2.5 Lite last. LangSearch and Jina are not runtime providers. The profile
+reranks 20 candidates, caps each candidate document at 300 characters, and uses
+a 40-item hybrid recall window. Gainr retains the ranked window first and adds
+eligible filtered continuation results only after it.
+
+Exact catalogue categories with simple stated filters use the deterministic
+database path and skip the LLM, embedding, pgvector, BM25, and reranker. Typo,
+ambiguous, descriptive, and multilingual requests use the semantic path:
+tenant-aware planning, `embeddinggemma:latest`, pgvector HNSW and BM25,
+reciprocal-rank fusion, intent shaping, then hosted reranking. Fuzzy or inferred
+category language is never promoted to a hard category filter.
+
+Observed production timings are workload and provider dependent. Warm exact
+deterministic requests have been about 0.34-0.35 seconds; an uncached exact plan
+has been about 0.70-0.72 seconds. Recent semantic stage observations put the
+planner around two seconds when uncached, retrieval around 0.2-0.35 seconds, and
+reranking around 0.35-1.65 seconds. Treat these as diagnostic examples, not
+service guarantees; result and plan cache hits are substantially faster.
 
 The hosted document payload is bounded at 6,000 characters per search before JSON overhead: 20 candidates multiplied by 300 characters. This is 60% lower than a 30-candidate, 500-character profile while retaining a fully reranked 20-result first page. Provider-reported token counts can differ from character estimates, so monitor the usage diagnostics in real traffic.
 
@@ -72,6 +90,15 @@ Monitor:
 - bounded-capacity rejections and degraded retrieval counts.
 
 A high reranker time or token count suggests reducing the ranked window or document-character cap only after relevance testing. A high vector time suggests checking HNSW use, metadata predicates, database load, and `ef_search`. A high planner time suggests deterministic fast-path coverage or query-provider latency.
+
+Container logs show lifecycle, access, and provider warnings. Per-stage search
+timings are stored in the tenant-safe admin event feed:
+
+```bash
+curl -fsS \
+  "http://127.0.0.1:8000/api/v1/<company>/admin/search-events?limit=20" \
+  -H "X-Admin-Key: $API_ADMIN_KEY" | jq
+```
 
 ## Security checklist
 

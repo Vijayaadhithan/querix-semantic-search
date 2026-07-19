@@ -52,9 +52,8 @@ DOCKER_MYSQL_HOST=host.docker.internal
 ```
 
 ```bash
-docker compose build api
 docker compose up -d pgvector redis
-docker compose up -d --no-deps --force-recreate api
+docker compose up -d --build api
 ```
 
 Wait for readiness without piping a failed `curl` into `jq`:
@@ -74,6 +73,40 @@ docker compose stop api
 
 Neither mode rebuilds embeddings. Run `ollama pull embeddinggemma:latest`
 only when `ollama list` reports that the model is missing.
+
+## Everyday Docker commands
+
+```bash
+# Inspect containers and dependency health.
+docker compose ps
+docker compose exec -T redis redis-cli ping
+docker compose exec -T pgvector pg_isready
+
+# Restart the current API image after a transient issue.
+docker compose restart api
+
+# Rebuild/recreate after Python, dependency, or tenant-YAML changes.
+docker compose up -d --build --force-recreate api
+
+# Inspect the last 500 lines or follow new API logs.
+docker compose logs --tail=500 --no-color api
+docker compose logs -f --tail=200 api
+
+# Stop only the API; pgvector and Redis remain available.
+docker compose stop api
+
+# Restore all non-profile local services.
+docker compose up -d
+```
+
+A `.env` or `.env.keys` change requires recreating the API container so Compose
+injects the new values. A tenant YAML change requires rebuilding because tenant
+configuration is copied into the API image. None of these operations requires
+ingestion unless the indexed source, embedding model, dimensions, or embedding
+text contract changed. Never use `docker compose down -v` for routine work.
+
+The query-routing and semantic internals are summarized in
+[Architecture](architecture.md); local and production use the same search code.
 
 ## Validate source access
 

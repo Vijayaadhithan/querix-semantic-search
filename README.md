@@ -24,15 +24,30 @@ The production vector backend is pgvector only. Chroma is not a runtime or inges
 ```text
 request
   -> authentication and rate limit
-  -> deterministic or model-assisted query plan
-  -> pgvector + BM25 candidate retrieval
-  -> reciprocal-rank fusion
-  -> hosted reranking
+  -> route
+     -> exact category/simple stated filters
+        -> deterministic indexed database lookup
+     -> descriptive, ambiguous, typo, or multilingual query
+        -> tenant-aware query plan and query embedding
+        -> pgvector HNSW + BM25 candidate retrieval
+        -> reciprocal-rank fusion and intent shaping
+        -> hosted reranking
   -> canonical database hydration
   -> pagination, diagnostics, and cache
 ```
 
-Broad catalogue queries remain browseable. Queries containing structured constraints apply those constraints before final ranking. If one retrieval path or a reranker is unavailable, the API uses the remaining safe result path and reports degraded diagnostics. A request fails only when no serving path remains.
+The deterministic path does not call the planner model, embedding model, vector
+search, BM25, or a reranker. It is reserved for an exact catalogue category and
+simple user-stated constraints. Model-inferred categories and tenant query
+aliases remain soft semantic evidence; they never become fuzzy hard filters.
+
+The semantic path uses a shared planner prompt plus tenant-specific context and
+aliases, Ollama `embeddinggemma:latest`, pgvector HNSW, persistent BM25,
+reciprocal-rank fusion, intent shaping, and the configured hosted-reranker
+failover chain. Explicit client filters remain authoritative. If one retrieval
+path or a reranker is unavailable, the API uses the remaining safe result path
+and reports degraded diagnostics. A request fails only when no serving path
+remains.
 
 ## Repository layout
 
@@ -63,6 +78,35 @@ For every ordinary code change, use the copy-paste workflow at the top of
 After a successful pull, `scripts/deploy_production.sh` rebuilds/recreates only
 the API, waits for real readiness, runs the tenant doctor, and leaves existing
 embeddings and indexes untouched.
+
+## Docker quick commands
+
+Run these from the repository root. The production command includes the Ollama
+profile; local macOS may use host Ollama as described in the local workflow.
+
+```bash
+# Production: start or restore the complete stack.
+docker compose --profile ollama up -d
+
+# Restart the existing API image without rebuilding it.
+docker compose restart api
+
+# Rebuild/recreate the API after code or tenant-config changes.
+docker compose build api
+docker compose --profile ollama up -d --no-deps --force-recreate api
+
+# Status, last 500 API log lines, and live logs.
+docker compose ps
+docker compose logs --tail=500 --no-color api
+docker compose logs -f --tail=200 api
+
+# Readiness.
+curl -fsS http://127.0.0.1:8000/api/v1/ready | jq
+```
+
+Never use `docker compose down -v` for routine work because it deletes named
+volumes. See [Production commands](docs/production_commands.md) for deployment,
+diagnostics, ingestion, backup, and recovery commands.
 
 ## Configuration boundaries
 

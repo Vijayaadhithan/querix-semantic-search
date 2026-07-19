@@ -9,7 +9,7 @@ The service turns natural-language catalogue queries into tenant-isolated, filte
 | Component | Responsibility |
 |---|---|
 | Tenant registry | Validates API keys, endpoint slugs, database connections, pgvector tables, and BM25 paths |
-| Query planner | Extracts intent and conservative structured constraints |
+| Query planner | Uses a shared prompt plus tenant context to extract intent and conservative constraints for semantic searches |
 | Ollama embedding service | Produces query and ingestion embeddings with the configured model |
 | PostgreSQL/pgvector | Stores tenant vectors, retrieval text, and filter metadata; provides HNSW ANN search |
 | Persistent BM25 | Provides lexical and exact-term recall |
@@ -23,19 +23,42 @@ The service turns natural-language catalogue queries into tenant-isolated, filte
 
 1. The API resolves the tenant from the endpoint and API key.
 2. Rate limiting and per-tenant concurrency controls are applied.
-3. Deterministic parsing handles clear filters; the query model handles ambiguous intent.
-4. Filters are resolved against the tenant catalogue vocabulary.
-5. pgvector and standalone BM25 retrieve independent candidate windows.
-6. Reciprocal-rank fusion creates a provider-independent fallback order.
-7. The reranker scores the bounded candidate set.
-8. Ranking policy removes low-confidence or wrong-intent results.
+3. Exact catalogue categories with simple stated constraints use the
+   deterministic indexed-database path and skip every model and retrieval
+   provider.
+4. Descriptive, ambiguous, misspelled, or multilingual requests use the
+   semantic path. The planner applies the shared prompt, tenant prompt context,
+   and tenant-scoped semantic aliases.
+5. Ollama creates the query embedding; pgvector and standalone BM25 retrieve
+   independent candidate windows.
+6. Reciprocal-rank fusion and intent shaping create a provider-independent
+   fallback order.
+7. The hosted reranker scores the bounded candidate set.
+8. Ranking policy demotes or removes low-confidence and wrong-intent results.
 9. IDs are hydrated from the canonical result table.
 10. The canonical API returns a cursor; compatibility adapters may expose
     page-number pagination. Eligible responses enter Redis with diagnostics.
 
+## Routing and tenant language
+
+Deterministic routing requires an exact tenant catalogue term. Fuzzy spellings,
+phonetic neighbours, model-inferred categories, and aliases are not converted
+into hard category filters. This prevents unrelated pairs such as `escort` and
+`resort` from collapsing into one category. A tenant alias may help the semantic
+planner understand colloquial, transliterated, or domain-specific wording, but
+it remains relevance evidence rather than an exact database constraint.
+
+The planner's base system prompt is common to all tenants. Each tenant may add
+`planner.prompt_context` and `planner.query_aliases` in its YAML profile. Alias
+configuration is included in the plan-cache fingerprint, and plan/result cache
+keys are tenant-prefixed, so language guidance cannot leak across companies.
+
 ## Ranking and failure behavior
 
-Semantic ranking is the primary result order. BM25 protects exact names, identifiers, and rare words. Structured filters are hard constraints only when confidently extracted or supplied by the client.
+Semantic ranking is the primary result order for the semantic path. BM25
+protects exact names, identifiers, and rare words. Explicit client filters and
+exact user-stated catalogue constraints are hard. A category inferred by the
+query model is a soft preference unless the user supplied it exactly.
 
 Retrieval and reranking are fail-open. If vector/Ollama fails, standalone BM25
 can still serve lexical candidates. If BM25 fails, pgvector can continue. A

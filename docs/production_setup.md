@@ -151,6 +151,33 @@ as its stable namespace. A transferred local index must be re-keyed with the
 namespace-migration command; this preserves embeddings and avoids a full
 recalculation. Do not change the namespace without another explicit migration.
 
+Tenant query behavior belongs in `configs/tenants/<company>.yaml`:
+
+```yaml
+company:
+  id: acme
+  planner_adapter: gainr
+
+planner:
+  enabled: true
+  query_aliases:
+    tehcnician: technician
+  prompt_context: >-
+    Acme is an equipment-rental marketplace. Interpret its domain language
+    using Acme's catalogue, filters, and listing meanings.
+```
+
+The planner adapter supplies the common prompt and canonical filter schema.
+`prompt_context` adds company/domain guidance. `query_aliases` handles that
+tenant's spelling, colloquial, or transliterated language as semantic evidence
+only; it never creates a fuzzy hard category filter. Alias configuration is
+part of the plan-cache fingerprint, and Redis keys are tenant-prefixed.
+
+Use the existing `gainr` adapter only when a new tenant shares its canonical
+marketplace meanings. A company with different filters, listing semantics, or
+payload behavior needs an appropriate adapter and tenant mapping. This changes
+internal interpretation, not the canonical `/search` request/response contract.
+
 For a remote production database, prefer certificate and hostname verification:
 
 ```dotenv
@@ -224,6 +251,10 @@ docker compose build --pull api
 ```
 
 The production image intentionally contains no local reranker model, Torch, Transformers, or Hugging Face model cache.
+
+The runtime reranker order is Voyage 2.5, OpenRouter Nemotron free, then Voyage
+2.5 Lite. LangSearch and Jina are not used. Provider errors fail open to the
+fused pgvector/BM25 order, and degraded responses are not cached.
 
 ## 7. Prepare persistent application storage
 
