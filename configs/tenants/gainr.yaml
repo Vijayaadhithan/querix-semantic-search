@@ -119,7 +119,7 @@ database:
     statement_timeout_ms: 0
   pool:
     min_size: 0
-    max_size: 2
+    max_size: 4
     timeout_seconds: 5
   # Local testing uses plaintext loopback. Production must use verify-full
   # with a CA path supplied through ca_file_env.
