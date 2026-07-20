@@ -405,6 +405,16 @@ API_LOG_LEVEL = os.getenv(
     "API_LOG_LEVEL",
     str(CONFIG.get("api", {}).get("log_level", "info")),
 ).lower()
+API_READINESS_CACHE_SECONDS = int(
+    os.getenv(
+        "API_READINESS_CACHE_SECONDS",
+        str(CONFIG.get("api", {}).get("readiness_cache_seconds", 300)),
+    )
+)
+if not 0 <= API_READINESS_CACHE_SECONDS <= 3600:
+    raise ValueError(
+        "API_READINESS_CACHE_SECONDS must be between 0 and 3600."
+    )
 API_DEFAULT_PAGE_SIZE = int(
     CONFIG.get("api", {}).get("default_page_size", 20)
 )

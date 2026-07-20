@@ -52,6 +52,7 @@ from settings import (
     API_MAX_SESSIONS,
     API_PRELOAD_EMBEDDING,
     API_PRELOAD_RERANKER,
+    API_READINESS_CACHE_SECONDS,
     API_SESSION_TTL_SECONDS,
     API_RATE_LIMIT_ENABLED,
     API_TENANT_CONFIG_DIR,
@@ -1250,6 +1251,8 @@ def create_app(
             owns_usage_store = True
         application.state.usage_store = active_usage_store
         application.state.check_ollama_readiness = service is None
+        application.state.readiness_cache = None
+        application.state.readiness_cache_lock = threading.Lock()
         tenant_mode = service is None and (
             tenant_registry is not None or API_AUTH_ENABLED
         )
@@ -1578,58 +1581,92 @@ def create_app(
 
     @application.get("/api/v1/ready", tags=["system"])
     def ready():
-        tenant_mode = bool(application.state.tenant_mode)
-        registry = getattr(application.state, "tenant_registry", None)
-        checks: dict[str, Any] = {}
-        if tenant_mode:
-            pool = application.state.tenant_service_pool
-            for company_id in registry.profiles:
+        now = time.monotonic()
+        with application.state.readiness_cache_lock:
+            cached = application.state.readiness_cache
+            if (
+                cached is not None
+                and API_READINESS_CACHE_SECONDS > 0
+                and now - cached["created_monotonic"]
+                < API_READINESS_CACHE_SECONDS
+            ):
+                return JSONResponse(
+                    {**cached["payload"], "cached": True},
+                    status_code=cached["status_code"],
+                )
+
+            tenant_mode = bool(application.state.tenant_mode)
+            registry = getattr(application.state, "tenant_registry", None)
+            checks: dict[str, Any] = {}
+            if tenant_mode:
+                pool = application.state.tenant_service_pool
+                for company_id in registry.profiles:
+                    try:
+                        checks[company_id] = pool.get(
+                            company_id
+                        ).readiness()
+                    except Exception as exc:
+                        checks[company_id] = {
+                            "ok": False,
+                            "components": {},
+                            "error_type": type(exc).__name__,
+                        }
+            else:
+                checks["legacy"] = (
+                    application.state.search_service.readiness()
+                )
+
+            ollama = {"ok": True, "checked": False}
+            if application.state.check_ollama_readiness:
                 try:
-                    checks[company_id] = pool.get(company_id).readiness()
+                    response = requests.get(
+                        f"{OLLAMA_BASE_URL}/api/tags",
+                        timeout=2,
+                    )
+                    response.raise_for_status()
+                    names = {
+                        model.get("name")
+                        for model in response.json().get("models", [])
+                    }
+                    ollama = {
+                        "ok": EMBED_MODEL in names,
+                        "checked": True,
+                        "model": EMBED_MODEL,
+                    }
                 except Exception as exc:
-                    checks[company_id] = {
+                    ollama = {
                         "ok": False,
-                        "components": {},
+                        "checked": True,
+                        "model": EMBED_MODEL,
                         "error_type": type(exc).__name__,
                     }
-        else:
-            checks["legacy"] = application.state.search_service.readiness()
+            checks["ollama"] = ollama
+            ready_now = all(
+                check.get("ok", False) for check in checks.values()
+            )
+            payload = {
+                "status": "ok" if ready_now else "not_ready",
+                "tenant_mode": tenant_mode,
+                "configured_companies": (
+                    len(registry.profiles) if registry is not None else 1
+                ),
+                "checked_at_utc": datetime.now(timezone.utc).isoformat(),
+                "cache_seconds": API_READINESS_CACHE_SECONDS,
+                "cached": False,
+                "checks": checks,
+            }
+            status_code = 200 if ready_now else 503
+            if ready_now and API_READINESS_CACHE_SECONDS > 0:
+                application.state.readiness_cache = {
+                    "created_monotonic": now,
+                    "status_code": status_code,
+                    "payload": payload,
+                }
+            return JSONResponse(payload, status_code=status_code)
 
-        ollama = {"ok": True, "checked": False}
-        if application.state.check_ollama_readiness:
-            try:
-                response = requests.get(
-                    f"{OLLAMA_BASE_URL}/api/tags",
-                    timeout=2,
-                )
-                response.raise_for_status()
-                names = {
-                    model.get("name")
-                    for model in response.json().get("models", [])
-                }
-                ollama = {
-                    "ok": EMBED_MODEL in names,
-                    "checked": True,
-                    "model": EMBED_MODEL,
-                }
-            except Exception as exc:
-                ollama = {
-                    "ok": False,
-                    "checked": True,
-                    "model": EMBED_MODEL,
-                    "error_type": type(exc).__name__,
-                }
-        checks["ollama"] = ollama
-        ready_now = all(check.get("ok", False) for check in checks.values())
-        payload = {
-            "status": "ok" if ready_now else "not_ready",
-            "tenant_mode": tenant_mode,
-            "configured_companies": (
-                len(registry.profiles) if registry is not None else 1
-            ),
-            "checks": checks,
-        }
-        return JSONResponse(payload, status_code=200 if ready_now else 503)
+    @application.get("/api/v1/live", tags=["system"])
+    def live() -> dict[str, str]:
+        return {"status": "ok"}
 
     @application.get(
         "/api/v1/health",

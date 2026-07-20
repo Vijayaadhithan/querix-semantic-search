@@ -223,6 +223,8 @@ def test_http_contract_and_validation():
     service = ProductSearchService(FakeEngine(), max_results=20)
     with TestClient(create_app(service=service)) as client:
         ready = client.get("/api/v1/ready")
+        cached_ready = client.get("/api/v1/ready")
+        live = client.get("/api/v1/live")
         health = client.get("/api/v1/health")
         response = client.post(
             "/api/v1/search",
@@ -234,6 +236,15 @@ def test_http_contract_and_validation():
         )
 
     assert ready.status_code == 200
+    assert ready.json()["cached"] is False
+    assert cached_ready.status_code == 200
+    assert cached_ready.json()["cached"] is True
+    assert (
+        cached_ready.json()["checked_at_utc"]
+        == ready.json()["checked_at_utc"]
+    )
+    assert live.status_code == 200
+    assert live.json() == {"status": "ok"}
     assert ready.json()["checks"]["legacy"]["components"]["bm25"] == {
         "ok": True,
         "indexed_products": 12,
@@ -258,15 +269,20 @@ def test_http_contract_and_validation():
 
 def test_readiness_fails_when_a_critical_index_is_empty():
     class EmptyCollection:
+        indexed_products = 0
+
         def count(self):
-            return 0
+            return self.indexed_products
 
     engine = FakeEngine()
-    engine.collection = EmptyCollection()
+    collection = EmptyCollection()
+    engine.collection = collection
     service = ProductSearchService(engine, max_results=20)
 
     with TestClient(create_app(service=service)) as client:
         response = client.get("/api/v1/ready")
+        collection.indexed_products = 12
+        recovered = client.get("/api/v1/ready")
 
     assert response.status_code == 503
     assert response.json()["status"] == "not_ready"
@@ -274,6 +290,8 @@ def test_readiness_fails_when_a_critical_index_is_empty():
         "ok": False,
         "indexed_products": 0,
     }
+    assert recovered.status_code == 200
+    assert recovered.json()["cached"] is False
 
 
 def test_repeated_query_result_cache_is_reported_by_api():

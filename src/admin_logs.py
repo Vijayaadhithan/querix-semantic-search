@@ -59,11 +59,18 @@ class AdminLogBuffer(logging.Handler):
     def emit(self, record: logging.LogRecord) -> None:
         try:
             message = sanitize_log_message(record.getMessage())
-            if (
-                record.name == "uvicorn.access"
-                and "/api/v1/admin/logs" in message
-            ):
-                return
+            if record.name == "uvicorn.access":
+                if "/api/v1/admin/logs" in message:
+                    return
+                successful_health_check = (
+                    (
+                        "GET /api/v1/ready" in message
+                        or "GET /api/v1/live" in message
+                    )
+                    and message.endswith(" 200")
+                )
+                if successful_health_check:
+                    return
             event = {
                 "id": 0,
                 "timestamp_utc": datetime.fromtimestamp(

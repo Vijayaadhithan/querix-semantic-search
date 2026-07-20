@@ -62,3 +62,29 @@ def test_admin_log_buffer_is_bounded_and_supports_incremental_polling():
         logger.setLevel(original_level)
         logger.propagate = original_propagate
         buffer.close()
+
+
+def test_successful_health_access_logs_are_omitted_but_failures_remain():
+    buffer = AdminLogBuffer(capacity=10)
+    logger = logging.getLogger("uvicorn.access")
+    original_level = logger.level
+    logger.setLevel(logging.INFO)
+    logger.addHandler(buffer)
+    try:
+        logger.info(
+            '127.0.0.1:1234 - "GET /api/v1/ready HTTP/1.1" 200'
+        )
+        logger.info(
+            '127.0.0.1:1235 - "GET /api/v1/live HTTP/1.1" 200'
+        )
+        logger.warning(
+            '127.0.0.1:1236 - "GET /api/v1/ready HTTP/1.1" 503'
+        )
+
+        snapshot = buffer.snapshot(limit=10, minimum_level="INFO")
+        assert snapshot["retained"] == 1
+        assert snapshot["events"][0]["message"].endswith(" 503")
+    finally:
+        logger.removeHandler(buffer)
+        logger.setLevel(original_level)
+        buffer.close()

@@ -113,7 +113,9 @@ Use `next_after_id` as the next request's `after_id` to retrieve only newer
 entries. The feed retains at most `API_ADMIN_LOG_BUFFER_SIZE` entries per API
 process, resets when that process restarts, omits tracebacks, and redacts common
 credential formats. It includes API, search/provider, compatibility, and
-Uvicorn access messages. It intentionally does not expose Nginx, Docker,
+Uvicorn access messages. Successful `/api/v1/live` and `/api/v1/ready` probes
+are omitted as routine noise; failed probes remain visible. It intentionally
+does not expose Nginx, Docker,
 PostgreSQL, Redis, Ollama, arbitrary files, or environment variables. Use the
 server's normal operational tooling when those infrastructure logs are needed.
 

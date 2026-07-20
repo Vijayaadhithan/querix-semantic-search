@@ -26,7 +26,7 @@ RUN mkdir -p storage \
 USER app
 EXPOSE 8000
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
-    CMD curl -fsS http://127.0.0.1:${API_PORT}/api/v1/ready || exit 1
+HEALTHCHECK --interval=5m --timeout=5s --start-period=60s --retries=3 \
+    CMD curl -fsS http://127.0.0.1:${API_PORT}/api/v1/live || exit 1
 
 CMD ["python", "src/run_api.py"]
