@@ -204,21 +204,18 @@ if command -v systemctl >/dev/null 2>&1; then
 fi
 
 backup_root="${BACKUP_ROOT:-/root/backups/semantic-search}"
-latest_backup="$(
-  find "$backup_root" -mindepth 1 -maxdepth 1 -type d -name '20??????T??????Z' \
-    -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -n 1 | cut -d' ' -f2-
-)"
-if [[ -n "$latest_backup" && -f "$latest_backup/SHA256SUMS" ]]; then
+current_backup="$backup_root/current"
+if [[ -f "$current_backup/SHA256SUMS" ]]; then
   backup_age_seconds=$((
-    $(date +%s) - $(stat -c '%Y' "$latest_backup/SHA256SUMS")
+    $(date +%s) - $(stat -c '%Y' "$current_backup/SHA256SUMS")
   ))
   if [[ "$backup_age_seconds" -le 129600 ]]; then
-    pass "A checksummed production backup is less than 36 hours old"
+    pass "The rolling checksummed production backup is less than 36 hours old"
   else
-    warn "The newest checksummed production backup is older than 36 hours"
+    warn "The rolling checksummed production backup is older than 36 hours"
   fi
 else
-  warn "No completed checksummed production backup was found"
+  warn "No completed rolling production backup was found"
 fi
 
 printf 'Host audit summary: %d failure(s), %d warning(s).\n' "$failures" "$warnings"

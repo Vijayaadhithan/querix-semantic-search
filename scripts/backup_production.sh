@@ -3,7 +3,6 @@ set -Eeuo pipefail
 
 PROJECT_DIR="${PROJECT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 BACKUP_ROOT="${BACKUP_ROOT:-/root/backups/semantic-search}"
-BACKUP_RETENTION_DAYS="${BACKUP_RETENTION_DAYS:-7}"
 LOCK_FILE="${LOCK_FILE:-/tmp/semantic-search-production-backup.lock}"
 
 cd "$PROJECT_DIR"
@@ -15,11 +14,6 @@ for command_name in docker flock python3 sha256sum tar; do
   fi
 done
 
-if [[ ! "$BACKUP_RETENTION_DAYS" =~ ^[1-9][0-9]*$ ]]; then
-  echo "BACKUP_RETENTION_DAYS must be a positive integer." >&2
-  exit 1
-fi
-
 exec 9>"$LOCK_FILE"
 if ! flock -n 9; then
   echo "Another production backup is already running."
@@ -30,11 +24,17 @@ mkdir -p "$BACKUP_ROOT"
 chmod 700 "$BACKUP_ROOT"
 
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
-final_dir="$BACKUP_ROOT/$timestamp"
+final_dir="$BACKUP_ROOT/current"
+previous_dir="$BACKUP_ROOT/.previous-${timestamp}"
 work_dir="$(mktemp -d "$BACKUP_ROOT/.incomplete-${timestamp}-XXXXXX")"
 
 cleanup() {
-  rm -rf -- "$work_dir"
+  if [[ -n "${work_dir:-}" && -d "$work_dir" ]]; then
+    rm -rf -- "$work_dir"
+  fi
+  if [[ -d "$previous_dir" && ! -e "$final_dir" ]]; then
+    mv "$previous_dir" "$final_dir"
+  fi
 }
 trap cleanup EXIT
 
@@ -74,15 +74,21 @@ tar -C "$sqlite_root" -czf "$work_dir/storage-sqlite.tar.gz" storage
 )
 
 chmod -R go-rwx "$work_dir"
-mv "$work_dir" "$final_dir"
+if [[ -e "$final_dir" ]]; then
+  if [[ ! -d "$final_dir" ]]; then
+    echo "Backup target exists but is not a directory: ${final_dir}" >&2
+    exit 1
+  fi
+  mv "$final_dir" "$previous_dir"
+fi
+if ! mv "$work_dir" "$final_dir"; then
+  if [[ -d "$previous_dir" && ! -e "$final_dir" ]]; then
+    mv "$previous_dir" "$final_dir"
+  fi
+  exit 1
+fi
+work_dir=""
+rm -rf -- "$previous_dir"
 trap - EXIT
-
-find "$BACKUP_ROOT" \
-  -mindepth 1 \
-  -maxdepth 1 \
-  -type d \
-  -name '20??????T??????Z' \
-  -mtime "+$BACKUP_RETENTION_DAYS" \
-  -exec rm -rf -- {} +
 
 echo "Production backup complete: ${final_dir}"

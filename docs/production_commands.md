@@ -134,9 +134,11 @@ COMPANY_ID=gainr ./scripts/audit_production_host.sh
 ```
 
 Install the daily verified backup timer once on the production host. It runs at
-approximately 02:00 IST, before the 03:00 ingestion timer, retains seven days,
-validates the custom-format pgvector dump, uses SQLite's online backup API, and
-writes checksums before publishing a completed backup directory.
+approximately 02:00 IST, before the 03:00 ingestion timer. It maintains one
+rolling backup at `/root/backups/semantic-search/current`, validates the
+custom-format pgvector dump, uses SQLite's online backup API, and writes
+checksums before replacing the prior backup. The prior backup remains available
+if creating or validating the new backup fails.
 
 ```bash
 export PRODUCTION_REPO="$(pwd)"
