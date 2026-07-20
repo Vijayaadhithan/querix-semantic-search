@@ -272,7 +272,7 @@ OLLAMA_KEEP_ALIVE=-1
 
 REDIS_URL=redis://redis:6379/0
 
-QUERY_EXTRACT_MODELS=gemini-3.1-flash-lite,groq:openai/gpt-oss-20b,gemma-4-26b-a4b-it,gemma-4-31b-it
+QUERY_EXTRACT_MODELS=groq:openai/gpt-oss-20b,gemini-3.1-flash-lite,gemma-4-26b-a4b-it,gemma-4-31b-it
 GROQ_TIMEOUT_SECONDS=5
 
 RERANK_PROVIDER_ORDER=voyage-2.5,openrouter-nemotron,voyage-2.5-lite

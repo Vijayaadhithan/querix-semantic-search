@@ -30,6 +30,7 @@ class FakeResponse:
 
 def test_configured_query_model_fallback_order():
     assert QUERY_EXTRACT_MODELS == (
+        "groq:openai/gpt-oss-20b",
         "gemini-3.1-flash-lite",
         "gemma-4-26b-a4b-it",
         "gemma-4-31b-it",

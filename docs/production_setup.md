@@ -221,12 +221,12 @@ PGVECTOR_USER=<pgvector-api-user>
 PGVECTOR_PASSWORD=<pgvector-api-password>
 ```
 
-Groq query models use the `groq:` configuration prefix. After validating the
-key and the Gainr planner evaluation, place `groq:openai/gpt-oss-20b` after
-`gemini-3.1-flash-lite` and before the two Gemma fallbacks with the
-environment-specific `QUERY_EXTRACT_MODELS` setting. Query plans are cached
-in Redis plus bounded process memory for one hour, so repeated normalized
-queries do not call any hosted planner.
+Groq query models use the `groq:` configuration prefix. The validated planner
+order is `groq:openai/gpt-oss-20b`, `gemini-3.1-flash-lite`, then the two Gemma
+fallbacks. Set that order with the environment-specific
+`QUERY_EXTRACT_MODELS` setting. Query plans are cached in Redis plus bounded
+process memory for one hour, so repeated normalized queries do not call any
+hosted planner.
 
 Protect and verify the files:
 
