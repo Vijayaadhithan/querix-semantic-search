@@ -356,7 +356,7 @@ def structured_chat(
             if is_groq
             else candidate_model
         )
-        LOGGER.info(
+        LOGGER.debug(
             "step=query_model status=attempt model=%s position=%d/%d",
             candidate_model,
             position,
@@ -388,7 +388,7 @@ def structured_chat(
                     ],
                 }
             )
-            LOGGER.info(
+            LOGGER.debug(
                 "step=query_model status=success model=%s duration_ms=%.0f",
                 candidate_model,
                 DEFAULT_GEMINI_PROVIDER.last_chat_metrics["total_ms"],

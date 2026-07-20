@@ -332,7 +332,7 @@ class FallbackReranker:
                     "usage": getattr(provider, "last_usage", {}),
                 }
             )
-            LOGGER.info(
+            LOGGER.debug(
                 "step=reranker_provider status=success provider=%s "
                 "model=%s duration_ms=%.0f",
                 provider.name,

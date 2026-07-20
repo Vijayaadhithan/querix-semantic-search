@@ -486,7 +486,7 @@ class ProductSearchEngine:
             cache_key,
         )
         if cached is None:
-            LOGGER.info(
+            LOGGER.debug(
                 "[search:%s] step=result_cache status=miss duration_ms=%.0f",
                 trace_id,
                 (time.perf_counter() - started) * 1000,
@@ -537,7 +537,7 @@ class ProductSearchEngine:
             for product in products
         ]
         elapsed = time.perf_counter() - started
-        LOGGER.info(
+        LOGGER.debug(
             "[search:%s] step=result_cache status=hit ids=%d rows=%d "
             "database_ms=%.0f duration_ms=%.0f",
             trace_id,
@@ -681,7 +681,7 @@ class ProductSearchEngine:
 
     def plan(self, query: str, trace_id: str = "-") -> dict:
         started = time.perf_counter()
-        LOGGER.info(
+        LOGGER.debug(
             "[search:%s] step=plan status=start query_chars=%d models=%s",
             trace_id,
             len(query),
@@ -844,7 +844,7 @@ class ProductSearchEngine:
             else recall_window
         )
         vector_candidate_k = max(VECTOR_CANDIDATE_K, vector_top_k)
-        LOGGER.info(
+        LOGGER.debug(
             "[search:%s] step=retrieve status=start embedding_model=%s "
             "vector_k=%d bm25_k=%d hybrid_k=%d filters=%s",
             trace_id,
@@ -1081,7 +1081,7 @@ class ProductSearchEngine:
             if context:
                 ranking_query = query + "\n" + "\n".join(context)
         started = time.perf_counter()
-        LOGGER.info(
+        LOGGER.debug(
             "[search:%s] step=rerank status=start model=%s candidates=%d top_k=%d",
             trace_id,
             getattr(self.ranker, "model_label", RERANK_MODEL),
@@ -1289,7 +1289,7 @@ class ProductSearchEngine:
         if self.company_id:
             trace_id = f"{self.company_id}:{trace_id}"
         started = time.perf_counter()
-        LOGGER.info(
+        LOGGER.debug(
             "[search:%s] step=search status=start query_chars=%d limit=%s",
             trace_id,
             len(query),
@@ -1448,7 +1448,7 @@ class ProductSearchEngine:
                 )
             )
         )
-        LOGGER.info(
+        LOGGER.debug(
             "[search:%s] step=related_tail status=complete filters=%s "
             "primary=%d hybrid=%d related=%d duration_ms=%.0f",
             trace_id,
@@ -1460,7 +1460,7 @@ class ProductSearchEngine:
             len(related_product_ids),
             related_tail_seconds * 1000,
         )
-        LOGGER.info(
+        LOGGER.debug(
             "[search:%s] step=database_map status=start product_ids=%d",
             trace_id,
             len(product_ids),
@@ -1501,7 +1501,7 @@ class ProductSearchEngine:
                 for product in products
                 if product.get(self.result_id_column) is not None
             ]
-        LOGGER.info(
+        LOGGER.debug(
             "[search:%s] step=database_map status=complete rows=%d",
             trace_id,
             len(products),

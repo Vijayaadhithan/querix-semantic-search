@@ -119,6 +119,12 @@ does not expose Nginx, Docker,
 PostgreSQL, Redis, Ollama, arbitrary files, or environment variables. Use the
 server's normal operational tooling when those infrastructure logs are needed.
 
+At the normal `info` level, successful searches retain completion summaries
+for planning, retrieval, reranking, and the full engine search. Start/attempt,
+cache-miss, successful provider, related-tail, and database-map details require
+`API_LOG_LEVEL=debug`. API container logs rotate at 10 MB with three files, so
+their disk use remains bounded to roughly 30 MB per container.
+
 ## Security checklist
 
 - Authentication and rate limiting are enabled.
