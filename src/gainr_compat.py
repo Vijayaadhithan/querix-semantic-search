@@ -950,6 +950,12 @@ class GainrCompatibilityService:
         user_id: str | None = None,
     ) -> dict[str, Any]:
         request_started = time.perf_counter()
+        engine_ms = 0.0
+        database_ms = 0.0
+        eligibility_ms = 0.0
+        hydration_ms = 0.0
+        usage_ms = 0.0
+        trace_id = "-"
         planned, effective, meta = self._effective_plan(request)
         planning_ms = (time.perf_counter() - request_started) * 1000
         page_size = self.profile.compatibility.page_size
@@ -982,6 +988,7 @@ class GainrCompatibilityService:
             ) * 1000
             route = "deterministic"
             usage_store = self.product_search_service.usage_store
+            usage_started = time.perf_counter()
             if usage_store is not None:
                 usage_store.record(
                     company_id=self.profile.company_id,
@@ -990,6 +997,7 @@ class GainrCompatibilityService:
                     operation="search",
                     status="success",
                 )
+            usage_ms = (time.perf_counter() - usage_started) * 1000
             usage = {
                 "tracked": usage_store is not None,
                 "model_requests": 0,
@@ -1000,6 +1008,7 @@ class GainrCompatibilityService:
             }
             window_limited = False
         else:
+            engine_started = time.perf_counter()
             result = self.product_search_service.run_engine_search(
                 request.searchTerm,
                 limit=self.product_search_service.max_results,
@@ -1010,26 +1019,38 @@ class GainrCompatibilityService:
                 resolved_filters=effective,
                 allowed_ad_types=allowed_ad_types,
             )
+            engine_ms = (time.perf_counter() - engine_started) * 1000
+            trace_id = str(result.get("trace_id") or "-")
+            eligibility_started = time.perf_counter()
             eligible_ids = self.repository.filter_product_ids(
                 result.get("product_ids", []),
                 effective,
                 request.filter,
                 allowed_ad_types,
             )
+            eligibility_ms = (
+                time.perf_counter() - eligibility_started
+            ) * 1000
             total = len(eligible_ids)
             start = (request.page - 1) * page_size
+            hydration_started = time.perf_counter()
             rows = self.repository.hydrate_filtered(
                 eligible_ids[start : start + page_size],
                 effective,
                 request.filter,
                 allowed_ad_types,
             )
+            hydration_ms = (
+                time.perf_counter() - hydration_started
+            ) * 1000
             window_limited = (
                 len(result.get("product_ids", []))
                 >= self.product_search_service.max_results
             )
             route = "semantic"
+            usage_started = time.perf_counter()
             usage = self.product_search_service._record_usage(result)
+            usage_ms = (time.perf_counter() - usage_started) * 1000
         card_mapping_started = time.perf_counter()
         cards = [self._card(row) for row in rows]
         card_mapping_ms = (
@@ -1055,12 +1076,29 @@ class GainrCompatibilityService:
                 ),
                 "usage": usage,
             }
+        recent_started = time.perf_counter()
         if request.page == 1 and request.searchTerm:
             self.remember_search(user_id, request.searchTerm)
+        recent_ms = (time.perf_counter() - recent_started) * 1000
+        duration_ms = (time.perf_counter() - request_started) * 1000
+        logger.info(
+            "[search:%s] step=compat_response status=complete route=%s "
+            "engine_ms=%.0f database_ms=%.0f eligibility_ms=%.0f "
+            "hydration_ms=%.0f response_map_ms=%.0f usage_ms=%.0f "
+            "recent_ms=%.0f products=%d duration_ms=%.0f",
+            trace_id,
+            route,
+            engine_ms,
+            database_ms,
+            eligibility_ms,
+            hydration_ms,
+            card_mapping_ms,
+            usage_ms,
+            recent_ms,
+            len(cards),
+            duration_ms,
+        )
         if route == "deterministic":
-            duration_ms = (
-                time.perf_counter() - request_started
-            ) * 1000
             self.product_search_service.record_external_search(
                 request.searchTerm,
                 execution_path="deterministic_filter",
