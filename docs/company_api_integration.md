@@ -44,14 +44,16 @@ GET /api/v1/ready
 Successful deep readiness results are cached for five minutes by default to
 avoid repeatedly querying pgvector, the source database, and Ollama when an
 external monitor polls frequently. `cached` in the response indicates whether
-the component results were reused. Failed readiness results are never cached.
+the aggregate result was reused. Failed readiness results are never cached.
 For a cheap process-only liveness probe, use `GET /api/v1/live`.
 
 This endpoint returns `200` only when the configured tenant indexes, source
-database, and Ollama embedding model are available. It returns `503` with
-component status when a critical dependency is unavailable. Redis and hosted
-rerank providers are not readiness blockers because search has local/fusion
-fallbacks for those dependencies.
+database, and Ollama embedding model are available. It returns `503` when a
+critical dependency is unavailable. The public response contains only the
+aggregate status, tenant mode, configured tenant count, and cache/timestamp
+metadata; it does not expose tenant names, index counts, model names, or
+backend component details. Redis and hosted rerank providers are not readiness
+blockers because search has local/fusion fallbacks for those dependencies.
 
 Authenticated tenant health:
 

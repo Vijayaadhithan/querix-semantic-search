@@ -1653,7 +1653,6 @@ def create_app(
                 "checked_at_utc": datetime.now(timezone.utc).isoformat(),
                 "cache_seconds": API_READINESS_CACHE_SECONDS,
                 "cached": False,
-                "checks": checks,
             }
             status_code = 200 if ready_now else 503
             if ready_now and API_READINESS_CACHE_SECONDS > 0:

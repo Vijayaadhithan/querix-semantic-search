@@ -243,12 +243,16 @@ def test_http_contract_and_validation():
         cached_ready.json()["checked_at_utc"]
         == ready.json()["checked_at_utc"]
     )
+    assert set(ready.json()) == {
+        "status",
+        "tenant_mode",
+        "configured_companies",
+        "checked_at_utc",
+        "cache_seconds",
+        "cached",
+    }
     assert live.status_code == 200
     assert live.json() == {"status": "ok"}
-    assert ready.json()["checks"]["legacy"]["components"]["bm25"] == {
-        "ok": True,
-        "indexed_products": 12,
-    }
     assert health.status_code == 200
     assert health.json()["indexed_products"] == 12
     assert health.json()["reranker_loaded"] is True
@@ -286,10 +290,7 @@ def test_readiness_fails_when_a_critical_index_is_empty():
 
     assert response.status_code == 503
     assert response.json()["status"] == "not_ready"
-    assert response.json()["checks"]["legacy"]["components"]["pgvector"] == {
-        "ok": False,
-        "indexed_products": 0,
-    }
+    assert "checks" not in response.json()
     assert recovered.status_code == 200
     assert recovered.json()["cached"] is False
 
@@ -506,6 +507,8 @@ def test_api_key_routes_to_isolated_company_service_and_binds_cursor(tmp_path):
         preload_models=False,
     )
     with TestClient(app) as client:
+        client.app.state.check_ollama_readiness = False
+        public_ready = client.get("/api/v1/ready")
         missing = client.post("/api/v1/search", json={"query": "camera"})
         invalid = client.post(
             "/api/v1/search",
@@ -531,6 +534,11 @@ def test_api_key_routes_to_isolated_company_service_and_binds_cursor(tmp_path):
             },
         )
 
+    assert public_ready.status_code == 200
+    assert public_ready.json()["configured_companies"] == 2
+    assert "checks" not in public_ready.json()
+    assert "alpha" not in public_ready.text
+    assert "beta" not in public_ready.text
     assert missing.status_code == 401
     assert invalid.status_code == 401
     assert alpha_result.status_code == 200
