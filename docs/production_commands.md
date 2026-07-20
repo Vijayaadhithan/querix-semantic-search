@@ -45,6 +45,22 @@ curl -fsS \
   -H "X-Admin-Key: $API_ADMIN_KEY" | jq
 ```
 
+For recent sanitized API logs without SSH:
+
+```bash
+curl -fsS \
+  "https://api.example.com/api/v1/admin/logs?limit=100&level=INFO" \
+  -H "X-Admin-Key: $API_ADMIN_KEY" | jq
+```
+
+For polling, pass the previous response's `next_after_id`:
+
+```bash
+curl -fsS \
+  "https://api.example.com/api/v1/admin/logs?level=INFO&after_id=$LAST_LOG_ID" \
+  -H "X-Admin-Key: $API_ADMIN_KEY" | jq
+```
+
 `docker compose restart api` reuses the existing image and environment.
 Recreate the container after `.env` or `.env.keys` changes. Rebuild it after
 source code, dependencies, or tenant YAML changes. None of these commands runs

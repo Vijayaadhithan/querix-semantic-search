@@ -100,6 +100,23 @@ curl -fsS \
   -H "X-Admin-Key: $API_ADMIN_KEY" | jq
 ```
 
+Authenticated administrators can also poll a bounded, sanitized application
+log feed without server access:
+
+```bash
+curl -fsS \
+  "https://api.example.com/api/v1/admin/logs?limit=100&level=WARNING" \
+  -H "X-Admin-Key: $API_ADMIN_KEY" | jq
+```
+
+Use `next_after_id` as the next request's `after_id` to retrieve only newer
+entries. The feed retains at most `API_ADMIN_LOG_BUFFER_SIZE` entries per API
+process, resets when that process restarts, omits tracebacks, and redacts common
+credential formats. It includes API, search/provider, compatibility, and
+Uvicorn access messages. It intentionally does not expose Nginx, Docker,
+PostgreSQL, Redis, Ollama, arbitrary files, or environment variables. Use the
+server's normal operational tooling when those infrastructure logs are needed.
+
 ## Security checklist
 
 - Authentication and rate limiting are enabled.

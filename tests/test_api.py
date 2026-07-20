@@ -974,6 +974,24 @@ def test_admin_status_requires_separate_key_and_hides_queries(
                 "X-Admin-Key": "admin-key-with-at-least-24-chars",
             },
         )
+        logs_missing = client.get("/api/v1/admin/logs")
+        api.LOGGER.warning(
+            "admin_log_test status=warning api_key=test-secret-value"
+        )
+        logs = client.get(
+            "/api/v1/admin/logs?limit=5&level=WARNING",
+            headers={
+                "X-Admin-Key": "admin-key-with-at-least-24-chars",
+            },
+        )
+        logs_cursor = logs.json()["next_after_id"]
+        api.LOGGER.error("admin_log_test status=error")
+        incremental_logs = client.get(
+            f"/api/v1/admin/logs?level=WARNING&after_id={logs_cursor}",
+            headers={
+                "X-Admin-Key": "admin-key-with-at-least-24-chars",
+            },
+        )
         events = client.get(
             "/api/v1/gainr/admin/search-events?limit=5",
             headers={
@@ -1005,6 +1023,17 @@ def test_admin_status_requires_separate_key_and_hides_queries(
     assert global_payload["companies"][0]["company_id"] == "gainr"
     assert global_payload["companies"][0]["loaded"] is True
     assert "private customer query" not in global_status.text
+    assert logs_missing.status_code == 401
+    assert logs.status_code == 200
+    assert logs.headers["cache-control"] == "no-store"
+    logs_payload = logs.json()
+    assert logs_payload["retained"] >= 1
+    assert logs_payload["events"][-1]["level"] == "WARNING"
+    assert "test-secret-value" not in logs.text
+    assert "[REDACTED]" in logs.text
+    assert incremental_logs.status_code == 200
+    assert incremental_logs.json()["events"][-1]["level"] == "ERROR"
+    assert incremental_logs.json()["events"][-1]["id"] > logs_cursor
     assert events.status_code == 200
     events_payload = events.json()
     assert events_payload["company_id"] == "gainr"

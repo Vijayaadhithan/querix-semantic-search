@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable
 
 import requests
-from fastapi import FastAPI, Header, HTTPException, Query
+from fastapi import FastAPI, Header, HTTPException, Query, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import (
@@ -29,6 +29,7 @@ from pydantic import (
     model_validator,
 )
 
+from admin_logs import AdminLogBuffer, LOG_LEVELS
 from bm25_index import PersistentBM25Index
 from gainr_compat import (
     GainrCompatibilityService,
@@ -41,6 +42,7 @@ from redis_cache import create_redis_cache
 from reranker import SharedReranker
 from search_engine import ProductSearchEngine
 from settings import (
+    API_ADMIN_LOG_BUFFER_SIZE,
     API_ADMIN_KEY,
     API_AUTH_ENABLED,
     API_CORS_ORIGINS,
@@ -1329,9 +1331,21 @@ def create_app(
                 "Ollama embedding model ready in %.0f ms.",
                 embedding_warmup["embedding_model"].get("total_ms", 0.0),
             )
+        admin_log_buffer = AdminLogBuffer(API_ADMIN_LOG_BUFFER_SIZE)
+        application.state.admin_log_buffer = admin_log_buffer
+        captured_loggers = [
+            logging.getLogger("uvicorn.error"),
+            logging.getLogger("uvicorn.access"),
+            logging.getLogger("gainr_compat"),
+        ]
+        for captured_logger in captured_loggers:
+            captured_logger.addHandler(admin_log_buffer)
         try:
             yield
         finally:
+            for captured_logger in captured_loggers:
+                captured_logger.removeHandler(admin_log_buffer)
+            admin_log_buffer.close()
             if pool is not None:
                 pool.close()
             if engine is not None:
@@ -1703,6 +1717,37 @@ def create_app(
             "configured_companies": len(companies),
             "loaded_companies": len(loaded),
             "companies": companies,
+        }
+
+    @application.get(
+        "/api/v1/admin/logs",
+        tags=["admin"],
+    )
+    def admin_logs(
+        response: Response,
+        limit: int = Query(default=100, ge=1, le=200),
+        level: str = Query(
+            default="INFO",
+            pattern="^(DEBUG|INFO|WARNING|ERROR|CRITICAL)$",
+        ),
+        after_id: int | None = Query(default=None, ge=0),
+        x_admin_key: str | None = Header(
+            default=None,
+            alias="X-Admin-Key",
+        ),
+    ) -> dict[str, Any]:
+        require_admin_key(x_admin_key)
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["Pragma"] = "no-cache"
+        if level not in LOG_LEVELS:
+            raise HTTPException(status_code=422, detail="Invalid log level.")
+        return {
+            "status": "ok",
+            **application.state.admin_log_buffer.snapshot(
+                limit=limit,
+                minimum_level=level,
+                after_id=after_id,
+            ),
         }
 
     @application.get(

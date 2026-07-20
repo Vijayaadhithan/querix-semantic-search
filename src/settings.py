@@ -436,6 +436,16 @@ API_RATE_LIMIT_ENABLED = _env_bool(
 API_ADMIN_KEY = os.getenv("API_ADMIN_KEY", "").strip()
 if API_ADMIN_KEY and len(API_ADMIN_KEY) < 24:
     raise ValueError("API_ADMIN_KEY must contain at least 24 characters.")
+API_ADMIN_LOG_BUFFER_SIZE = int(
+    os.getenv(
+        "API_ADMIN_LOG_BUFFER_SIZE",
+        str(CONFIG.get("api", {}).get("admin_log_buffer_size", 1000)),
+    )
+)
+if not 100 <= API_ADMIN_LOG_BUFFER_SIZE <= 5000:
+    raise ValueError(
+        "API_ADMIN_LOG_BUFFER_SIZE must be between 100 and 5000."
+    )
 API_TENANT_CONFIG_DIR = PROJECT_ROOT / os.getenv(
     "API_TENANT_CONFIG_DIR",
     str(CONFIG.get("api", {}).get("tenant_config_dir", "configs/tenants")),

@@ -98,6 +98,8 @@ api:
   search_slot_timeout_seconds: 5
   # Use debug for library-level diagnostics; info shows the search flow.
   log_level: info
+  # Sanitized, in-memory entries retained for the admin log polling endpoint.
+  admin_log_buffer_size: 1000
   # Validate and share the hosted provider chain when the API starts.
   preload_reranker: true
   # Normal product-grid and infinite-scroll batch size.
