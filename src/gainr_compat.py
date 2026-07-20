@@ -273,6 +273,14 @@ class GainrDatabaseRepository:
         ) as connection:
             yield connection
 
+    @contextmanager
+    def _connection_scope(self, connection=None):
+        if connection is not None:
+            yield connection
+            return
+        with self.connection() as active_connection:
+            yield active_connection
+
     def suggestions(self, term: str, limit: int) -> list[str]:
         prefix = f"{term}%"
         query = f"""
@@ -517,7 +525,7 @@ class GainrDatabaseRepository:
                     (*params, page_size, offset),
                 )
                 rows = list(cursor.fetchall())
-        self._attach_attributes(rows)
+            self._attach_attributes(rows, connection=connection)
         return rows, total
 
     def hydrate_filtered(
@@ -548,16 +556,16 @@ class GainrDatabaseRepository:
                     params,
                 )
                 rows = list(cursor.fetchall())
-        rows_by_id = {
-            str(row[self.config.result_id_column]): row
-            for row in rows
-        }
-        ordered = [
-            rows_by_id[str(product_id)]
-            for product_id in product_ids
-            if str(product_id) in rows_by_id
-        ]
-        self._attach_attributes(ordered)
+            rows_by_id = {
+                str(row[self.config.result_id_column]): row
+                for row in rows
+            }
+            ordered = [
+                rows_by_id[str(product_id)]
+                for product_id in product_ids
+                if str(product_id) in rows_by_id
+            ]
+            self._attach_attributes(ordered, connection=connection)
         return ordered
 
     def filter_product_ids(
@@ -600,7 +608,12 @@ class GainrDatabaseRepository:
             if str(product_id) in eligible
         ]
 
-    def _attach_attributes(self, rows: list[dict]) -> None:
+    def _attach_attributes(
+        self,
+        rows: list[dict],
+        *,
+        connection=None,
+    ) -> None:
         product_ids = [
             row.get(self.config.result_id_column)
             for row in rows
@@ -620,8 +633,8 @@ class GainrDatabaseRepository:
             ]
         )
         try:
-            with self.connection() as connection:
-                with connection.cursor() as cursor:
+            with self._connection_scope(connection) as active_connection:
+                with active_connection.cursor() as cursor:
                     cursor.execute(
                         f"""
                         SELECT ads_id, attribute_id, value
@@ -662,8 +675,8 @@ class GainrDatabaseRepository:
                 for field in GAINR_USER_FIELDS
             )
             try:
-                with self.connection() as connection:
-                    with connection.cursor() as cursor:
+                with self._connection_scope(connection) as active_connection:
+                    with active_connection.cursor() as cursor:
                         cursor.execute(
                             f"""
                             SELECT {selected_fields}
@@ -957,6 +970,7 @@ class GainrCompatibilityService:
         hydration_ms = 0.0
         usage_ms = 0.0
         trace_id = "-"
+        eligibility_source = "database"
         planned, effective, meta = self._effective_plan(request)
         planning_ms = (time.perf_counter() - request_started) * 1000
         page_size = self.profile.compatibility.page_size
@@ -1023,12 +1037,41 @@ class GainrCompatibilityService:
             engine_ms = (time.perf_counter() - engine_started) * 1000
             trace_id = str(result.get("trace_id") or "-")
             eligibility_started = time.perf_counter()
-            eligible_ids = self.repository.filter_product_ids(
-                result.get("product_ids", []),
-                effective,
-                request.filter,
-                allowed_ad_types,
+            database_only_filters = bool(
+                effective.get("categorical")
+                or effective.get("min_rental_fee") is not None
+                or effective.get("max_rental_fee") is not None
+                or request.filter.fee
             )
+            if database_only_filters:
+                eligible_ids = self.repository.filter_product_ids(
+                    result.get("product_ids", []),
+                    effective,
+                    request.filter,
+                    allowed_ad_types,
+                )
+            else:
+                eligibility_source = "engine_rows"
+                id_column = self.repository.config.result_id_column
+                current_rows = {
+                    str(row[id_column]): row
+                    for row in result.get("products", [])
+                    if row.get(id_column) is not None
+                }
+                eligible_ids = []
+                for product_id in result.get("product_ids", []):
+                    row = current_rows.get(str(product_id))
+                    if row is None:
+                        continue
+                    deleted_at = row.get("deleted_at")
+                    if deleted_at is not None and str(deleted_at).strip():
+                        continue
+                    if (
+                        allowed_ad_types is not None
+                        and str(row.get("type")) not in allowed_ad_types
+                    ):
+                        continue
+                    eligible_ids.append(product_id)
             eligibility_ms = (
                 time.perf_counter() - eligibility_started
             ) * 1000
@@ -1084,13 +1127,15 @@ class GainrCompatibilityService:
         duration_ms = (time.perf_counter() - request_started) * 1000
         PERFORMANCE_LOGGER.info(
             "[search:%s] step=compat_response status=complete route=%s "
-            "engine_ms=%.0f database_ms=%.0f eligibility_ms=%.0f "
+            "engine_ms=%.0f database_ms=%.0f eligibility_source=%s "
+            "eligibility_ms=%.0f "
             "hydration_ms=%.0f response_map_ms=%.0f usage_ms=%.0f "
             "recent_ms=%.0f products=%d duration_ms=%.0f",
             trace_id,
             route,
             engine_ms,
             database_ms,
+            eligibility_source,
             eligibility_ms,
             hydration_ms,
             card_mapping_ms,

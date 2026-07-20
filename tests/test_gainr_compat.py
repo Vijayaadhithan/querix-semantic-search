@@ -239,6 +239,59 @@ def test_explicit_filters_override_only_matching_auto_filters(tmp_path):
     }
 
 
+def test_unfiltered_semantic_search_reuses_current_engine_rows(tmp_path):
+    adapter, engine, repository = service(tmp_path)
+
+    class RepositoryConfig:
+        result_id_column = "id"
+
+    repository.config = RepositoryConfig()
+
+    def plan(query):
+        return {
+            "query_plan": {
+                "semantic_query": query,
+                "keyword_query": query,
+                "target_ad_type": "offer",
+                "sort_order": None,
+                "execution_path": "semantic",
+                "inferred_categories": {},
+            },
+            "resolved_filters": {"categorical": {}},
+            "unresolved_filters": {},
+            "query_model_metrics": {},
+            "seconds": 0.0,
+            "plan_cache_hit": False,
+        }
+
+    def search(query, limit=None, **kwargs):
+        engine.calls.append((query, limit, kwargs))
+        return {
+            "query_plan": kwargs["planned_result"]["query_plan"],
+            "resolved_filters": kwargs["resolved_filters"],
+            "unresolved_filters": {},
+            "products": [
+                {"id": 1, "type": "1", "deleted_at": None},
+                {"id": 2, "type": "2", "deleted_at": None},
+                {"id": 3, "type": "1", "deleted_at": "2026-01-01"},
+            ],
+            "product_ids": [1, 2, 3],
+            "query_model_metrics": {},
+            "reranker_attempts": [],
+        }
+
+    engine.plan = plan
+    engine.search = search
+    request = GainrFilterResultRequest.model_validate(
+        {"searchTerm": "something useful", "filter": {}, "page": 1}
+    )
+
+    adapter.filter_results(request)
+
+    assert repository.filter_ids_call is None
+    assert repository.hydrate_call[0] == [1]
+
+
 def test_explicit_ids_clear_conflicting_inferred_filter_hierarchy(tmp_path):
     adapter, engine, _repository = service(tmp_path)
 
