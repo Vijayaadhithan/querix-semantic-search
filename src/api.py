@@ -1182,7 +1182,11 @@ class TenantServicePool:
                 planner_enabled=profile.planner_enabled,
                 planner_prompt_context=profile.planner_prompt_context,
                 planner_query_aliases=profile.planner_query_aliases,
-                vector_post_filter_metadata=False,
+                vector_post_filter_metadata=(
+                    "adaptive"
+                    if profile.retrieval.adaptive_vector_post_filter_metadata
+                    else False
+                ),
                 semantic_related_tail_enabled=(
                     profile.retrieval.semantic_related_tail_enabled
                 ),

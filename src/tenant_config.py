@@ -54,6 +54,7 @@ class TenantRateLimit:
 
 @dataclass(frozen=True)
 class TenantRetrievalConfig:
+    adaptive_vector_post_filter_metadata: bool = False
     semantic_related_tail_enabled: bool = True
     semantic_related_tail_requires_explicit_category: bool = False
     reranker_relative_score_floor: float = 0.0
@@ -559,6 +560,12 @@ def load_tenant_profile(path: Path) -> TenantProfile:
             "must be a mapping"
         )
     retrieval_config = TenantRetrievalConfig(
+        adaptive_vector_post_filter_metadata=bool(
+            retrieval.get(
+                "adaptive_vector_post_filter_metadata",
+                False,
+            )
+        ),
         semantic_related_tail_enabled=bool(
             retrieval.get("semantic_related_tail_enabled", True)
         ),

@@ -466,6 +466,7 @@ class PgVectorCollection:
         where: dict[str, Any] | None = None,
         include: list[str] | None = None,
         exact_filter_max_rows: int | None = None,
+        post_filter_n_results: int | None = None,
     ) -> dict[str, list[list]]:
         include = include or []
         all_ids = []
@@ -497,8 +498,9 @@ class PgVectorCollection:
                     ):
                         # The limited ID CTE is cheap with the expression
                         # indexes. If every eligible ID fits under the bound,
-                        # rank the complete set exactly. Otherwise fall back to
-                        # filtered HNSW without dropping any filter predicates.
+                        # rank the complete set exactly. Broader subsets use
+                        # either bounded post-filter HNSW (when requested) or
+                        # filtered HNSW without dropping filter predicates.
                         cursor.execute(
                             f"""
                             WITH eligible AS MATERIALIZED (
@@ -552,20 +554,41 @@ class PgVectorCollection:
                                 if row["id"] is not None
                             ]
                     if rows is None:
+                        active_where_clause = where_clause
+                        active_filter_params = filter_params
+                        active_n_results = n_results
+                        if (
+                            eligible_rows is not None
+                            and exact_filter_max_rows is not None
+                            and eligible_rows > exact_filter_max_rows
+                            and post_filter_n_results is not None
+                            and post_filter_n_results > 0
+                        ):
+                            # Broad metadata-filtered HNSW can degrade into a
+                            # long iterative scan. Retrieve a bounded ordinary
+                            # HNSW window; retrieval.py applies the original
+                            # predicate exactly before returning candidates.
+                            strategy = "hnsw_post_filter"
+                            active_where_clause = ""
+                            active_filter_params = []
+                            active_n_results = max(
+                                n_results,
+                                post_filter_n_results,
+                            )
                         cursor.execute(
                             f"""
                             SELECT id, document, metadata,
                                    embedding <=> %s::vector AS distance
                             FROM {self._qualified()}
-                            {where_clause}
+                            {active_where_clause}
                             ORDER BY embedding <=> %s::vector
                             LIMIT %s
                             """,
                             (
                                 vector_literal,
-                                *filter_params,
+                                *active_filter_params,
                                 vector_literal,
-                                n_results,
+                                active_n_results,
                             ),
                         )
                         rows = cursor.fetchall()

@@ -293,7 +293,7 @@ class ProductSearchEngine:
         planner_enabled: bool = True,
         planner_prompt_context: str = "",
         planner_query_aliases: dict[str, str] | None = None,
-        vector_post_filter_metadata: bool = False,
+        vector_post_filter_metadata: bool | str = False,
         semantic_related_tail_enabled: bool = RELATED_TAIL_ENABLED,
         semantic_related_tail_requires_explicit_category: bool = False,
         reranker_relative_score_floor: float = 0.0,
@@ -470,6 +470,7 @@ class ProductSearchEngine:
         resolved_filters: dict | None = None,
         allowed_ad_types: set[str] | None = None,
         ranking_window: int | None = None,
+        hydrate_products: bool = True,
     ) -> dict | None:
         if not RESULT_CACHE_ENABLED or self.shared_plan_cache is None:
             return None
@@ -511,7 +512,11 @@ class ProductSearchEngine:
             return None
 
         database_started = time.perf_counter()
-        products = self._fetch_products(cached["product_ids"])
+        products = (
+            self._fetch_products(cached["product_ids"])
+            if hydrate_products
+            else []
+        )
         primary_identities = {
             str(product_id)
             for product_id in cached["primary_product_ids"]
@@ -1260,6 +1265,7 @@ class ProductSearchEngine:
         resolved_filters: dict | None = None,
         allowed_ad_types: set[str] | None = None,
         ranking_window: int | None = None,
+        hydrate_products: bool = True,
     ) -> dict:
         if limit is not None and limit <= 0:
             raise ValueError("Search limit must be greater than zero.")
@@ -1302,6 +1308,7 @@ class ProductSearchEngine:
             resolved_filters,
             allowed_ad_types,
             ranking_window,
+            hydrate_products,
         )
         if cached_result is not None:
             cached_result["trace_id"] = trace_id
@@ -1465,7 +1472,7 @@ class ProductSearchEngine:
             trace_id,
             len(product_ids),
         )
-        products = self._fetch_products(product_ids)
+        products = self._fetch_products(product_ids) if hydrate_products else []
         primary_identities = {
             str(product_id)
             for product_id in primary_product_ids
@@ -1483,7 +1490,7 @@ class ProductSearchEngine:
             for product in products
         ]
         sort_order = planned["query_plan"].get("sort_order")
-        if sort_order in {"price_asc", "price_desc"}:
+        if sort_order in {"price_asc", "price_desc"} and hydrate_products:
             descending = sort_order == "price_desc"
 
             def price_key(product):

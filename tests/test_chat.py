@@ -191,6 +191,35 @@ def test_filtered_vector_query_uses_bounded_post_filter_window():
     assert [result["id"] for result in results] == ["doc-1"]
 
 
+def test_filtered_vector_query_passes_adaptive_post_filter_window():
+    metadata = {
+        "source_file": "mysql:gainr.ads_search_ready",
+        "company_id": "gainr",
+        "rental_duration": "Per Day",
+    }
+    collection = CapturingVectorCollection(metadata, count=10_000)
+
+    vector_search(
+        "comfortable vehicle",
+        top_k=20,
+        candidate_k=40,
+        collection=collection,
+        source_name="mysql:gainr.ads_search_ready",
+        resolved_filters={
+            "categorical": {"rental_duration": ["Per Day"]}
+        },
+        company_id="gainr",
+        embedding_provider=FakeEmbeddingProvider(),
+        post_filter_metadata="adaptive",
+    )
+
+    assert collection.query_options["where"] == {
+        "rental_duration": {"$in": ["Per Day"]}
+    }
+    assert collection.query_options["n_results"] == 40
+    assert collection.query_options["post_filter_n_results"] == 400
+
+
 def test_parse_query_plan_normalizes_fields_and_price_range():
     plan = parse_query_plan(
         """

@@ -224,6 +224,7 @@ def test_explicit_filters_override_only_matching_auto_filters(tmp_path):
     assert effective["max_rental_fee"] == 1000
     assert search_kwargs["allowed_ad_types"] == {"2"}
     assert search_kwargs["ranking_window"] == 40
+    assert search_kwargs["hydrate_products"] is False
     assert repository.filter_ids_call[0] == [1, 2]
     assert repository.hydrate_call[0] == [1, 2]
     assert response["data"][0]["city"] == {

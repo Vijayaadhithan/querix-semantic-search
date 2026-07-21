@@ -209,6 +209,91 @@ def test_pgvector_broad_filtered_subset_falls_back_to_hnsw(monkeypatch):
     ) == 1
 
 
+def test_pgvector_broad_filter_can_use_bounded_unfiltered_hnsw(monkeypatch):
+    statements = []
+
+    class FakeCursor:
+        rows = []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, query, params=None):
+            compact = " ".join(query.split())
+            statements.append((compact, params))
+            if compact.startswith("WITH eligible AS MATERIALIZED"):
+                self.rows = [
+                    {
+                        "id": None,
+                        "document": None,
+                        "metadata": None,
+                        "distance": None,
+                        "eligible_count": 101,
+                    }
+                ]
+            elif compact.startswith("SELECT id, document, metadata"):
+                self.rows = [
+                    {
+                        "id": "hnsw-result",
+                        "document": "broad match",
+                        "metadata": {"state_name": "Tamil Nadu"},
+                        "distance": 0.2,
+                    }
+                ]
+
+        def fetchall(self):
+            return self.rows
+
+    class FakeConnection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def cursor(self):
+            return FakeCursor()
+
+    monkeypatch.setattr(
+        pgvector_store,
+        "postgres_connection",
+        lambda *_args, **_kwargs: FakeConnection(),
+    )
+    collection = PgVectorCollection.__new__(PgVectorCollection)
+    collection.config = PostgresRuntimeConfig(
+        host="localhost",
+        port=5432,
+        database="vectors",
+        user="vectors",
+        password="secret",
+    )
+    collection.table = "gainr_vectors"
+    collection.dimensions = 2
+    collection.hnsw_ef_search = 100
+    collection._query_state = threading.local()
+
+    results = collection.query(
+        query_embeddings=[[0.1, 0.2]],
+        n_results=80,
+        where={"state_name": "Tamil Nadu"},
+        include=["documents", "metadatas", "distances"],
+        exact_filter_max_rows=100,
+        post_filter_n_results=800,
+    )
+
+    assert results["ids"] == [["hnsw-result"]]
+    assert collection.last_query_metrics()["strategy"] == "hnsw_post_filter"
+    query_sql, query_params = next(
+        entry for entry in statements
+        if entry[0].startswith("SELECT id, document, metadata")
+    )
+    assert "metadata ->> 'state_name'" not in query_sql
+    assert query_params[-1] == 800
+
+
 def test_pgvector_source_migration_keeps_existing_target_rows(monkeypatch):
     state = {
         "source_batches": [

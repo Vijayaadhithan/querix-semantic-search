@@ -69,7 +69,9 @@ Use incremental ingestion for routine updates. It writes changed BM25 rows and v
 
 The enabled systemd timer starts this guarded job around 03:00 IST. A source
 scan may read all eligible rows, but it embeds only changed/new content,
-reconciles deletions, and restarts the API only after success.
+reconciles deletions, and restarts the API only after success. Once readiness
+passes, the job runs several representative unfiltered vector searches to warm
+the shared PostgreSQL HNSW buffer paths before live traffic resumes.
 
 Use deletion reconciliation only after a complete scan. Use forced re-embedding when the embedding model or embedding-text contract changes. Use replacement only for an authoritative tenant rebuild, because it clears that tenant's existing vector source and BM25 index before repopulation.
 

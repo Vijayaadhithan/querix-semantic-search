@@ -80,6 +80,10 @@ planner:
     machine, device, or equipment.
 
 retrieval:
+  # Selective metadata filters are ranked exactly. Broad filters avoid
+  # pgvector's slow filtered-HNSW path by over-fetching a bounded unfiltered
+  # HNSW window and applying the same predicate in the retrieval layer.
+  adaptive_vector_post_filter_metadata: true
   # Keep the strongest reranked matches first, then the remaining fused
   # vector/BM25 matches, and only then continue from the filtered catalogue.
   # related_tail_product_ids still requires at least one structured constraint,

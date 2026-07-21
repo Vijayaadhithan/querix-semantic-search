@@ -39,13 +39,21 @@ docker compose run --rm --name "$CONTAINER_NAME" api python src/ingest.py \
 # only after a successful ingestion so the next request sees the new revision.
 docker compose restart api
 
+api_ready=false
 for _attempt in $(seq 1 30); do
   if curl -fsS http://127.0.0.1:8000/api/v1/ready >/dev/null; then
-    echo "Incremental ingestion completed and API is ready."
-    exit 0
+    api_ready=true
+    break
   fi
   sleep 5
 done
 
-echo "Ingestion completed, but the API did not become ready within 150 seconds." >&2
-exit 1
+if [[ "$api_ready" != "true" ]]; then
+  echo "Ingestion completed, but the API did not become ready within 150 seconds." >&2
+  exit 1
+fi
+
+echo "API is ready; warming representative HNSW paths."
+docker compose exec -T api python scripts/warm_hnsw.py \
+  --company "$COMPANY_ID"
+echo "Incremental ingestion and HNSW warm-up completed."

@@ -129,7 +129,18 @@ def vector_search(
             company_id,
             include_unpriced,
         )
-        if where_filter is not None and post_filter_metadata:
+        if where_filter is not None and post_filter_metadata == "adaptive":
+            query_options["where"] = where_filter
+            query_options["exact_filter_max_rows"] = (
+                VECTOR_EXACT_FILTER_MAX_ROWS
+            )
+            query_options["post_filter_n_results"] = min(
+                max(candidate_k, top_k)
+                * VECTOR_POST_FILTER_OVERFETCH_FACTOR,
+                VECTOR_POST_FILTER_MAX_CANDIDATES,
+                row_count,
+            )
+        elif where_filter is not None and post_filter_metadata:
             # Some metadata-filtered ANN paths can be expensive on large
             # tables. Retrieve a bounded HNSW window and enforce the exact
             # constraints with metadata_matches_filters below.
@@ -149,6 +160,14 @@ def vector_search(
             break
         except TypeError as exc:
             message = str(exc)
+            if (
+                "post_filter_n_results" in message
+                and "post_filter_n_results" in query_options
+            ):
+                # Older/custom adapters retain the filtered query and exact
+                # selective-ranking behavior without adaptive post-filtering.
+                query_options.pop("post_filter_n_results")
+                continue
             if (
                 "exact_filter_max_rows" in message
                 and "exact_filter_max_rows" in query_options

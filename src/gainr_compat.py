@@ -1033,6 +1033,14 @@ class GainrCompatibilityService:
                 planned_result=planned,
                 resolved_filters=effective,
                 allowed_ad_types=allowed_ad_types,
+                # The compatibility repository checks current eligibility and
+                # hydrates the requested 20-row page. Avoid fetching the full
+                # semantic result window first unless a price sort needs the
+                # engine's complete row set.
+                hydrate_products=(
+                    planned["query_plan"].get("sort_order")
+                    in {"price_asc", "price_desc"}
+                ),
             )
             engine_ms = (time.perf_counter() - engine_started) * 1000
             trace_id = str(result.get("trace_id") or "-")
@@ -1043,7 +1051,7 @@ class GainrCompatibilityService:
                 or effective.get("max_rental_fee") is not None
                 or request.filter.fee
             )
-            if database_only_filters:
+            if database_only_filters or not result.get("products"):
                 eligible_ids = self.repository.filter_product_ids(
                     result.get("product_ids", []),
                     effective,

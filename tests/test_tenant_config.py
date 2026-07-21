@@ -135,6 +135,10 @@ def test_tenant_profiles_resolve_separate_storage_and_api_keys(
     assert profiles["alpha"].database.tls_mode == "disable"
     assert profiles["alpha"].retrieval.semantic_related_tail_enabled is True
     assert (
+        profiles["alpha"].retrieval.adaptive_vector_post_filter_metadata
+        is False
+    )
+    assert (
         profiles["alpha"]
         .retrieval.semantic_related_tail_requires_explicit_category
         is False
