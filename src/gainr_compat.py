@@ -987,6 +987,12 @@ class GainrCompatibilityService:
                 else "1"
             }
         )
+        database_only_filters = bool(
+            effective.get("categorical")
+            or effective.get("min_rental_fee") is not None
+            or effective.get("max_rental_fee") is not None
+            or request.filter.fee
+        )
         if execution_path == "deterministic_filter":
             database_started = time.perf_counter()
             rows, total = self.repository.search_catalog(
@@ -1036,21 +1042,18 @@ class GainrCompatibilityService:
                 # The compatibility repository checks current eligibility and
                 # hydrates the requested 20-row page. Avoid fetching the full
                 # semantic result window first unless a price sort needs the
-                # engine's complete row set.
+                # engine's complete row set. Unfiltered searches retain the
+                # engine rows because they are cheaper than another remote-DB
+                # eligibility round trip and can be reused below.
                 hydrate_products=(
-                    planned["query_plan"].get("sort_order")
+                    not database_only_filters
+                    or planned["query_plan"].get("sort_order")
                     in {"price_asc", "price_desc"}
                 ),
             )
             engine_ms = (time.perf_counter() - engine_started) * 1000
             trace_id = str(result.get("trace_id") or "-")
             eligibility_started = time.perf_counter()
-            database_only_filters = bool(
-                effective.get("categorical")
-                or effective.get("min_rental_fee") is not None
-                or effective.get("max_rental_fee") is not None
-                or request.filter.fee
-            )
             if database_only_filters or not result.get("products"):
                 eligible_ids = self.repository.filter_product_ids(
                     result.get("product_ids", []),

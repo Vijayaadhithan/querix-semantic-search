@@ -289,6 +289,7 @@ def test_unfiltered_semantic_search_reuses_current_engine_rows(tmp_path):
 
     adapter.filter_results(request)
 
+    assert engine.calls[0][2]["hydrate_products"] is True
     assert repository.filter_ids_call is None
     assert repository.hydrate_call[0] == [1]
 
