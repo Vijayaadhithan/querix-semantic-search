@@ -52,6 +52,7 @@ storage:
   pgvector:
     use_company_database: {use_company_database}
     table: {company}_vectors
+    prewarm_on_startup: true
     hnsw:
       m: 12
       ef_construction: 48
@@ -120,6 +121,7 @@ def test_tenant_profiles_resolve_separate_storage_and_api_keys(
     )
 
     assert profiles["alpha"].storage.pgvector_table == "alpha_vectors"
+    assert profiles["alpha"].storage.pgvector_prewarm_on_startup is True
     assert profiles["alpha"].storage.bm25_path != profiles["beta"].storage.bm25_path
     assert profiles["alpha"].endpoint_slug == "alpha"
     assert profiles["alpha"].payload.request_mapping["query"] == "query"

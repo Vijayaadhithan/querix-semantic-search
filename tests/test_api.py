@@ -89,6 +89,7 @@ def tenant_profile(
     request_mapping=None,
     endpoint_slug="",
     compatibility=None,
+    prewarm_on_startup=False,
 ):
     return TenantProfile(
         company_id=company_id,
@@ -115,6 +116,7 @@ def tenant_profile(
                 password="secret",
             ),
             pgvector_table=f"{company_id}_vectors",
+            pgvector_prewarm_on_startup=prewarm_on_startup,
         ),
         payload=TenantPayloadConfig(
             public_fields=tuple(public_fields),
@@ -132,6 +134,43 @@ def tenant_profile(
         endpoint_slug=endpoint_slug,
         compatibility=compatibility or TenantCompatibilityConfig(),
     )
+
+
+def test_tenant_pool_prewarms_enabled_pgvector_index(tmp_path, monkeypatch):
+    profile = tenant_profile(
+        tmp_path,
+        "alpha",
+        prewarm_on_startup=True,
+    )
+    registry = TenantRegistry(
+        {"alpha": profile},
+        api_keys={"alpha": ["alpha-key"]},
+    )
+    calls = []
+
+    class FakeCollection:
+        def prewarm_hnsw_index(self, *, mode):
+            calls.append(mode)
+            return {
+                "index": "public.alpha_vectors_embedding_hnsw",
+                "mode": mode,
+                "blocks": 10,
+                "bytes": 81920,
+                "duration_ms": 12.0,
+            }
+
+    monkeypatch.setattr(
+        api,
+        "get_tenant_vector_collection",
+        lambda *_args, **_kwargs: FakeCollection(),
+    )
+    pool = TenantServicePool(registry)
+
+    result = pool.prewarm_pgvector_indexes()
+
+    assert calls == ["read"]
+    assert result["alpha"]["status"] == "complete"
+    assert result["alpha"]["blocks"] == 10
 
 
 def test_cursor_pages_one_stable_search_without_repeating_engine_work():

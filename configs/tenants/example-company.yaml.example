@@ -71,6 +71,8 @@ storage:
     # legacy serves established SQL; shadow compares; optimized serves the
     # verified reduced-payload path.
     query_mode: legacy
+    # Optional: synchronously warm this tenant's HNSW index before API ready.
+    prewarm_on_startup: false
     hnsw:
       m: 16
       ef_construction: 64

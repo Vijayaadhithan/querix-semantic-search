@@ -146,8 +146,11 @@ storage:
     password_env: PGVECTOR_PASSWORD
     schema: public
     table: gainr_search_vectors
-    # Serve the established result path while comparing optimized SQL output.
+    # Serve the reduced-payload SQL path after production shadow verification.
     query_mode: optimized
+    # Block API readiness until the HNSW index has been synchronously read
+    # into the host filesystem cache. Failures are logged and fail open.
+    prewarm_on_startup: true
     hnsw:
       # HNSW is the pgvector ANN index. Higher ef_search improves recall but
       # costs CPU per query.

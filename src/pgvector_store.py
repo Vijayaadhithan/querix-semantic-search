@@ -68,6 +68,33 @@ class PgVectorCollection:
     def name(self) -> str:
         return self.table
 
+    def prewarm_hnsw_index(self, *, mode: str = "read") -> dict[str, Any]:
+        """Synchronously load the HNSW index into the host filesystem cache."""
+        normalized_mode = str(mode).strip().casefold()
+        if normalized_mode not in {"read", "prefetch"}:
+            raise ValueError("pgvector prewarm mode must be read or prefetch")
+        index_name = f"{self.table}_embedding_hnsw"
+        relation_name = f"{self.config.schema}.{index_name}"
+        started = time.perf_counter()
+        with postgres_connection(self.config, dict_rows=True) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("CREATE EXTENSION IF NOT EXISTS pg_prewarm")
+                cursor.execute(
+                    """
+                    SELECT pg_relation_size(%s::regclass) AS relation_bytes,
+                           pg_prewarm(%s::regclass, %s) AS blocks
+                    """,
+                    (relation_name, relation_name, normalized_mode),
+                )
+                row = cursor.fetchone()
+        return {
+            "index": relation_name,
+            "mode": normalized_mode,
+            "blocks": int(row["blocks"] or 0),
+            "bytes": int(row["relation_bytes"] or 0),
+            "duration_ms": (time.perf_counter() - started) * 1000,
+        }
+
     def _qualified(self) -> str:
         return qualified_table(self.config, self.table)
 

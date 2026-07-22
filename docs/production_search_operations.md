@@ -105,6 +105,11 @@ fusion, authoritative type lookup, eligibility, and hydration durations. Shadow
 mode intentionally adds database work and is for bounded validation windows,
 not steady-state production traffic.
 
+Set `storage.pgvector.prewarm_on_startup: true` for a tenant to synchronously
+read its HNSW index into the host filesystem cache before the API reports
+ready. Startup prewarm is fail-open and logs the index, blocks, bytes, and
+duration; it does not execute a search or alter ranking behavior.
+
 A high reranker time or token count suggests reducing the ranked window or document-character cap only after relevance testing. A high vector time suggests checking HNSW use, metadata predicates, database load, and `ef_search`. A high planner time suggests deterministic fast-path coverage or query-provider latency.
 
 Container logs show lifecycle, access, and provider warnings. Per-stage search

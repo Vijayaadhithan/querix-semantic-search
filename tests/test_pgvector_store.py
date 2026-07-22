@@ -10,6 +10,62 @@ from pgvector_store import PgVectorCollection
 from postgres_store import PostgresRuntimeConfig
 
 
+def test_pgvector_prewarm_reads_hnsw_index(monkeypatch):
+    statements = []
+
+    class FakeCursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, query, params=None):
+            statements.append((" ".join(query.split()), params))
+
+        def fetchone(self):
+            return {"relation_bytes": 1024, "blocks": 8}
+
+    class FakeConnection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def cursor(self):
+            return FakeCursor()
+
+    monkeypatch.setattr(
+        pgvector_store,
+        "postgres_connection",
+        lambda *_args, **_kwargs: FakeConnection(),
+    )
+    collection = PgVectorCollection.__new__(PgVectorCollection)
+    collection.config = PostgresRuntimeConfig(
+        host="localhost",
+        port=5432,
+        database="vectors",
+        user="vectors",
+        password="secret",
+        schema="tenant",
+    )
+    collection.table = "gainr_vectors"
+
+    result = collection.prewarm_hnsw_index()
+
+    assert result["index"] == "tenant.gainr_vectors_embedding_hnsw"
+    assert result["mode"] == "read"
+    assert result["blocks"] == 8
+    assert result["bytes"] == 1024
+    assert statements[0][0] == "CREATE EXTENSION IF NOT EXISTS pg_prewarm"
+    assert statements[1][1] == (
+        "tenant.gainr_vectors_embedding_hnsw",
+        "tenant.gainr_vectors_embedding_hnsw",
+        "read",
+    )
+
+
 def test_pgvector_metadata_filter_supports_collection_where_shape():
     clause, params = PgVectorCollection._metadata_filter_sql(
         {

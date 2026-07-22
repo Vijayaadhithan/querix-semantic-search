@@ -1172,6 +1172,46 @@ class TenantServicePool:
         self.reranker_load_ms = max(self.reranker_load_ms, seconds * 1000)
         return seconds * 1000
 
+    def prewarm_pgvector_indexes(self) -> dict[str, dict[str, Any]]:
+        results: dict[str, dict[str, Any]] = {}
+        for company_id, profile in self.registry.profiles.items():
+            if not profile.storage.pgvector_prewarm_on_startup:
+                continue
+            started = time.perf_counter()
+            try:
+                collection = get_tenant_vector_collection(
+                    profile,
+                    create=False,
+                )
+                result = collection.prewarm_hnsw_index(mode="read")
+            except Exception as exc:
+                result = {
+                    "status": "failed",
+                    "error_type": type(exc).__name__,
+                    "duration_ms": (time.perf_counter() - started) * 1000,
+                }
+                LOGGER.warning(
+                    "pgvector startup prewarm failed company=%s "
+                    "error_type=%s duration_ms=%.0f; continuing startup",
+                    company_id,
+                    type(exc).__name__,
+                    result["duration_ms"],
+                )
+            else:
+                result = {"status": "complete", **result}
+                LOGGER.info(
+                    "pgvector startup prewarm complete company=%s index=%s "
+                    "mode=%s blocks=%d bytes=%d duration_ms=%.0f",
+                    company_id,
+                    result["index"],
+                    result["mode"],
+                    result["blocks"],
+                    result["bytes"],
+                    result["duration_ms"],
+                )
+            results[company_id] = result
+        return results
+
     def get(self, company_id: str) -> ProductSearchService:
         with self._lock:
             existing = self._services.get(company_id)
@@ -1316,6 +1356,9 @@ def create_app(
                 redis_cache
             )
             application.state.search_service = None
+            application.state.pgvector_prewarm = (
+                pool.prewarm_pgvector_indexes()
+            )
         elif service is None:
             redis_cache = create_redis_cache(
                 REDIS_ENABLED,

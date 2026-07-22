@@ -39,6 +39,7 @@ class TenantStorageConfig:
     pgvector_hnsw_ef_construction: int = 64
     pgvector_hnsw_ef_search: int = 100
     pgvector_query_mode: str = "legacy"
+    pgvector_prewarm_on_startup: bool = False
 
 
 @dataclass(frozen=True)
@@ -386,6 +387,7 @@ def load_tenant_profile(path: Path) -> TenantProfile:
     pgvector_hnsw_ef_construction = 64
     pgvector_hnsw_ef_search = 100
     pgvector_query_mode = "legacy"
+    pgvector_prewarm_on_startup = False
     vector_dimensions = int(storage.get("vector_dimensions", 768))
     if vector_dimensions <= 0 or vector_dimensions > 2000:
         raise ValueError(
@@ -450,6 +452,9 @@ def load_tenant_profile(path: Path) -> TenantProfile:
     pgvector_query_mode = str(
         pgvector.get("query_mode", "legacy")
     ).strip().casefold()
+    pgvector_prewarm_on_startup = bool(
+        pgvector.get("prewarm_on_startup", False)
+    )
     if pgvector_hnsw_m <= 0:
         raise ValueError(
             f"Tenant {company_id!r} pgvector hnsw.m must be positive"
@@ -488,6 +493,7 @@ def load_tenant_profile(path: Path) -> TenantProfile:
         pgvector_hnsw_ef_construction=pgvector_hnsw_ef_construction,
         pgvector_hnsw_ef_search=pgvector_hnsw_ef_search,
         pgvector_query_mode=pgvector_query_mode,
+        pgvector_prewarm_on_startup=pgvector_prewarm_on_startup,
     )
 
     payload = dict(raw.get("payload", {}))
