@@ -147,7 +147,7 @@ storage:
     schema: public
     table: gainr_search_vectors
     # Serve the established result path while comparing optimized SQL output.
-    query_mode: shadow
+    query_mode: optimized
     hnsw:
       # HNSW is the pgvector ANN index. Higher ef_search improves recall but
       # costs CPU per query.
