@@ -294,6 +294,339 @@ def test_pgvector_broad_filter_can_use_bounded_unfiltered_hnsw(monkeypatch):
     assert query_params[-1] == 800
 
 
+def test_pgvector_optimized_exact_filter_avoids_id_rejoin(monkeypatch):
+    statements = []
+
+    class FakeCursor:
+        rows = []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, query, params=None):
+            compact = " ".join(query.split())
+            statements.append((compact, params))
+            if compact.startswith("SELECT COUNT(*) AS eligible_count"):
+                self.rows = [{"eligible_count": 2}]
+            elif compact.startswith("SELECT id, document, metadata"):
+                self.rows = [
+                    {
+                        "id": "nearest",
+                        "document": "nearest car",
+                        "metadata": {"city_name": "Chennai"},
+                        "distance": 0.05,
+                    },
+                    {
+                        "id": "second",
+                        "document": "second car",
+                        "metadata": {"city_name": "Chennai"},
+                        "distance": 0.1,
+                    },
+                ]
+
+        def fetchone(self):
+            return self.rows[0]
+
+        def fetchall(self):
+            return self.rows
+
+    class FakeConnection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def cursor(self):
+            return FakeCursor()
+
+    monkeypatch.setattr(
+        pgvector_store,
+        "postgres_connection",
+        lambda *_args, **_kwargs: FakeConnection(),
+    )
+    collection = PgVectorCollection.__new__(PgVectorCollection)
+    collection.config = PostgresRuntimeConfig(
+        host="localhost",
+        port=5432,
+        database="vectors",
+        user="vectors",
+        password="secret",
+    )
+    collection.table = "gainr_vectors"
+    collection.dimensions = 2
+    collection.hnsw_ef_search = 100
+    collection.query_mode = "optimized"
+    collection._query_state = threading.local()
+
+    results = collection.query(
+        query_embeddings=[[0.1, 0.2]],
+        n_results=2,
+        where={"city_name": "Chennai"},
+        include=["documents", "metadatas", "distances"],
+        exact_filter_max_rows=100,
+    )
+
+    assert results["ids"] == [["nearest", "second"]]
+    metrics = collection.last_query_metrics()
+    assert metrics["query_mode"] == "optimized"
+    assert metrics["strategy"] == "exact_filtered"
+    assert not any(sql.startswith("WITH eligible") for sql, _ in statements)
+    exact_sql = next(
+        sql
+        for sql, _params in statements
+        if sql.startswith("SELECT id, document, metadata")
+    )
+    assert "metadata ->> 'city_name' = %s" in exact_sql
+    assert "JOIN eligible" not in exact_sql
+
+
+def test_pgvector_optimized_post_filter_fetches_only_filtered_payload(
+    monkeypatch,
+):
+    statements = []
+
+    class FakeCursor:
+        rows = []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, query, params=None):
+            compact = " ".join(query.split())
+            statements.append((compact, params))
+            if compact.startswith("SELECT COUNT(*) AS eligible_count"):
+                self.rows = [{"eligible_count": 101}]
+            elif compact.startswith("WITH nearest AS MATERIALIZED"):
+                self.rows = [
+                    {
+                        "id": "filtered-result",
+                        "document": "Tamil Nadu camera",
+                        "metadata": {"state_name": "Tamil Nadu"},
+                        "distance": 0.2,
+                    }
+                ]
+
+        def fetchone(self):
+            return self.rows[0]
+
+        def fetchall(self):
+            return self.rows
+
+    class FakeConnection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def cursor(self):
+            return FakeCursor()
+
+    monkeypatch.setattr(
+        pgvector_store,
+        "postgres_connection",
+        lambda *_args, **_kwargs: FakeConnection(),
+    )
+    collection = PgVectorCollection.__new__(PgVectorCollection)
+    collection.config = PostgresRuntimeConfig(
+        host="localhost",
+        port=5432,
+        database="vectors",
+        user="vectors",
+        password="secret",
+    )
+    collection.table = "gainr_vectors"
+    collection.dimensions = 2
+    collection.hnsw_ef_search = 100
+    collection.query_mode = "optimized"
+    collection._query_state = threading.local()
+
+    results = collection.query(
+        query_embeddings=[[0.1, 0.2]],
+        n_results=80,
+        where={"state_name": "Tamil Nadu"},
+        include=["documents", "metadatas", "distances"],
+        exact_filter_max_rows=100,
+        post_filter_n_results=800,
+    )
+
+    assert results["ids"] == [["filtered-result"]]
+    metrics = collection.last_query_metrics()
+    assert metrics["strategy"] == "hnsw_post_filter"
+    optimized_sql, optimized_params = next(
+        entry
+        for entry in statements
+        if entry[0].startswith("WITH nearest AS MATERIALIZED")
+    )
+    assert "WHERE metadata ->> 'state_name' = %s" in optimized_sql
+    assert "LIMIT %s" in optimized_sql
+    assert optimized_params[2] == 800
+    assert optimized_params[-1] == 80
+
+
+def test_pgvector_shadow_serves_legacy_and_records_equivalence(monkeypatch):
+    class FakeCursor:
+        rows = []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, query, params=None):
+            compact = " ".join(query.split())
+            if compact.startswith("WITH eligible AS MATERIALIZED"):
+                self.rows = [
+                    {
+                        "id": "same",
+                        "document": "same document",
+                        "metadata": {"city_name": "Chennai"},
+                        "distance": 0.05,
+                        "eligible_count": 1,
+                    }
+                ]
+            elif compact.startswith("SELECT COUNT(*) AS eligible_count"):
+                self.rows = [{"eligible_count": 1}]
+            elif compact.startswith("SELECT id, document, metadata"):
+                self.rows = [
+                    {
+                        "id": "same",
+                        "document": "same document",
+                        "metadata": {"city_name": "Chennai"},
+                        "distance": 0.05,
+                    }
+                ]
+
+        def fetchone(self):
+            return self.rows[0]
+
+        def fetchall(self):
+            return self.rows
+
+    class FakeConnection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def cursor(self):
+            return FakeCursor()
+
+    monkeypatch.setattr(
+        pgvector_store,
+        "postgres_connection",
+        lambda *_args, **_kwargs: FakeConnection(),
+    )
+    collection = PgVectorCollection.__new__(PgVectorCollection)
+    collection.config = PostgresRuntimeConfig(
+        host="localhost",
+        port=5432,
+        database="vectors",
+        user="vectors",
+        password="secret",
+    )
+    collection.table = "gainr_vectors"
+    collection.dimensions = 2
+    collection.hnsw_ef_search = 100
+    collection.query_mode = "shadow"
+    collection._query_state = threading.local()
+
+    results = collection.query(
+        query_embeddings=[[0.1, 0.2]],
+        n_results=1,
+        where={"city_name": "Chennai"},
+        include=["documents", "metadatas", "distances"],
+        exact_filter_max_rows=100,
+    )
+
+    assert results["ids"] == [["same"]]
+    metrics = collection.last_query_metrics()
+    assert metrics["query_mode"] == "shadow"
+    assert metrics["shadow_equal"] is True
+    assert metrics["shadow_legacy_rows"] == 1
+    assert metrics["shadow_optimized_rows"] == 1
+
+
+def test_pgvector_shadow_optimization_failure_serves_legacy(monkeypatch):
+    class FakeCursor:
+        rows = []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, query, params=None):
+            compact = " ".join(query.split())
+            if compact.startswith("WITH eligible AS MATERIALIZED"):
+                self.rows = [
+                    {
+                        "id": "legacy",
+                        "document": "legacy document",
+                        "metadata": {"city_name": "Chennai"},
+                        "distance": 0.05,
+                        "eligible_count": 1,
+                    }
+                ]
+            elif compact.startswith("SELECT COUNT(*) AS eligible_count"):
+                raise RuntimeError("optimized SQL unavailable")
+
+        def fetchall(self):
+            return self.rows
+
+    class FakeConnection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def cursor(self):
+            return FakeCursor()
+
+    monkeypatch.setattr(
+        pgvector_store,
+        "postgres_connection",
+        lambda *_args, **_kwargs: FakeConnection(),
+    )
+    collection = PgVectorCollection.__new__(PgVectorCollection)
+    collection.config = PostgresRuntimeConfig(
+        host="localhost",
+        port=5432,
+        database="vectors",
+        user="vectors",
+        password="secret",
+    )
+    collection.table = "gainr_vectors"
+    collection.dimensions = 2
+    collection.hnsw_ef_search = 100
+    collection.query_mode = "shadow"
+    collection._query_state = threading.local()
+
+    results = collection.query(
+        query_embeddings=[[0.1, 0.2]],
+        n_results=1,
+        where={"city_name": "Chennai"},
+        include=["documents", "metadatas", "distances"],
+        exact_filter_max_rows=100,
+    )
+
+    assert results["ids"] == [["legacy"]]
+    metrics = collection.last_query_metrics()
+    assert metrics["shadow_equal"] is False
+    assert metrics["shadow_error"] == "RuntimeError"
+
+
 def test_pgvector_source_migration_keeps_existing_target_rows(monkeypatch):
     state = {
         "source_batches": [

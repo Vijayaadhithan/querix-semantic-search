@@ -544,19 +544,24 @@ class ProductSearchService:
                             else "complete"
                         ),
                         "duration_ms": round(
-                            max(
-                                float(
-                                    result.get(
-                                        "vector_seconds",
-                                        0.0,
-                                    )
-                                ),
-                                float(
-                                    result.get(
-                                        "bm25_seconds",
-                                        0.0,
-                                    )
-                                ),
+                            float(
+                                result.get(
+                                    "retrieval_seconds",
+                                    max(
+                                        float(
+                                            result.get(
+                                                "vector_seconds",
+                                                0.0,
+                                            )
+                                        ),
+                                        float(
+                                            result.get(
+                                                "bm25_seconds",
+                                                0.0,
+                                            )
+                                        ),
+                                    ),
+                                )
                             )
                             * 1000,
                             3,
@@ -582,6 +587,32 @@ class ProductSearchService:
                         "embedding_load_ms": round(
                             float(embedding.get("load_ms", 0.0)),
                             3,
+                        ),
+                        "parallel_ms": round(
+                            float(
+                                result.get(
+                                    "parallel_retrieval_seconds",
+                                    0.0,
+                                )
+                            )
+                            * 1000,
+                            3,
+                        ),
+                        "fusion_ms": round(
+                            float(result.get("fusion_seconds", 0.0))
+                            * 1000,
+                            3,
+                        ),
+                        "type_lookup_ms": round(
+                            float(
+                                result.get("type_lookup_seconds", 0.0)
+                            )
+                            * 1000,
+                            3,
+                        ),
+                        "vector_query_metrics": result.get(
+                            "vector_query_metrics",
+                            {},
                         ),
                         "vector_results": len(vector_results),
                         "bm25_results": len(bm25_results),

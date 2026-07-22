@@ -813,6 +813,7 @@ class ProductSearchEngine:
         allowed_ad_types: set[str] | None = None,
         strict_candidate_limit: bool = False,
     ) -> dict:
+        retrieval_started = time.perf_counter()
         expected_types = (
             {str(value) for value in allowed_ad_types}
             if allowed_ad_types is not None
@@ -916,6 +917,7 @@ class ProductSearchEngine:
                     trace_id,
                     type(exc).__name__,
                 )
+
             try:
                 bm25_results, bm25_seconds = bm25_future.result()
             except Exception as exc:
@@ -927,12 +929,17 @@ class ProductSearchEngine:
                     type(exc).__name__,
                 )
 
+        parallel_retrieval_ms = (
+            time.perf_counter() - retrieval_started
+        ) * 1000
+
         if len(retrieval_errors) == 2:
             stages = ", ".join(stage for stage, _exc in retrieval_errors)
             raise RuntimeError(f"All retrieval paths failed: {stages}") from (
                 retrieval_errors[0][1]
             )
 
+        fusion_started = time.perf_counter()
         merged = merge_results(
             vector_results,
             bm25_results,
@@ -943,9 +950,11 @@ class ProductSearchEngine:
             merged,
             self.company_id,
         )
+        fusion_ms = (time.perf_counter() - fusion_started) * 1000
         # Apply ad intent before truncating the candidate window. Otherwise a
         # page can be short merely because unwanted ad types occupied the K
         # slots ahead of valid products.
+        type_lookup_started = time.perf_counter()
         eligible_candidates = filter_candidates_by_ad_type(
             merged,
             query_plan["target_ad_type"],
@@ -954,6 +963,9 @@ class ProductSearchEngine:
             search_id_column=self.search_id_column,
             allowed_ad_types=allowed_ad_types,
         )
+        type_lookup_ms = (
+            time.perf_counter() - type_lookup_started
+        ) * 1000
         candidates = eligible_candidates[:hybrid_top_k]
         # Keep the rest of the fused pool for later pages without increasing
         # the hosted reranker payload. These candidates remain in reciprocal-
@@ -965,11 +977,19 @@ class ProductSearchEngine:
             if self.embedding_provider is None
             else {}
         )
+        retrieval_total_ms = (
+            time.perf_counter() - retrieval_started
+        ) * 1000
         LOGGER.info(
             "[search:%s] step=retrieve status=complete vector=%d bm25=%d "
             "merged=%d candidates=%d hybrid_tail=%d vector_ms=%.0f bm25_ms=%.0f "
             "vector_count_ms=%.0f vector_embed_ms=%.0f vector_db_ms=%.0f "
             "vector_filter_ms=%.0f vector_strategy=%s vector_eligible=%s "
+            "vector_query_mode=%s vector_shadow_equal=%s "
+            "vector_shadow_error=%s "
+            "vector_shadow_ms=%.0f vector_optimized_ms=%.0f "
+            "parallel_ms=%.0f fusion_ms=%.0f type_lookup_ms=%.0f "
+            "retrieval_total_ms=%.0f "
             "embed_total_ms=%.0f embed_load_ms=%.0f",
             trace_id,
             len(vector_results),
@@ -985,6 +1005,15 @@ class ProductSearchEngine:
             vector_metrics.get("post_filter_ms", 0.0),
             vector_metrics.get("strategy", "unknown"),
             vector_metrics.get("eligible_rows", "unknown"),
+            vector_metrics.get("query_mode", "legacy"),
+            vector_metrics.get("shadow_equal", "not_run"),
+            vector_metrics.get("shadow_error", "none"),
+            vector_metrics.get("shadow_ms", 0.0),
+            vector_metrics.get("optimized_ms", 0.0),
+            parallel_retrieval_ms,
+            fusion_ms,
+            type_lookup_ms,
+            retrieval_total_ms,
             embedding_metrics.get("total_ms", 0.0),
             embedding_metrics.get("load_ms", 0.0),
         )
@@ -995,6 +1024,11 @@ class ProductSearchEngine:
             "hybrid_tail_candidates": hybrid_tail_candidates,
             "vector_seconds": vector_seconds,
             "bm25_seconds": bm25_seconds,
+            "retrieval_seconds": retrieval_total_ms / 1000,
+            "parallel_retrieval_seconds": parallel_retrieval_ms / 1000,
+            "fusion_seconds": fusion_ms / 1000,
+            "type_lookup_seconds": type_lookup_ms / 1000,
+            "vector_query_metrics": dict(vector_metrics),
             "embedding_model_metrics": embedding_metrics,
             "retrieval_degraded": bool(retrieval_errors),
             "retrieval_error_type": (

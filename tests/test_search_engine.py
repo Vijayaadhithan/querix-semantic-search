@@ -1073,6 +1073,13 @@ def test_semantic_vector_and_bm25_retrieval_start_in_parallel(
 
     assert result["vector_results"] == []
     assert result["bm25_results"] == []
+    assert result["parallel_retrieval_seconds"] >= 0
+    assert result["fusion_seconds"] >= 0
+    assert result["type_lookup_seconds"] >= 0
+    assert result["retrieval_seconds"] >= max(
+        result["vector_seconds"],
+        result["bm25_seconds"],
+    )
     index.close()
 
 

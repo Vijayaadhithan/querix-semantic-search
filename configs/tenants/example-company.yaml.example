@@ -68,6 +68,9 @@ storage:
     use_company_database: true
     schema: public
     table: acme_search_vectors
+    # legacy serves established SQL; shadow compares; optimized serves the
+    # verified reduced-payload path.
+    query_mode: legacy
     hnsw:
       m: 16
       ef_construction: 64

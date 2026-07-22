@@ -43,6 +43,7 @@ class PgVectorCollection:
         hnsw_m: int = 16,
         hnsw_ef_construction: int = 64,
         hnsw_ef_search: int = 100,
+        query_mode: str = "legacy",
         create: bool = False,
     ):
         self.config = config
@@ -51,6 +52,12 @@ class PgVectorCollection:
         self.hnsw_m = hnsw_m
         self.hnsw_ef_construction = hnsw_ef_construction
         self.hnsw_ef_search = hnsw_ef_search
+        normalized_query_mode = str(query_mode).strip().casefold()
+        if normalized_query_mode not in {"legacy", "shadow", "optimized"}:
+            raise ValueError(
+                "pgvector query_mode must be legacy, shadow, or optimized"
+            )
+        self.query_mode = normalized_query_mode
         self._query_state = threading.local()
         if create:
             self.initialize()
@@ -458,6 +465,293 @@ class PgVectorCollection:
             result["metadatas"] = [row["metadata"] for row in ordered_rows]
         return result
 
+    @classmethod
+    def _metadata_matches_where(
+        cls,
+        metadata: dict[str, Any],
+        where: dict[str, Any] | None,
+    ) -> bool:
+        if not where:
+            return True
+        if "$and" in where:
+            return all(
+                cls._metadata_matches_where(metadata, child)
+                for child in where["$and"]
+            )
+        for key, expected in where.items():
+            actual = metadata.get(key)
+            if not isinstance(expected, dict):
+                if str(actual) != str(expected):
+                    return False
+                continue
+            if "$in" in expected:
+                if str(actual) not in {str(value) for value in expected["$in"]}:
+                    return False
+                continue
+            try:
+                numeric_actual = float(actual)
+            except (TypeError, ValueError):
+                return False
+            if "$gte" in expected and numeric_actual < float(expected["$gte"]):
+                return False
+            if "$lte" in expected and numeric_actual > float(expected["$lte"]):
+                return False
+        return True
+
+    @classmethod
+    def _shadow_rows(
+        cls,
+        rows: list[dict[str, Any]],
+        where: dict[str, Any] | None,
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        return [
+            row
+            for row in rows
+            if cls._metadata_matches_where(row.get("metadata") or {}, where)
+        ][:limit]
+
+    @staticmethod
+    def _rows_equivalent(
+        legacy_rows: list[dict[str, Any]],
+        optimized_rows: list[dict[str, Any]],
+    ) -> bool:
+        if len(legacy_rows) != len(optimized_rows):
+            return False
+        for legacy, optimized in zip(legacy_rows, optimized_rows):
+            if str(legacy.get("id")) != str(optimized.get("id")):
+                return False
+            if legacy.get("document") != optimized.get("document"):
+                return False
+            if legacy.get("metadata") != optimized.get("metadata"):
+                return False
+            if abs(
+                float(legacy.get("distance", 0.0))
+                - float(optimized.get("distance", 0.0))
+            ) > 1e-9:
+                return False
+        return True
+
+    def _legacy_query_rows(
+        self,
+        cursor,
+        *,
+        vector_literal: str,
+        n_results: int,
+        where_clause: str,
+        filter_clause: str,
+        filter_params: list[Any],
+        where: dict[str, Any] | None,
+        exact_filter_max_rows: int | None,
+        post_filter_n_results: int | None,
+    ) -> tuple[list[dict[str, Any]], str, int | None]:
+        rows = None
+        strategy = "hnsw"
+        eligible_rows: int | None = None
+        if (
+            filter_clause
+            and exact_filter_max_rows is not None
+            and exact_filter_max_rows > 0
+            and self._filter_uses_index(where)
+        ):
+            cursor.execute(
+                f"""
+                WITH eligible AS MATERIALIZED (
+                    SELECT id
+                    FROM {self._qualified()}
+                    {where_clause}
+                    LIMIT %s
+                ),
+                eligibility AS (
+                    SELECT COUNT(*) AS eligible_count
+                    FROM eligible
+                ),
+                ranked AS (
+                    SELECT vectors.id,
+                           vectors.document,
+                           vectors.metadata,
+                           vectors.embedding <=> %s::vector AS distance
+                    FROM {self._qualified()} AS vectors
+                    JOIN eligible USING (id)
+                    WHERE (
+                        SELECT eligible_count FROM eligibility
+                    ) <= %s
+                    ORDER BY vectors.embedding <=> %s::vector
+                    LIMIT %s
+                )
+                SELECT ranked.id,
+                       ranked.document,
+                       ranked.metadata,
+                       ranked.distance,
+                       eligibility.eligible_count
+                FROM eligibility
+                LEFT JOIN ranked ON TRUE
+                ORDER BY ranked.distance NULLS LAST
+                """,
+                (
+                    *filter_params,
+                    exact_filter_max_rows + 1,
+                    vector_literal,
+                    exact_filter_max_rows,
+                    vector_literal,
+                    n_results,
+                ),
+            )
+            exact_rows = cursor.fetchall()
+            eligible_rows = int(exact_rows[0]["eligible_count"])
+            if eligible_rows <= exact_filter_max_rows:
+                strategy = "exact_filtered"
+                rows = [row for row in exact_rows if row["id"] is not None]
+        if rows is None:
+            active_where_clause = where_clause
+            active_filter_params = filter_params
+            active_n_results = n_results
+            if (
+                eligible_rows is not None
+                and exact_filter_max_rows is not None
+                and eligible_rows > exact_filter_max_rows
+                and post_filter_n_results is not None
+                and post_filter_n_results > 0
+            ):
+                strategy = "hnsw_post_filter"
+                active_where_clause = ""
+                active_filter_params = []
+                active_n_results = max(n_results, post_filter_n_results)
+            cursor.execute(
+                f"""
+                SELECT id, document, metadata,
+                       embedding <=> %s::vector AS distance
+                FROM {self._qualified()}
+                {active_where_clause}
+                ORDER BY embedding <=> %s::vector
+                LIMIT %s
+                """,
+                (
+                    vector_literal,
+                    *active_filter_params,
+                    vector_literal,
+                    active_n_results,
+                ),
+            )
+            rows = cursor.fetchall()
+        return rows, strategy, eligible_rows
+
+    def _optimized_query_rows(
+        self,
+        cursor,
+        *,
+        vector_literal: str,
+        n_results: int,
+        where_clause: str,
+        filter_clause: str,
+        filter_params: list[Any],
+        where: dict[str, Any] | None,
+        exact_filter_max_rows: int | None,
+        post_filter_n_results: int | None,
+    ) -> tuple[list[dict[str, Any]], str, int | None]:
+        strategy = "hnsw"
+        eligible_rows: int | None = None
+        indexed_filter = (
+            filter_clause
+            and exact_filter_max_rows is not None
+            and exact_filter_max_rows > 0
+            and self._filter_uses_index(where)
+        )
+        if indexed_filter:
+            cursor.execute(
+                f"""
+                SELECT COUNT(*) AS eligible_count
+                FROM (
+                    SELECT 1
+                    FROM {self._qualified()}
+                    {where_clause}
+                    LIMIT %s
+                ) AS eligible
+                """,
+                (*filter_params, exact_filter_max_rows + 1),
+            )
+            eligible_rows = int(cursor.fetchone()["eligible_count"])
+            if eligible_rows <= exact_filter_max_rows:
+                strategy = "exact_filtered"
+                cursor.execute("SET enable_indexscan = off")
+                try:
+                    cursor.execute(
+                        f"""
+                        SELECT id, document, metadata,
+                               embedding <=> %s::vector AS distance
+                        FROM {self._qualified()}
+                        {where_clause}
+                        ORDER BY distance
+                        LIMIT %s
+                        """,
+                        (vector_literal, *filter_params, n_results),
+                    )
+                    return cursor.fetchall(), strategy, eligible_rows
+                finally:
+                    cursor.execute("SET enable_indexscan = on")
+
+        if (
+            indexed_filter
+            and eligible_rows is not None
+            and eligible_rows > exact_filter_max_rows
+            and post_filter_n_results is not None
+            and post_filter_n_results > 0
+        ):
+            strategy = "hnsw_post_filter"
+            candidate_limit = max(n_results, post_filter_n_results)
+            cursor.execute(
+                f"""
+                WITH nearest AS MATERIALIZED (
+                    SELECT id,
+                           embedding <=> %s::vector AS distance
+                    FROM {self._qualified()}
+                    ORDER BY embedding <=> %s::vector
+                    LIMIT %s
+                ),
+                filtered AS MATERIALIZED (
+                    SELECT nearest.id, nearest.distance
+                    FROM nearest
+                    JOIN {self._qualified()} AS vectors USING (id)
+                    WHERE {filter_clause}
+                    ORDER BY nearest.distance
+                    LIMIT %s
+                )
+                SELECT vectors.id,
+                       vectors.document,
+                       vectors.metadata,
+                       filtered.distance
+                FROM filtered
+                JOIN {self._qualified()} AS vectors USING (id)
+                ORDER BY filtered.distance
+                """,
+                (
+                    vector_literal,
+                    vector_literal,
+                    candidate_limit,
+                    *filter_params,
+                    n_results,
+                ),
+            )
+            return cursor.fetchall(), strategy, eligible_rows
+
+        cursor.execute(
+            f"""
+            SELECT id, document, metadata,
+                   embedding <=> %s::vector AS distance
+            FROM {self._qualified()}
+            {where_clause}
+            ORDER BY embedding <=> %s::vector
+            LIMIT %s
+            """,
+            (
+                vector_literal,
+                *filter_params,
+                vector_literal,
+                n_results,
+            ),
+        )
+        return cursor.fetchall(), strategy, eligible_rows
+
     def query(
         self,
         *,
@@ -474,8 +768,15 @@ class PgVectorCollection:
         all_metadatas = []
         all_distances = []
         query_started = time.perf_counter()
+        query_mode = getattr(self, "query_mode", "legacy")
         strategy = "hnsw"
         eligible_rows: int | None = None
+        legacy_ms = 0.0
+        optimized_ms = 0.0
+        shadow_equal: bool | str = "not_run"
+        shadow_error = "none"
+        shadow_legacy_rows = 0
+        shadow_optimized_rows = 0
         with postgres_connection(self.config, dict_rows=True) as connection:
             with connection.cursor() as cursor:
                 cursor.execute("SET hnsw.iterative_scan = strict_order")
@@ -489,109 +790,66 @@ class PgVectorCollection:
                             f"received {len(embedding)}."
                         )
                     vector_literal = self._vector_literal(embedding)
-                    rows = None
-                    if (
-                        filter_clause
-                        and exact_filter_max_rows is not None
-                        and exact_filter_max_rows > 0
-                        and self._filter_uses_index(where)
-                    ):
-                        # The limited ID CTE is cheap with the expression
-                        # indexes. If every eligible ID fits under the bound,
-                        # rank the complete set exactly. Broader subsets use
-                        # either bounded post-filter HNSW (when requested) or
-                        # filtered HNSW without dropping filter predicates.
-                        cursor.execute(
-                            f"""
-                            WITH eligible AS MATERIALIZED (
-                                SELECT id
-                                FROM {self._qualified()}
-                                {where_clause}
-                                LIMIT %s
-                            ),
-                            eligibility AS (
-                                SELECT COUNT(*) AS eligible_count
-                                FROM eligible
-                            ),
-                            ranked AS (
-                                SELECT vectors.id,
-                                       vectors.document,
-                                       vectors.metadata,
-                                       vectors.embedding <=> %s::vector AS distance
-                                FROM {self._qualified()} AS vectors
-                                JOIN eligible USING (id)
-                                WHERE (
-                                    SELECT eligible_count FROM eligibility
-                                ) <= %s
-                                ORDER BY vectors.embedding <=> %s::vector
-                                LIMIT %s
-                            )
-                            SELECT ranked.id,
-                                   ranked.document,
-                                   ranked.metadata,
-                                   ranked.distance,
-                                   eligibility.eligible_count
-                            FROM eligibility
-                            LEFT JOIN ranked ON TRUE
-                            ORDER BY ranked.distance NULLS LAST
-                            """,
-                            (
-                                *filter_params,
-                                exact_filter_max_rows + 1,
-                                vector_literal,
-                                exact_filter_max_rows,
-                                vector_literal,
-                                n_results,
-                            ),
+                    common = {
+                        "vector_literal": vector_literal,
+                        "n_results": n_results,
+                        "where_clause": where_clause,
+                        "filter_clause": filter_clause,
+                        "filter_params": filter_params,
+                        "where": where,
+                        "exact_filter_max_rows": exact_filter_max_rows,
+                        "post_filter_n_results": post_filter_n_results,
+                    }
+                    if query_mode in {"legacy", "shadow"}:
+                        mode_started = time.perf_counter()
+                        rows, strategy, eligible_rows = self._legacy_query_rows(
+                            cursor,
+                            **common,
                         )
-                        exact_rows = cursor.fetchall()
-                        eligible_rows = int(exact_rows[0]["eligible_count"])
-                        if eligible_rows <= exact_filter_max_rows:
-                            strategy = "exact_filtered"
-                            rows = [
-                                row
-                                for row in exact_rows
-                                if row["id"] is not None
-                            ]
-                    if rows is None:
-                        active_where_clause = where_clause
-                        active_filter_params = filter_params
-                        active_n_results = n_results
-                        if (
-                            eligible_rows is not None
-                            and exact_filter_max_rows is not None
-                            and eligible_rows > exact_filter_max_rows
-                            and post_filter_n_results is not None
-                            and post_filter_n_results > 0
-                        ):
-                            # Broad metadata-filtered HNSW can degrade into a
-                            # long iterative scan. Retrieve a bounded ordinary
-                            # HNSW window; retrieval.py applies the original
-                            # predicate exactly before returning candidates.
-                            strategy = "hnsw_post_filter"
-                            active_where_clause = ""
-                            active_filter_params = []
-                            active_n_results = max(
-                                n_results,
-                                post_filter_n_results,
-                            )
-                        cursor.execute(
-                            f"""
-                            SELECT id, document, metadata,
-                                   embedding <=> %s::vector AS distance
-                            FROM {self._qualified()}
-                            {active_where_clause}
-                            ORDER BY embedding <=> %s::vector
-                            LIMIT %s
-                            """,
+                        legacy_ms += (time.perf_counter() - mode_started) * 1000
+                    if query_mode in {"optimized", "shadow"}:
+                        mode_started = time.perf_counter()
+                        try:
                             (
-                                vector_literal,
-                                *active_filter_params,
-                                vector_literal,
-                                active_n_results,
-                            ),
-                        )
-                        rows = cursor.fetchall()
+                                optimized_rows,
+                                optimized_strategy,
+                                optimized_eligible_rows,
+                            ) = self._optimized_query_rows(cursor, **common)
+                        except Exception as exc:
+                            if query_mode != "shadow":
+                                raise
+                            optimized_rows = []
+                            optimized_strategy = "failed"
+                            optimized_eligible_rows = None
+                            shadow_equal = False
+                            shadow_error = type(exc).__name__
+                        optimized_ms += (
+                            time.perf_counter() - mode_started
+                        ) * 1000
+                        if query_mode == "optimized":
+                            rows = optimized_rows
+                            strategy = optimized_strategy
+                            eligible_rows = optimized_eligible_rows
+                        else:
+                            comparable_legacy = (
+                                self._shadow_rows(rows, where, n_results)
+                                if strategy == "hnsw_post_filter"
+                                else rows
+                            )
+                            shadow_legacy_rows += len(comparable_legacy)
+                            shadow_optimized_rows += len(optimized_rows)
+                            equivalent = (
+                                shadow_error == "none"
+                                and self._rows_equivalent(
+                                    comparable_legacy,
+                                    optimized_rows,
+                                )
+                            )
+                            shadow_equal = (
+                                equivalent
+                                if shadow_equal == "not_run"
+                                else bool(shadow_equal) and equivalent
+                            )
                     all_ids.append([str(row["id"]) for row in rows])
                     all_documents.append([row["document"] for row in rows])
                     all_metadatas.append([row["metadata"] for row in rows])
@@ -601,7 +859,21 @@ class PgVectorCollection:
         self._query_state.metrics = {
             "strategy": strategy,
             "eligible_rows": eligible_rows,
-            "database_ms": (time.perf_counter() - query_started) * 1000,
+            "query_mode": query_mode,
+            "database_ms": (
+                optimized_ms if query_mode == "optimized" else legacy_ms
+            ),
+            "legacy_ms": legacy_ms,
+            "optimized_ms": optimized_ms,
+            "shadow_ms": (
+                (time.perf_counter() - query_started) * 1000
+                if query_mode == "shadow"
+                else 0.0
+            ),
+            "shadow_equal": shadow_equal,
+            "shadow_error": shadow_error,
+            "shadow_legacy_rows": shadow_legacy_rows,
+            "shadow_optimized_rows": shadow_optimized_rows,
         }
         result = {"ids": all_ids}
         if "documents" in include:

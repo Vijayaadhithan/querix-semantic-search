@@ -91,6 +91,20 @@ Monitor:
 - HTTP 429 and 5xx rates;
 - bounded-capacity rejections and degraded retrieval counts.
 
+Each tenant's `storage.pgvector.query_mode` controls the vector SQL rollout:
+
+- `legacy` serves only the established SQL path;
+- `shadow` serves legacy results and executes the optimized reduced-payload
+  query for ID, order, distance, document, and metadata equivalence metrics;
+- `optimized` serves the reduced-payload path after shadow validation passes.
+
+Shadow mode fails open to the legacy vector results when the comparison query
+fails. Search logs include `vector_query_mode`, `vector_shadow_equal`,
+`vector_shadow_error`, legacy/optimized database timings, parallel retrieval,
+fusion, authoritative type lookup, eligibility, and hydration durations. Shadow
+mode intentionally adds database work and is for bounded validation windows,
+not steady-state production traffic.
+
 A high reranker time or token count suggests reducing the ranked window or document-character cap only after relevance testing. A high vector time suggests checking HNSW use, metadata predicates, database load, and `ef_search`. A high planner time suggests deterministic fast-path coverage or query-provider latency.
 
 Container logs show lifecycle, access, and provider warnings. Per-stage search

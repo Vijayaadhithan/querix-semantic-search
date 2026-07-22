@@ -21,6 +21,7 @@ def get_tenant_vector_collection(
         hnsw_m=storage.pgvector_hnsw_m,
         hnsw_ef_construction=storage.pgvector_hnsw_ef_construction,
         hnsw_ef_search=storage.pgvector_hnsw_ef_search,
+        query_mode=storage.pgvector_query_mode,
         create=create,
     )
 

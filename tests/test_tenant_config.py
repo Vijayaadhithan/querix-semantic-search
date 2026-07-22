@@ -301,6 +301,7 @@ def test_pgvector_profile_selects_pgvector_collection(
             hnsw_m=16,
             hnsw_ef_construction=64,
             hnsw_ef_search=100,
+            query_mode="legacy",
             create=False,
         ):
             captured.update(
@@ -310,6 +311,7 @@ def test_pgvector_profile_selects_pgvector_collection(
                 hnsw_m=hnsw_m,
                 hnsw_ef_construction=hnsw_ef_construction,
                 hnsw_ef_search=hnsw_ef_search,
+                query_mode=query_mode,
                 create=create,
             )
 
@@ -328,4 +330,5 @@ def test_pgvector_profile_selects_pgvector_collection(
     assert captured["hnsw_m"] == 12
     assert captured["hnsw_ef_construction"] == 48
     assert captured["hnsw_ef_search"] == 80
+    assert captured["query_mode"] == "legacy"
     assert captured["create"] is True

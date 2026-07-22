@@ -1144,12 +1144,14 @@ class GainrCompatibilityService:
         duration_ms = (time.perf_counter() - request_started) * 1000
         PERFORMANCE_LOGGER.info(
             "[search:%s] step=compat_response status=complete route=%s "
-            "engine_ms=%.0f database_ms=%.0f eligibility_source=%s "
+            "planning_ms=%.0f engine_ms=%.0f database_ms=%.0f "
+            "eligibility_source=%s "
             "eligibility_ms=%.0f "
             "hydration_ms=%.0f response_map_ms=%.0f usage_ms=%.0f "
             "recent_ms=%.0f products=%d duration_ms=%.0f",
             trace_id,
             route,
+            planning_ms,
             engine_ms,
             database_ms,
             eligibility_source,

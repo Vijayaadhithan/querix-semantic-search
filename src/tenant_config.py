@@ -38,6 +38,7 @@ class TenantStorageConfig:
     pgvector_hnsw_m: int = 16
     pgvector_hnsw_ef_construction: int = 64
     pgvector_hnsw_ef_search: int = 100
+    pgvector_query_mode: str = "legacy"
 
 
 @dataclass(frozen=True)
@@ -384,6 +385,7 @@ def load_tenant_profile(path: Path) -> TenantProfile:
     pgvector_hnsw_m = 16
     pgvector_hnsw_ef_construction = 64
     pgvector_hnsw_ef_search = 100
+    pgvector_query_mode = "legacy"
     vector_dimensions = int(storage.get("vector_dimensions", 768))
     if vector_dimensions <= 0 or vector_dimensions > 2000:
         raise ValueError(
@@ -445,6 +447,9 @@ def load_tenant_profile(path: Path) -> TenantProfile:
         pgvector_hnsw.get("ef_construction", 64)
     )
     pgvector_hnsw_ef_search = int(pgvector_hnsw.get("ef_search", 100))
+    pgvector_query_mode = str(
+        pgvector.get("query_mode", "legacy")
+    ).strip().casefold()
     if pgvector_hnsw_m <= 0:
         raise ValueError(
             f"Tenant {company_id!r} pgvector hnsw.m must be positive"
@@ -457,6 +462,11 @@ def load_tenant_profile(path: Path) -> TenantProfile:
     if pgvector_hnsw_ef_search <= 0:
         raise ValueError(
             f"Tenant {company_id!r} pgvector hnsw.ef_search must be positive"
+        )
+    if pgvector_query_mode not in {"legacy", "shadow", "optimized"}:
+        raise ValueError(
+            f"Tenant {company_id!r} pgvector query_mode must be "
+            "legacy, shadow, or optimized"
         )
     if not pgvector_database.database or not pgvector_database.user:
         raise ValueError(
@@ -477,6 +487,7 @@ def load_tenant_profile(path: Path) -> TenantProfile:
         pgvector_hnsw_m=pgvector_hnsw_m,
         pgvector_hnsw_ef_construction=pgvector_hnsw_ef_construction,
         pgvector_hnsw_ef_search=pgvector_hnsw_ef_search,
+        pgvector_query_mode=pgvector_query_mode,
     )
 
     payload = dict(raw.get("payload", {}))
