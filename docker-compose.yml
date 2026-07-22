@@ -59,7 +59,10 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
-    mem_limit: 2500m
+    # The Gainr vector relation is about 3.2 GB including its 1.1 GB HNSW
+    # index. Give PostgreSQL enough cgroup headroom to retain more of that
+    # working set in the filesystem cache on the current 8 GB test server.
+    mem_limit: 4g
     logging:
       driver: json-file
       options:
