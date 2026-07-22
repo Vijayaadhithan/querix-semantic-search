@@ -703,20 +703,26 @@ class PgVectorCollection:
                 f"""
                 WITH nearest AS MATERIALIZED (
                     SELECT id,
+                           metadata,
                            embedding <=> %s::vector AS distance
                     FROM {self._qualified()}
                     ORDER BY embedding <=> %s::vector
                     LIMIT %s
+                ),
+                filtered AS MATERIALIZED (
+                    SELECT id, metadata, distance
+                    FROM nearest
+                    WHERE {filter_clause}
+                    ORDER BY distance
+                    LIMIT %s
                 )
-                SELECT vectors.id,
+                SELECT filtered.id,
                        vectors.document,
-                       vectors.metadata,
-                       nearest.distance
-                FROM nearest
+                       filtered.metadata,
+                       filtered.distance
+                FROM filtered
                 JOIN {self._qualified()} AS vectors USING (id)
-                WHERE {filter_clause}
-                ORDER BY nearest.distance
-                LIMIT %s
+                ORDER BY filtered.distance
                 """,
                 (
                     vector_literal,
