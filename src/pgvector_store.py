@@ -707,22 +707,16 @@ class PgVectorCollection:
                     FROM {self._qualified()}
                     ORDER BY embedding <=> %s::vector
                     LIMIT %s
-                ),
-                filtered AS MATERIALIZED (
-                    SELECT nearest.id, nearest.distance
-                    FROM nearest
-                    JOIN {self._qualified()} AS vectors USING (id)
-                    WHERE {filter_clause}
-                    ORDER BY nearest.distance
-                    LIMIT %s
                 )
                 SELECT vectors.id,
                        vectors.document,
                        vectors.metadata,
-                       filtered.distance
-                FROM filtered
+                       nearest.distance
+                FROM nearest
                 JOIN {self._qualified()} AS vectors USING (id)
-                ORDER BY filtered.distance
+                WHERE {filter_clause}
+                ORDER BY nearest.distance
+                LIMIT %s
                 """,
                 (
                     vector_literal,
