@@ -74,7 +74,6 @@ def write_profile(
     company: str,
     *,
     backend: str = "mysql",
-    vector_backend: str = "pgvector",
 ) -> None:
     prefix = company.upper()
     (tmp_path / f"{company}.yaml").write_text(
@@ -242,12 +241,24 @@ def test_tenant_registry_rejects_shared_api_key(tmp_path, monkeypatch):
         )
 
 
+def test_tenant_profiles_reject_shared_company_search_table(
+    tmp_path,
+    monkeypatch,
+):
+    for company in ("alpha", "beta"):
+        write_profile(tmp_path, company)
+        set_database_environment(monkeypatch, company)
+    monkeypatch.setenv("BETA_DB_NAME", "db_alpha")
+
+    with pytest.raises(ValueError, match="share a company search-data table"):
+        discover_tenant_profiles(tmp_path)
+
+
 def test_postgres_company_profile_is_supported(tmp_path, monkeypatch):
     write_profile(
         tmp_path,
         "alpha",
         backend="postgres",
-        vector_backend="pgvector",
     )
     set_database_environment(monkeypatch, "alpha")
     monkeypatch.setenv("ALPHA_DB_PORT", "5432")
@@ -274,7 +285,6 @@ def test_pgvector_profile_selects_pgvector_collection(
         tmp_path,
         "alpha",
         backend="postgres",
-        vector_backend="pgvector",
     )
     set_database_environment(monkeypatch, "alpha")
     monkeypatch.setenv("ALPHA_DB_PORT", "5432")

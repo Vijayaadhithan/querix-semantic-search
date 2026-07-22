@@ -883,7 +883,6 @@ class ProductSearchEngine:
             results = bm25_search(
                 query_plan["keyword_query"],
                 self.bm25_index,
-                self.collection,
                 resolved_filters,
                 bm25_top_k,
                 include_unpriced=include_unpriced,
@@ -1198,7 +1197,6 @@ class ProductSearchEngine:
         trace_id: str,
         search_started: float,
         allowed_ad_types: set[str] | None = None,
-        ranking_window: int | None = None,
     ) -> dict:
         result_limit = limit if limit is not None else RERANK_TOP_K
         browse_started = time.perf_counter()

@@ -671,6 +671,7 @@ def discover_tenant_profiles(
 
 def validate_tenant_isolation(profiles: Iterable[TenantProfile]) -> None:
     pgvector_owners: dict[tuple[str, int, str, str, str], str] = {}
+    source_owners: dict[tuple[str, str, int, str, str, str], str] = {}
     bm25_owners: dict[Path, str] = {}
     endpoint_owners: dict[str, str] = {}
     for profile in profiles:
@@ -682,6 +683,30 @@ def validate_tenant_isolation(profiles: Iterable[TenantProfile]) -> None:
                 f"share API endpoint slug {endpoint_slug!r}."
             )
         endpoint_owners[endpoint_slug] = profile.company_id
+
+        source_database = profile.database
+        source_key = (
+            "postgres"
+            if isinstance(source_database, PostgresRuntimeConfig)
+            else "mysql",
+            source_database.host.casefold(),
+            source_database.port,
+            source_database.database,
+            (
+                source_database.schema
+                if isinstance(source_database, PostgresRuntimeConfig)
+                else ""
+            ),
+            source_database.search_table,
+        )
+        source_owner = source_owners.get(source_key)
+        if source_owner is not None:
+            raise ValueError(
+                f"Tenants {source_owner!r} and {profile.company_id!r} "
+                "share a company search-data table."
+            )
+        source_owners[source_key] = profile.company_id
+
         database = profile.storage.pgvector_database
         if database is None:
             raise ValueError(

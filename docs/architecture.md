@@ -79,7 +79,9 @@ Each tenant owns:
 - tenant-prefixed Redis keys;
 - tenant-scoped usage and recent-search records.
 
-Startup rejects shared endpoint slugs, API keys, pgvector tables, and BM25 files. Tenant identity is also stored in vector metadata and verified after retrieval.
+Startup rejects shared endpoint slugs, API keys, company search-data tables,
+pgvector tables, and BM25 files. Tenant identity is also stored in vector
+metadata and verified after retrieval.
 
 ## Ingestion
 

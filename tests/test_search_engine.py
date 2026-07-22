@@ -887,6 +887,40 @@ def test_shared_plan_cache_survives_engine_restart(tmp_path):
     index.close()
 
 
+def test_shared_plan_cache_is_namespaced_by_company(tmp_path):
+    alpha_index = build_index(tmp_path / "alpha-plan-cache.sqlite3")
+    beta_index = build_index(tmp_path / "beta-plan-cache.sqlite3")
+    cache = DictSharedCache()
+    alpha_provider = CountingQueryProvider()
+    beta_provider = CountingQueryProvider()
+    alpha_engine = ProductSearchEngine(
+        collection=FakeCollection(),
+        bm25_index=alpha_index,
+        query_provider=alpha_provider,
+        shared_plan_cache=cache,
+        company_id="alpha",
+    )
+    beta_engine = ProductSearchEngine(
+        collection=FakeCollection(),
+        bm25_index=beta_index,
+        query_provider=beta_provider,
+        shared_plan_cache=cache,
+        company_id="beta",
+    )
+
+    alpha_engine.plan("red bike")
+    beta_engine.plan("red bike")
+
+    assert alpha_provider.calls == 1
+    assert beta_provider.calls == 1
+    assert {namespace for namespace, _key in cache.values} == {
+        "alpha:query_plan",
+        "beta:query_plan",
+    }
+    alpha_index.close()
+    beta_index.close()
+
+
 def test_result_id_cache_skips_repeated_search_and_invalidates_on_index_change(
     tmp_path,
     monkeypatch,
@@ -1138,7 +1172,7 @@ def test_small_rerank_window_preserves_deep_gainr_recall(
         )
         return results
 
-    def bm25(_query, _index, _collection, _filters, top_k, **_kwargs):
+    def bm25(_query, _index, _filters, top_k, **_kwargs):
         captured["bm25_top_k"] = top_k
         return []
 

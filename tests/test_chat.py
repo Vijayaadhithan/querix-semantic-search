@@ -127,14 +127,12 @@ def test_unfiltered_vector_query_skips_redundant_tenant_metadata_where():
 
 def test_filtered_vector_query_uses_only_real_search_constraints():
     where_filter = vector_where_filter(
-        "mysql:gainr.ads_search_ready",
         {
             "categorical": {
                 "city_id": 456,
                 "rental_duration": ["Per Hour", "Per Day"],
             }
         },
-        "gainr",
     )
 
     assert where_filter == {

@@ -684,6 +684,66 @@ def test_different_company_engines_can_search_concurrently(tmp_path):
     assert beta_result.items == [{"id": 1, "title": "beta-1"}]
 
 
+def test_six_company_endpoints_remain_isolated_across_pool_eviction(tmp_path):
+    company_ids = tuple(f"tenant-{number}" for number in range(6))
+    profiles = {
+        company_id: tenant_profile(tmp_path, company_id)
+        for company_id in company_ids
+    }
+    registry = TenantRegistry(
+        profiles,
+        api_keys={
+            company_id: [f"{company_id}-key"]
+            for company_id in company_ids
+        },
+    )
+
+    def engine_factory(profile, _cache, _shared_reranker):
+        engine = FakeEngine()
+        original_search = engine.search
+
+        def company_search(query, limit=None):
+            result = original_search(query, limit)
+            result["products"] = [
+                {"id": 1, "title": f"{profile.company_id}-result"}
+            ]
+            return result
+
+        engine.search = company_search
+        return engine
+
+    app = create_app(
+        tenant_registry=registry,
+        tenant_engine_factory=engine_factory,
+        preload_models=False,
+    )
+    responses = {}
+    with TestClient(app) as client:
+        for company_id in company_ids:
+            response = client.post(
+                f"/api/v1/{company_id}/search",
+                headers={"X-API-Key": f"{company_id}-key"},
+                json={"query": "same query", "page_size": 1},
+            )
+            responses[company_id] = response
+        repeated = client.post(
+            "/api/v1/tenant-0/search",
+            headers={"X-API-Key": "tenant-0-key"},
+            json={"query": "same query", "page_size": 1},
+        )
+
+    for company_id, response in responses.items():
+        assert response.status_code == 200
+        assert response.json()["company_id"] == company_id
+        assert response.json()["items"] == [
+            {"id": 1, "title": f"{company_id}-result"}
+        ]
+    assert repeated.status_code == 200
+    assert repeated.json()["items"] == [
+        {"id": 1, "title": "tenant-0-result"}
+    ]
+
+
 def test_users_in_the_same_company_can_search_concurrently():
     barrier = threading.Barrier(2)
 

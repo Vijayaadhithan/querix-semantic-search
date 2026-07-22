@@ -57,9 +57,7 @@ def metadata_matches_filters(
 
 
 def vector_where_filter(
-    source_name,
     resolved_filters,
-    company_id=None,
     include_unpriced=False,
 ):
     # Each tenant owns an isolated pgvector table. Source and tenant metadata
@@ -124,9 +122,7 @@ def vector_search(
     }
     if source_name is not None and resolved_filters is not None:
         where_filter = vector_where_filter(
-            source_name,
             resolved_filters,
-            company_id,
             include_unpriced,
         )
         if where_filter is not None and post_filter_metadata == "adaptive":
@@ -225,7 +221,6 @@ def vector_search(
 def bm25_search(
     query,
     index,
-    collection,
     resolved_filters,
     top_k=15,
     *,

@@ -112,7 +112,9 @@ diagnostics, ingestion, backup, and recovery commands.
 
 Keep non-secret defaults in `.env` and tenant YAML files. Keep passwords, API keys, and provider credentials in `.env.keys` or a production secret manager. Never commit either populated file.
 
-Each tenant profile must define a unique endpoint slug, BM25 path, and pgvector table. Startup validation rejects shared tenant resources.
+Each tenant profile must define a unique endpoint slug, company search-data
+table, BM25 path, and pgvector table. Startup validation rejects shared tenant
+resources.
 
 Important reranker controls:
 
