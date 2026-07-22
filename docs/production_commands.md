@@ -464,6 +464,20 @@ curl -fsS -X POST \
   -d '{"query":"example product query","page_size":10}'
 ```
 
+For a tenant configured with the `gainr_legacy` compatibility adapter, use
+`/filter-result` instead. Its mobile, web, and other clients must send the
+selected location as `filter.city_id`; `/search` is intentionally disabled:
+
+```bash
+read -r CITY_ID
+curl -fsS -X POST \
+  "http://127.0.0.1:8000/api/v1/${COMPANY_ID}/filter-result" \
+  -H 'Content-Type: application/json' \
+  -H "X-API-Key: $COMPANY_API_KEY" \
+  -d "{\"searchTerm\":\"example product query\",\"filter\":{\"city_id\":${CITY_ID}},\"page\":1}"
+unset CITY_ID
+```
+
 Clear the temporary shell variable afterward:
 
 ```bash

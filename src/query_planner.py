@@ -19,6 +19,18 @@ QUERY_FILTER_FIELDS = {
     "rental_duration": "rental_duration",
 }
 QUERY_FILTER_KEYS = (*QUERY_FILTER_FIELDS, "min_rental_fee", "max_rental_fee")
+
+
+class CatalogValueMap(dict):
+    """Catalogue values with a stable longest-first view built once."""
+
+    def __init__(self, values: dict):
+        super().__init__(values)
+        self.longest_first = tuple(
+            sorted(self.items(), key=lambda item: len(item[0]), reverse=True)
+        )
+
+
 QUERY_FILTER_ALIASES = {
     "state": {
         "orissa": "odisha",
@@ -450,7 +462,40 @@ def category_term_pattern(value: str) -> str:
     return escaped
 
 
+def is_repair_subject_usage(query: str, value: str) -> bool:
+    """Return true when a catalogue noun is the object being repaired."""
+
+    normalized_value = normalize_filter_value(value)
+    if re.search(
+        r"\b(?:repair|service|maintenance|mechanic|technician|plumber|"
+        r"electrician|serviceman|servicemen)\b",
+        normalized_value,
+    ):
+        # The catalogue value itself represents a repair/service listing.
+        return False
+    normalized_query = normalize_filter_value(query)
+    term = category_term_pattern(value)
+    action = (
+        r"(?:repair(?:s|ed|ing)?|fix(?:es|ed|ing)?|"
+        r"servic(?:e|es|ed|ing)|maintain(?:s|ed|ing)?|maintenance)"
+    )
+    return bool(
+        re.search(
+            rf"\b{action}\b(?:\s+[a-z0-9_-]+){{0,3}}\s+{term}(?!\w)",
+            normalized_query,
+        )
+        or re.search(
+            rf"(?<!\w){term}\s+(?:(?:that|which)\s+)?"
+            rf"(?:(?:need|needs|require|requires)\s+)?(?:for\s+)?"
+            rf"{action}\b",
+            normalized_query,
+        )
+    )
+
+
 def is_explicit_category_request(query: str, value: str) -> bool:
+    if is_repair_subject_usage(query, value):
+        return False
     normalized_query = normalize_filter_value(query)
     term = category_term_pattern(value)
     attribute = (
@@ -594,11 +639,14 @@ def find_catalog_value(
     allow_plural: bool = False,
 ) -> str | None:
     normalized_query = normalize_filter_value(query)
-    for normalized_value, actual_value in sorted(
-        values.items(),
-        key=lambda item: len(item[0]),
-        reverse=True,
-    ):
+    ordered_values = getattr(values, "longest_first", None)
+    if ordered_values is None:
+        ordered_values = sorted(
+            values.items(),
+            key=lambda item: len(item[0]),
+            reverse=True,
+        )
+    for normalized_value, actual_value in ordered_values:
         escaped_value = re.escape(normalized_value)
         if allow_plural and re.fullmatch(r"[a-z0-9_-]+", normalized_value):
             if re.search(r"[^aeiou]y$", normalized_value):
@@ -1248,7 +1296,7 @@ def enrich_query_plan(
         filters.get("subcategory") is None
         and inferred_categories.get("subcategory") is None
     ):
-        inferred_categories["subcategory"] = (
+        inferred_subcategory = (
             infer_functional_subcategory(
                 query,
                 value_index["subcategory"],
@@ -1258,6 +1306,12 @@ def enrich_query_plan(
                 value_index["subcategory"],
             )
         )
+        if inferred_subcategory is not None and is_repair_subject_usage(
+            query,
+            inferred_subcategory,
+        ):
+            inferred_subcategory = None
+        inferred_categories["subcategory"] = inferred_subcategory
 
     if (
         is_functional_vehicle_travel_request(query)
@@ -1329,6 +1383,9 @@ def enrich_query_plan(
 
     plan["filters"] = filters
     plan["inferred_categories"] = inferred_categories
+    # Keep the model field in the structured response, then validate it locally.
+    # This prevents an occasional model-side "wanted" hallucination from
+    # reversing an ordinary offer search.
     plan["target_ad_type"] = infer_target_ad_type(query)
     plan["sort_order"] = extract_sort_order(query)
     return plan
@@ -1510,8 +1567,7 @@ def extract_query_plan(
         f"Original user query:\n{query}\n"
         f"{normalization_text}\n"
         f"{catalog_text}"
-        "Return only JSON matching this schema:\n"
-        f"{json.dumps(QUERY_PLAN_SCHEMA, separators=(',', ':'))}"
+        "Return the structured query plan."
     )
     try:
         if query_provider is None:
@@ -1538,7 +1594,7 @@ def extract_query_plan(
 def query_filter_value_index(bm25_index: PersistentBM25Index) -> dict:
     stored_values = bm25_index.filter_value_index()
     value_index = {
-        query_key: stored_values[metadata_key]
+        query_key: CatalogValueMap(stored_values[metadata_key])
         for query_key, metadata_key in QUERY_FILTER_FIELDS.items()
     }
     value_index["_subcategory_main_category"] = (

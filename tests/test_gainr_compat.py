@@ -336,6 +336,27 @@ def test_explicit_ids_clear_conflicting_inferred_filter_hierarchy(tmp_path):
     }
 
 
+def test_chat_location_is_discarded_without_a_structured_location(tmp_path):
+    adapter, _engine, _repository = service(tmp_path)
+    request = adapter.parse_filter_result(
+        {
+            "searchTerm": "bike in Chennai",
+            "filter": {},
+            "page": 1,
+        }
+    )
+
+    _planned, effective, meta = adapter._effective_plan(request)
+
+    assert effective["categorical"] == {
+        "subcategory_name": "Bike",
+        "rental_duration": "Per Day",
+    }
+    assert meta["ignored_auto_filters"] == {
+        "city_name": "Chennai",
+    }
+
+
 def test_explicit_locality_id_clears_inferred_location_hierarchy(tmp_path):
     adapter, engine, _repository = service(tmp_path)
 

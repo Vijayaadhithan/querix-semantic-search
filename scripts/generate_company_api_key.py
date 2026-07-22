@@ -36,8 +36,13 @@ def main() -> int:
 
     secret = f"rag_{profile.company_id}_{secrets.token_urlsafe(32)}"
     fingerprint = hashlib.sha256(secret.encode("utf-8")).hexdigest()[:16]
+    route = (
+        "filter-result"
+        if profile.compatibility.adapter == "gainr_legacy"
+        else "search"
+    )
     print(f"Company: {profile.company_id}")
-    print(f"Endpoint: /api/v1/{profile.endpoint_slug}/search")
+    print(f"Endpoint: /api/v1/{profile.endpoint_slug}/{route}")
     print(f"Set one of: {', '.join(profile.api_key_envs)}")
     print(f"API key (shown once): {secret}")
     print(f"SHA-256 fingerprint: {fingerprint}")

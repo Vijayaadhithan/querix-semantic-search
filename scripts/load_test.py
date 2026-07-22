@@ -83,6 +83,11 @@ def main() -> int:
     parser.add_argument("--requests", type=int, default=20)
     parser.add_argument("--concurrency", type=int, default=2)
     parser.add_argument("--page-size", type=int, default=20)
+    parser.add_argument(
+        "--city-id",
+        type=int,
+        help="selected frontend city ID (required by gainr_legacy)",
+    )
     parser.add_argument("--timeout-seconds", type=float, default=180)
     parser.add_argument("--warmup", type=int, default=1)
     parser.add_argument(
@@ -118,18 +123,27 @@ def main() -> int:
         )
 
     queries = args.queries or ["portable camera"]
-    mapping = profile.payload.request_mapping
-    query_field = mapping["query"]
-    page_size_field = mapping["page_size"]
+    compatibility_enabled = profile.compatibility.adapter == "gainr_legacy"
+    if compatibility_enabled and (args.city_id is None or args.city_id <= 0):
+        parser.error("--city-id must be a positive integer for gainr_legacy")
+    route = "filter-result" if compatibility_enabled else "search"
     url = (
         f"{args.base_url.rstrip('/')}/api/v1/"
-        f"{profile.endpoint_slug}/search"
+        f"{profile.endpoint_slug}/{route}"
     )
 
     def payload(number: int) -> dict:
+        query = queries[number % len(queries)]
+        if compatibility_enabled:
+            return {
+                "searchTerm": query,
+                "filter": {"city_id": args.city_id},
+                "page": 1,
+            }
+        mapping = profile.payload.request_mapping
         return {
-            query_field: queries[number % len(queries)],
-            page_size_field: args.page_size,
+            mapping["query"]: query,
+            mapping["page_size"]: args.page_size,
         }
 
     for number in range(args.warmup):

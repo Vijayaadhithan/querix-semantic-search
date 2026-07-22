@@ -950,6 +950,16 @@ def test_gainr_compatibility_routes_are_enabled_only_by_tenant_config(
             headers={"X-API-Key": "alpha-key"},
             json={"city_id": 456},
         )
+        closed_generic = client.post(
+            "/api/v1/gainr/search",
+            headers={"X-API-Key": "gainr-key"},
+            json={"query": "bike"},
+        )
+        alpha_generic = client.post(
+            "/api/v1/alpha/search",
+            headers={"X-API-Key": "alpha-key"},
+            json={"query": "bike"},
+        )
 
     assert suggestions.json()["data"] == [{"value": "bike"}]
     assert filter_data.json() == {"data": {"city_id": 456}}
@@ -958,6 +968,8 @@ def test_gainr_compatibility_routes_are_enabled_only_by_tenant_config(
     assert recent.json()["data"][0]["value"] == "user-7"
     assert disabled.status_code == 404
     assert mismatched.status_code == 403
+    assert closed_generic.status_code == 404
+    assert alpha_generic.status_code == 200
 
 
 def test_admin_status_requires_separate_key_and_hides_queries(

@@ -397,6 +397,10 @@ curl -fsS --max-time 120 -X POST \
 unset COMPANY_API_KEY
 ```
 
+For a tenant configured with the `gainr_legacy` compatibility adapter, smoke
+test `/filter-result` with the frontend-selected `filter.city_id` instead. The
+generic `/search` route is intentionally disabled for that tenant.
+
 Finally, test the TLS reverse-proxy endpoint and the actual customer frontend. Loopback readiness alone does not verify DNS, certificates, proxy routing, CORS, or frontend credentials.
 
 ## 12. Verify restart behavior

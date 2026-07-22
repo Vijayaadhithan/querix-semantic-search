@@ -57,6 +57,13 @@ class GeminiProvider:
     def last_chat_metrics(self, value: dict[str, object]) -> None:
         self._state.last_chat_metrics = value
 
+    def _post(self, *args, **kwargs):
+        session = getattr(self._state, "http_session", None)
+        if session is None:
+            session = requests.Session()
+            self._state.http_session = session
+        return session.post(*args, **kwargs)
+
     def structured_chat(
         self,
         model: str,
@@ -76,7 +83,7 @@ class GeminiProvider:
             "model": model,
         }
         try:
-            response = requests.post(
+            response = self._post(
                 (
                     f"{self.base_url}/models/"
                     f"{quote(model, safe='.-')}:generateContent"
@@ -194,6 +201,13 @@ class GroqProvider:
     def last_chat_metrics(self, value: dict[str, object]) -> None:
         self._state.last_chat_metrics = value
 
+    def _post(self, *args, **kwargs):
+        session = getattr(self._state, "http_session", None)
+        if session is None:
+            session = requests.Session()
+            self._state.http_session = session
+        return session.post(*args, **kwargs)
+
     @staticmethod
     def _output_text(payload: dict) -> str:
         direct = payload.get("output_text")
@@ -247,7 +261,7 @@ class GroqProvider:
         elif temperature > 0:
             request_body["temperature"] = temperature
         try:
-            response = requests.post(
+            response = self._post(
                 f"{self.base_url}/responses",
                 headers={
                     "Authorization": f"Bearer {self.api_key}",

@@ -1516,6 +1516,13 @@ def create_app(
                 status_code=404,
                 detail="Unknown company endpoint.",
             )
+        if profile.compatibility.adapter == "gainr_legacy":
+            raise HTTPException(
+                status_code=404,
+                detail=(
+                    "This tenant uses the compatibility filter-result endpoint."
+                ),
+            )
         mapping = profile.payload.request_mapping or {
             "query": "query",
             "cursor": "cursor",

@@ -902,6 +902,12 @@ class GainrCompatibilityService:
         effective = copy.deepcopy(auto_filters)
         categorical = effective.setdefault("categorical", {})
         ignored: dict[str, Any] = {}
+        # Gainr receives the selected location as structured frontend IDs on
+        # mobile, web, and every other supported client. Chat text must never
+        # create a competing hard geographic filter.
+        for auto_key in ("state_name", "city_name", "locality_name"):
+            if auto_key in categorical:
+                ignored[auto_key] = categorical.pop(auto_key)
         explicit = request.filter
         replacements = (
             (

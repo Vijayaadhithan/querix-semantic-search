@@ -191,6 +191,10 @@ These routes are adapter-specific and are not part of the canonical integration 
 Gainr's `filter-result` adapter uses page-number pagination rather than the
 canonical cursor contract. Resend the same `searchTerm` and `filter` object and
 change only `page`. Exact deterministic requests use the direct catalogue path.
+For a tenant using this adapter, the canonical `/<company-slug>/search` route is
+disabled; mobile, web, and other clients must use `filter-result`. Structured
+frontend location IDs are authoritative, and chat text does not create hard
+state, city, or locality constraints.
 Semantic requests keep the ranked vector/BM25 results first, then eligible
 filtered continuation inventory satisfying the same predefined city, locality,
 price, duration, and ad-type constraints. The final page may contain fewer than

@@ -1,3 +1,4 @@
+import json
 import sys
 from pathlib import Path
 
@@ -422,6 +423,98 @@ def test_functional_category_word_does_not_become_hard_filter():
     assert enriched["filters"]["subcategory"] is None
     assert enriched["inferred_categories"]["main_category"] is None
     assert enriched["inferred_categories"]["subcategory"] is None
+
+
+@pytest.mark.parametrize(
+    ("query", "subcategory"),
+    [
+        ("someone who can repair leaking pipes at my house", "Pipes"),
+        ("bike repair", "Bike"),
+        ("fridge service", "Fridge"),
+    ],
+)
+def test_repair_subject_does_not_become_a_product_filter(
+    query,
+    subcategory,
+):
+    plan = parse_query_plan(
+        json.dumps(
+            {
+                "semantic_query": query,
+                "keyword_query": query,
+                "target_ad_type": "offer",
+                "filters": {
+                    "main_category": "Products",
+                    "subcategory": subcategory,
+                },
+            }
+        ),
+        query,
+    )
+    value_index = {
+        "main_category": {"products": "Products"},
+        "subcategory": {
+            "pipes": "Pipes",
+            "bike": "Bike",
+            "fridge": "Fridge",
+        },
+        "state": {},
+        "city": {},
+        "locality": {},
+        "rental_duration": {},
+        "_subcategory_main_category": {
+            "pipes": "Products",
+            "bike": "Products",
+            "fridge": "Products",
+        },
+        "_city_state": {},
+        "_locality_location": {},
+    }
+
+    enriched = enrich_query_plan(query, plan, value_index)
+
+    assert enriched["filters"]["main_category"] is None
+    assert enriched["filters"]["subcategory"] is None
+    assert enriched["inferred_categories"]["main_category"] is None
+    assert enriched["inferred_categories"]["subcategory"] is None
+
+
+def test_physical_product_for_rent_remains_a_hard_filter():
+    query = "pipes for rent"
+    plan = parse_query_plan(
+        json.dumps(
+            {
+                "semantic_query": query,
+                "keyword_query": query,
+                "target_ad_type": "offer",
+                "filters": {
+                    "main_category": "Farm & Agri Products",
+                    "subcategory": "Pipes",
+                },
+            }
+        ),
+        query,
+    )
+    value_index = {
+        "main_category": {
+            "farm & agri products": "Farm & Agri Products",
+        },
+        "subcategory": {"pipes": "Pipes"},
+        "state": {},
+        "city": {},
+        "locality": {},
+        "rental_duration": {},
+        "_subcategory_main_category": {
+            "pipes": "Farm & Agri Products",
+        },
+        "_city_state": {},
+        "_locality_location": {},
+    }
+
+    enriched = enrich_query_plan(query, plan, value_index)
+
+    assert enriched["filters"]["main_category"] == "Farm & Agri Products"
+    assert enriched["filters"]["subcategory"] == "Pipes"
 
 
 def test_descriptive_query_keeps_explicit_category_as_hard_filter():

@@ -66,7 +66,11 @@ def test_structured_chat_uses_generate_content_json_schema(monkeypatch):
             }
         )
 
-    monkeypatch.setattr("gemini_client.requests.post", fake_post)
+    monkeypatch.setattr(
+        GeminiProvider,
+        "_post",
+        lambda _self, *args, **kwargs: fake_post(*args, **kwargs),
+    )
     provider = GeminiProvider(
         api_key="test-key",
         base_url="https://generativelanguage.test/v1beta",
@@ -147,7 +151,11 @@ def test_groq_structured_chat_uses_responses_json_schema(monkeypatch):
             }
         )
 
-    monkeypatch.setattr("gemini_client.requests.post", fake_post)
+    monkeypatch.setattr(
+        GroqProvider,
+        "_post",
+        lambda _self, *args, **kwargs: fake_post(*args, **kwargs),
+    )
     provider = GroqProvider(
         api_key="test-key",
         base_url="https://api.groq.test/openai/v1",
@@ -201,8 +209,9 @@ def test_provider_captures_google_usage_metadata(monkeypatch):
             return payload
 
     monkeypatch.setattr(
-        "gemini_client.requests.post",
-        lambda *_args, **_kwargs: UsageResponse(
+        GeminiProvider,
+        "_post",
+        lambda _self, *_args, **_kwargs: UsageResponse(
             {
                 "candidates": [
                     {
@@ -350,7 +359,11 @@ def test_provider_timeout_becomes_retryable_model_failure(monkeypatch):
     def timeout(*_args, **_kwargs):
         raise requests.ReadTimeout("slow provider")
 
-    monkeypatch.setattr("gemini_client.requests.post", timeout)
+    monkeypatch.setattr(
+        GeminiProvider,
+        "_post",
+        lambda _self, *args, **kwargs: timeout(*args, **kwargs),
+    )
     provider = GeminiProvider(
         api_key="test-key",
         base_url="https://generativelanguage.test/v1beta",

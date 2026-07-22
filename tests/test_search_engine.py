@@ -148,6 +148,8 @@ def test_tenant_prompt_context_is_added_only_to_llm_planning(tmp_path):
         "This tenant rents professional event equipment."
         in provider.system_prompt
     )
+    assert "Return the structured query plan." in provider.user_prompt
+    assert '"semantic_query"' not in provider.user_prompt
 
 
 def test_transliterated_queries_receive_trusted_semantic_normalization(tmp_path):

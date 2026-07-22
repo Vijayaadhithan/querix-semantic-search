@@ -85,5 +85,23 @@
       "filters.subcategory": "Car",
       "filters.city": "Chennai"
     }
+  },
+  {
+    "name": "repair_subject_stays_semantic",
+    "query": "someone who can repair leaking pipes at my house",
+    "expected": {
+      "target_ad_type": "offer",
+      "filters.main_category": null,
+      "filters.subcategory": null
+    }
+  },
+  {
+    "name": "physical_pipes_for_rent",
+    "query": "pipes for rent",
+    "expected": {
+      "target_ad_type": "offer",
+      "filters.main_category": "Farm & Agri Products",
+      "filters.subcategory": "Pipes"
+    }
   }
 ]
