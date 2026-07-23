@@ -1,47 +1,67 @@
-[
-  {
-    "name": "quad_bike_bangalore",
-    "query": "Quad Bike for Hourly Rent in Bangalore",
-    "relevant_ids": [
-      "3507",
-      "3508",
-      "3375",
-      "3485",
-      "3491",
-      "3499",
-      "3385",
-      "3488",
-      "3379",
-      "3398",
-      "3397",
-      "3380"
-    ]
-  },
-  {
-    "name": "functional_wedding_recording",
-    "query": "something portable that can record a wedding clearly from far away in Chennai for a day",
-    "relevant_ids": ["183462", "209355", "34309", "165161", "209313"]
-  },
-  {
-    "name": "functional_off_road_vehicle",
-    "query": "A vehicle for recreational driving on rough terrain.",
-    "relevant_ids": ["68971"]
-  },
-  {
-    "name": "wanted_hourly_bike",
-    "query": "someone looking for bikes in 1000 range per hour",
-    "relevant_ids": [
-      "87827",
-      "172784",
-      "203895",
-      "91074",
-      "80245",
-      "241835"
-    ]
-  },
-  {
-    "name": "weekly_bike_offer_has_no_match",
-    "query": "need a bike for a week within 800",
-    "expected_empty": true
-  }
-]
+{
+  "reranker_runs": 3,
+  "minimum_median_mrr": 0.75,
+  "max_reranker_fallbacks": 0,
+  "cases": [
+    {
+      "name": "quad_bike_bangalore",
+      "query": "Quad Bike for Hourly Rent in Bangalore",
+      "relevant_ids": [
+        "3507",
+        "3508",
+        "3375",
+        "3485",
+        "3491",
+        "3499",
+        "3385",
+        "3488",
+        "3379",
+        "3398",
+        "3397",
+        "3380"
+      ],
+      "min_reciprocal_rank": 1.0,
+      "min_precision_at_3": 0.67,
+      "min_hit_rate_at_10": 1.0,
+      "min_candidate_recall": 0.5
+    },
+    {
+      "name": "functional_wedding_recording",
+      "query": "something portable that can record a wedding clearly from far away in Chennai for a day",
+      "relevant_ids": ["183462", "209355", "34309", "165161", "209313"],
+      "min_reciprocal_rank": 0.5,
+      "min_precision_at_3": 0.33,
+      "min_hit_rate_at_10": 1.0,
+      "min_candidate_recall": 0.2
+    },
+    {
+      "name": "functional_off_road_vehicle",
+      "query": "A vehicle for recreational driving on rough terrain.",
+      "relevant_ids": ["68971"],
+      "min_reciprocal_rank": 0.333,
+      "min_precision_at_3": 0.333,
+      "min_hit_rate_at_10": 1.0,
+      "min_candidate_recall": 1.0
+    },
+    {
+      "name": "wanted_hourly_bike",
+      "query": "someone looking for bikes in 1000 range per hour",
+      "relevant_ids": [
+        "87827",
+        "172784",
+        "203895",
+        "91074",
+        "80245",
+        "241835"
+      ],
+      "min_reciprocal_rank": 0.2,
+      "min_hit_rate_at_10": 1.0,
+      "min_candidate_recall": 0.15
+    },
+    {
+      "name": "weekly_bike_offer_has_no_match",
+      "query": "need a bike for a week within 800",
+      "expected_empty": true
+    }
+  ]
+}
