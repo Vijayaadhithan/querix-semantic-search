@@ -1,6 +1,7 @@
 import argparse
 import hashlib
 import json
+import time
 from copy import deepcopy
 from pathlib import Path
 from statistics import mean, median
@@ -21,6 +22,26 @@ from vector_store import get_tenant_vector_collection
 
 DEFAULT_CASES_PATH = PROJECT_ROOT / "eval" / "retrieval_cases.json"
 SNAPSHOT_VERSION = 1
+
+
+class RerankerPacer:
+    """Space hosted reranker calls so the evaluator does not create fallbacks."""
+
+    def __init__(self, minimum_interval_seconds: float):
+        if minimum_interval_seconds < 0:
+            raise ValueError("reranker interval must not be negative")
+        self.minimum_interval_seconds = minimum_interval_seconds
+        self.last_started: float | None = None
+
+    def wait(self) -> None:
+        now = time.monotonic()
+        if self.last_started is not None:
+            remaining = self.minimum_interval_seconds - (
+                now - self.last_started
+            )
+            if remaining > 0:
+                time.sleep(remaining)
+        self.last_started = time.monotonic()
 
 
 def reciprocal_rank(result_ids: list[str], relevant_ids: set[str]) -> float:
@@ -235,6 +256,7 @@ def run_with_fixed_candidates(
     case: dict,
     planned: dict,
     runs: int,
+    reranker_pacer: RerankerPacer | None = None,
 ) -> dict:
     query = str(case["query"])
     result_limit = int(case.get("result_limit", 20))
@@ -248,6 +270,8 @@ def run_with_fixed_candidates(
         top_k=None,
         trace_id="-",
     ):
+        if reranker_pacer is not None:
+            reranker_pacer.wait()
         ranked = original_rank(
             ranking_query,
             candidates,
@@ -316,6 +340,8 @@ def run_with_fixed_candidates(
     ]
     ranked_runs = [captured["first_ranked"]]
     for run_index in range(1, runs):
+        if reranker_pacer is not None:
+            reranker_pacer.wait()
         ranked_runs.append(
             original_rank(
                 query,
@@ -514,6 +540,14 @@ def main() -> None:
         help="reranker runs per fixed candidate set (default: suite setting or 3)",
     )
     parser.add_argument(
+        "--reranker-delay-seconds",
+        type=float,
+        help=(
+            "minimum delay between hosted reranker calls "
+            "(default: suite setting or 0)"
+        ),
+    )
+    parser.add_argument(
         "--plan-snapshot",
         type=Path,
         help="optional reusable query-plan snapshot JSON",
@@ -536,6 +570,14 @@ def main() -> None:
     runs = int(args.runs or suite_settings.get("reranker_runs", 3))
     if runs <= 0:
         raise SystemExit("--runs must be greater than zero.")
+    reranker_delay_seconds = float(
+        args.reranker_delay_seconds
+        if args.reranker_delay_seconds is not None
+        else suite_settings.get("reranker_delay_seconds", 0.0)
+    )
+    if reranker_delay_seconds < 0:
+        raise SystemExit("--reranker-delay-seconds must not be negative.")
+    reranker_pacer = RerankerPacer(reranker_delay_seconds)
 
     profiles = discover_tenant_profiles()
     try:
@@ -591,6 +633,7 @@ def main() -> None:
                 case,
                 planned,
                 runs,
+                reranker_pacer,
             )
             report = evaluate_fixed_case(profile, case, fixed)
             case_reports.append(report)
@@ -664,6 +707,7 @@ def main() -> None:
         "company": profile.company_id,
         "case_file": str(args.cases),
         "runs": runs,
+        "reranker_delay_seconds": reranker_delay_seconds,
         "passed_cases": passed,
         "total_cases": len(case_reports),
         "run_mrrs": run_mrrs,

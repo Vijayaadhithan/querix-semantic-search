@@ -7,7 +7,9 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+import evaluate_retrieval
 from evaluate_retrieval import (
+    RerankerPacer,
     evaluate_fixed_case,
     load_case_suite,
     load_plan_snapshot,
@@ -68,6 +70,31 @@ def test_plan_snapshot_rejects_a_stale_planner_fingerprint(tmp_path):
             planner_fingerprint="new",
             refresh=False,
         )
+
+
+def test_reranker_pacer_respects_the_provider_interval(monkeypatch):
+    clock = [0.0]
+    sleeps = []
+
+    monkeypatch.setattr(
+        evaluate_retrieval.time,
+        "monotonic",
+        lambda: clock[0],
+    )
+
+    def sleep(seconds):
+        sleeps.append(seconds)
+        clock[0] += seconds
+
+    monkeypatch.setattr(evaluate_retrieval.time, "sleep", sleep)
+    pacer = RerankerPacer(21)
+
+    pacer.wait()
+    clock[0] = 5
+    pacer.wait()
+
+    assert sleeps == [16]
+    assert pacer.last_started == 21
 
 
 def test_fixed_candidate_runs_reuse_one_candidate_set():

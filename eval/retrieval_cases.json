@@ -1,5 +1,6 @@
 {
   "reranker_runs": 3,
+  "reranker_delay_seconds": 21,
   "minimum_median_mrr": 0.75,
   "max_reranker_fallbacks": 0,
   "cases": [

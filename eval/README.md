@@ -19,6 +19,10 @@ snapshot is accepted only when the company and full planner/catalog
 fingerprint match; use `--refresh-plans` after an intentional planner or
 catalog change.
 
+The reviewed suite spaces hosted reranker calls by 21 seconds because the
+current primary provider budget is three requests per minute. This prevents
+the evaluator itself from forcing a provider fallback.
+
 Each case can use the existing `relevant_ids`, `expected_filters`,
 `source_filters`, or `acceptable_filters` labels. Optional production gates:
 
@@ -42,6 +46,7 @@ The case file may also be an object with suite gates:
 ```json
 {
   "reranker_runs": 3,
+  "reranker_delay_seconds": 21,
   "minimum_median_mrr": 0.75,
   "max_reranker_fallbacks": 0,
   "cases": []
