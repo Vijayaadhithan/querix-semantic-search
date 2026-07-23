@@ -47,17 +47,19 @@
     {
       "name": "wanted_hourly_bike",
       "query": "someone looking for bikes in 1000 range per hour",
-      "relevant_ids": [
-        "87827",
-        "172784",
-        "203895",
-        "91074",
-        "80245",
-        "241835"
-      ],
-      "min_reciprocal_rank": 0.2,
+      "source_filters": {
+        "type": 2,
+        "main_category_name": "Automobiles",
+        "subcategory_name": "Bike",
+        "rental_duration": "Per Hour",
+        "rental_fee": {
+          "$lte_or_null": 1000
+        }
+      },
+      "min_reciprocal_rank": 1.0,
+      "min_precision_at_3": 1.0,
       "min_hit_rate_at_10": 1.0,
-      "min_candidate_recall": 0.15
+      "min_candidate_recall": 1.0
     },
     {
       "name": "weekly_bike_offer_has_no_match",

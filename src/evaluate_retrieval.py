@@ -85,6 +85,41 @@ def quote_identifier(config, value: str) -> str:
     return quote_mysql_identifier(value)
 
 
+def source_filter_clause(
+    config,
+    column: str,
+    expected,
+) -> tuple[str, list]:
+    identifier = quote_identifier(config, column)
+    if not isinstance(expected, dict):
+        return f"{identifier} = %s", [expected]
+    if len(expected) != 1:
+        raise ValueError(
+            f"Source filter {column!r} must contain exactly one operator."
+        )
+    operator, value = next(iter(expected.items()))
+    sql_operators = {
+        "$lt": "<",
+        "$lte": "<=",
+        "$gt": ">",
+        "$gte": ">=",
+        "$ne": "!=",
+    }
+    if operator in sql_operators:
+        return f"{identifier} {sql_operators[operator]} %s", [value]
+    if operator == "$lte_or_null":
+        return f"({identifier} <= %s OR {identifier} IS NULL)", [value]
+    if operator == "$in":
+        values = list(value)
+        if not values:
+            return "1 = 0", []
+        placeholders = ", ".join(["%s"] * len(values))
+        return f"{identifier} IN ({placeholders})", values
+    raise ValueError(
+        f"Unsupported source filter operator {operator!r} for {column!r}."
+    )
+
+
 def matching_ids_from_search_table(
     config,
     result_ids: list[str],
@@ -104,8 +139,13 @@ def matching_ids_from_search_table(
     ]
     params: list = list(result_ids)
     for column, expected in filters.items():
-        clauses.append(f"{quote_identifier(config, column)} = %s")
-        params.append(expected)
+        clause, clause_params = source_filter_clause(
+            config,
+            column,
+            expected,
+        )
+        clauses.append(clause)
+        params.extend(clause_params)
     context = (
         postgres_connection(config)
         if isinstance(config, PostgresRuntimeConfig)

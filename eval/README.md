@@ -41,6 +41,11 @@ Each case can use the existing `relevant_ids`, `expected_filters`,
 }
 ```
 
+Source-filter values use equality by default. They may instead use one
+comparison operator (`$lt`, `$lte`, `$gt`, `$gte`, or `$ne`), `$in`, or
+`$lte_or_null`. The latter mirrors wanted-ad budget matching, where an
+unpriced request is eligible alongside requests at or below the ceiling.
+
 The case file may also be an object with suite gates:
 
 ```json

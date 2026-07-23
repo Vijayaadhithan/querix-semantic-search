@@ -15,6 +15,7 @@ from evaluate_retrieval import (
     load_plan_snapshot,
     plan_snapshot_document,
     run_with_fixed_candidates,
+    source_filter_clause,
 )
 
 
@@ -95,6 +96,30 @@ def test_reranker_pacer_respects_the_provider_interval(monkeypatch):
 
     assert sleeps == [16]
     assert pacer.last_started == 21
+
+
+def test_source_filter_clause_supports_ranges_and_unpriced_rows():
+    config = SimpleNamespace()
+
+    clause, params = source_filter_clause(
+        config,
+        "rental_fee",
+        {"$lte_or_null": 1000},
+    )
+
+    assert clause == "(`rental_fee` <= %s OR `rental_fee` IS NULL)"
+    assert params == [1000]
+
+
+def test_source_filter_clause_rejects_ambiguous_operators():
+    config = SimpleNamespace()
+
+    with pytest.raises(ValueError, match="exactly one operator"):
+        source_filter_clause(
+            config,
+            "rental_fee",
+            {"$gte": 10, "$lte": 1000},
+        )
 
 
 def test_fixed_candidate_runs_reuse_one_candidate_set():
