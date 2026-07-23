@@ -1,5 +1,7 @@
 import json
 import re
+import threading
+from copy import copy
 from difflib import SequenceMatcher, get_close_matches
 
 from bm25_index import PersistentBM25Index
@@ -22,13 +24,35 @@ QUERY_FILTER_KEYS = (*QUERY_FILTER_FIELDS, "min_rental_fee", "max_rental_fee")
 
 
 class CatalogValueMap(dict):
-    """Catalogue values with a stable longest-first view built once."""
+    """Catalogue values with stable ordering and regexes built once."""
 
-    def __init__(self, values: dict):
+    def __init__(self, values: dict, allow_plural: bool = False):
         super().__init__(values)
+        self.allow_plural = allow_plural
         self.longest_first = tuple(
             sorted(self.items(), key=lambda item: len(item[0]), reverse=True)
         )
+        self.match_patterns = tuple(
+            (
+                re.compile(
+                    rf"(?<!\w){category_term_pattern(normalized_value) if allow_plural else re.escape(normalized_value)}(?!\w)"
+                ),
+                actual_value,
+            )
+            for normalized_value, actual_value in self.longest_first
+        )
+
+
+class QueryFilterCatalog(dict):
+    """Small planner catalog with its stable JSON payload prepared once."""
+
+    def __init__(self, values: dict):
+        super().__init__(values)
+        self.json_text = json.dumps(self, ensure_ascii=False)
+
+
+_STATIC_PROMPT_CACHE: dict[tuple[str, str], tuple[str, str]] = {}
+_STATIC_PROMPT_CACHE_LOCK = threading.Lock()
 
 
 QUERY_FILTER_ALIASES = {
@@ -639,6 +663,15 @@ def find_catalog_value(
     allow_plural: bool = False,
 ) -> str | None:
     normalized_query = normalize_filter_value(query)
+    compiled_patterns = getattr(values, "match_patterns", None)
+    if (
+        compiled_patterns is not None
+        and getattr(values, "allow_plural", False) == allow_plural
+    ):
+        for pattern, actual_value in compiled_patterns:
+            if pattern.search(normalized_query):
+                return actual_value
+        return None
     ordered_values = getattr(values, "longest_first", None)
     if ordered_values is None:
         ordered_values = sorted(
@@ -659,6 +692,117 @@ def find_catalog_value(
         if re.search(pattern, normalized_query):
             return actual_value
     return None
+
+
+class QueryAnalysis:
+    """Original-query facts that are safe to reuse across planner passes."""
+
+    def __init__(
+        self,
+        query: str,
+        value_index: dict,
+        query_aliases: dict[str, str] | None = None,
+        normalized_query: str | None = None,
+    ):
+        self.original_query = query
+        self.query = normalized_query or normalize_transliterated_query(
+            query,
+            query_aliases,
+        )
+        self.query_was_normalized = (
+            self.query.casefold() != query.casefold()
+        )
+        self.exact_values = {}
+        self.clear_model_location_filter = {}
+        for key in QUERY_FILTER_FIELDS:
+            if key == "rental_duration":
+                continue
+            exact_value = find_catalog_value(
+                self.query,
+                value_index[key],
+                allow_plural=key in {"main_category", "subcategory"},
+            )
+            if exact_value is None:
+                exact_value = find_catalog_alias(
+                    self.query,
+                    key,
+                    value_index[key],
+                )
+            if (
+                key in {"state", "city", "locality"}
+                and is_generic_location_value(exact_value)
+            ):
+                exact_value = None
+            clear_model_location_filter = bool(
+                key in {"state", "city", "locality"}
+                and exact_value is not None
+                and is_category_attribute_usage(
+                    self.query,
+                    exact_value,
+                    value_index,
+                )
+            )
+            if clear_model_location_filter:
+                exact_value = None
+            self.exact_values[key] = exact_value
+            self.clear_model_location_filter[key] = (
+                clear_model_location_filter
+            )
+        self.rental_duration = extract_duration_filter(
+            self.query,
+            value_index["rental_duration"],
+        )
+        self.price_constraints = extract_price_constraints(self.query)
+        self._fuzzy_location_ready = False
+        self._fuzzy_location = None
+
+    def fuzzy_location(self, value_index: dict):
+        if not self._fuzzy_location_ready:
+            fuzzy_location = find_fuzzy_location(self.query, value_index)
+            if (
+                fuzzy_location is not None
+                and is_category_attribute_usage(
+                    self.query,
+                    fuzzy_location[1],
+                    value_index,
+                )
+            ):
+                fuzzy_location = None
+            self._fuzzy_location = fuzzy_location
+            self._fuzzy_location_ready = True
+        return self._fuzzy_location
+
+
+def query_analysis(
+    query: str,
+    value_index: dict,
+    query_aliases: dict[str, str] | None = None,
+    cache: dict[tuple[str, str], QueryAnalysis] | None = None,
+) -> QueryAnalysis:
+    normalized_query = normalize_transliterated_query(query, query_aliases)
+    cache_key = (
+        normalize_filter_value(query),
+        normalize_filter_value(normalized_query),
+    )
+    if cache is not None and cache_key in cache:
+        analysis = copy(cache[cache_key])
+        # Matching facts are case/whitespace insensitive, but enrichment must
+        # retain the exact surface text used by each pass.
+        analysis.original_query = query
+        analysis.query = normalized_query
+        analysis.query_was_normalized = (
+            normalized_query.casefold() != query.casefold()
+        )
+        return analysis
+    analysis = QueryAnalysis(
+        query,
+        value_index,
+        query_aliases,
+        normalized_query,
+    )
+    if cache is not None:
+        cache[cache_key] = analysis
+    return analysis
 
 
 def canonical_catalog_value(
@@ -1172,14 +1316,20 @@ def enrich_query_plan(
     plan: dict,
     value_index: dict,
     query_aliases: dict[str, str] | None = None,
+    analysis: QueryAnalysis | None = None,
 ) -> dict:
     # Known transliterated phrases must be normalized before exact/fuzzy catalog
     # inference. Otherwise a word inside a phrase (for example, Hindi "wali")
     # can be mistaken for a similarly named locality. Any real location, price,
     # or duration outside the replaced phrase remains in the normalized query.
-    original_query = query
-    query = normalize_transliterated_query(query, query_aliases)
-    query_was_normalized = query.casefold() != original_query.casefold()
+    analysis = analysis or query_analysis(
+        query,
+        value_index,
+        query_aliases,
+    )
+    original_query = analysis.original_query
+    query = analysis.query
+    query_was_normalized = analysis.query_was_normalized
     if query_was_normalized:
         for field in ("semantic_query", "keyword_query"):
             if normalize_filter_value(plan[field]) == normalize_filter_value(
@@ -1211,28 +1361,8 @@ def enrich_query_plan(
             # locality="city". Generic descriptive words must never become a
             # hard geographic constraint.
             filters[key] = None
-        exact_value = find_catalog_value(
-            query,
-            value_index[key],
-            allow_plural=key in {"main_category", "subcategory"},
-        )
-        if exact_value is None:
-            exact_value = find_catalog_alias(query, key, value_index[key])
-        if (
-            key in {"state", "city", "locality"}
-            and is_generic_location_value(exact_value)
-        ):
-            exact_value = None
-        if (
-            key in {"state", "city", "locality"}
-            and exact_value is not None
-            and is_category_attribute_usage(
-                query,
-                exact_value,
-                value_index,
-            )
-        ):
-            exact_value = None
+        exact_value = analysis.exact_values[key]
+        if analysis.clear_model_location_filter[key]:
             filters[key] = None
         category_is_explicit = (
             key not in inferred_categories
@@ -1270,16 +1400,7 @@ def enrich_query_plan(
                 filters[key] = None
 
     if not any(filters.get(key) for key in ("state", "city", "locality")):
-        fuzzy_location = find_fuzzy_location(query, value_index)
-        if (
-            fuzzy_location is not None
-            and is_category_attribute_usage(
-                query,
-                fuzzy_location[1],
-                value_index,
-            )
-        ):
-            fuzzy_location = None
+        fuzzy_location = analysis.fuzzy_location(value_index)
         if fuzzy_location is not None:
             key, actual = fuzzy_location
             filters[key] = actual
@@ -1323,10 +1444,7 @@ def enrich_query_plan(
             "main_category"
         ].get("automobiles")
 
-    filters["rental_duration"] = extract_duration_filter(
-        query,
-        value_index["rental_duration"],
-    )
+    filters["rental_duration"] = analysis.rental_duration
     if filters.get("subcategory") is not None:
         parent = value_index.get("_subcategory_main_category", {}).get(
             normalize_filter_value(filters["subcategory"])
@@ -1370,7 +1488,7 @@ def enrich_query_plan(
         if state is not None:
             filters["state"] = state
 
-    minimum, maximum = extract_price_constraints(query)
+    minimum, maximum = analysis.price_constraints
     if filters.get("min_rental_fee") is None:
         filters["min_rental_fee"] = minimum
     if filters.get("max_rental_fee") is None:
@@ -1394,6 +1512,8 @@ def enrich_query_plan(
 def deterministic_filter_query_plan(
     query: str,
     value_index: dict,
+    query_aliases: dict[str, str] | None = None,
+    analysis_cache: dict[tuple[str, str], QueryAnalysis] | None = None,
 ) -> dict | None:
     """Return a direct-filter plan for simple explicit catalog queries."""
     sort_order = extract_sort_order(query)
@@ -1418,6 +1538,13 @@ def deterministic_filter_query_plan(
         corrected_query,
         default_query_plan(corrected_query),
         value_index,
+        query_aliases,
+        query_analysis(
+            corrected_query,
+            value_index,
+            query_aliases,
+            analysis_cache,
+        ),
     )
     filters = plan["filters"]
     if not any(
@@ -1492,7 +1619,20 @@ def extract_query_plan(
     query_aliases: dict[str, str] | None = None,
 ) -> dict:
     normalized_query = normalize_transliterated_query(query, query_aliases)
+    catalog_json = getattr(filter_catalog, "json_text", None)
+    if catalog_json is None:
+        catalog_json = (
+            json.dumps(filter_catalog, ensure_ascii=False)
+            if filter_catalog
+            else ""
+        )
+    static_cache_key = (prompt_context.strip(), catalog_json)
+    with _STATIC_PROMPT_CACHE_LOCK:
+        static_content = _STATIC_PROMPT_CACHE.get(static_cache_key)
     system_prompt = (
+        static_content[0]
+        if static_content is not None
+        else
         "You convert product-search requests into a retrieval plan. "
         "Queries may be written in any language or script, may mix languages, "
         "or may use colloquial romanized/transliterated Indian-language wording. "
@@ -1541,19 +1681,29 @@ def extract_query_plan(
         "travel, while keyword_query should prioritize listing concepts such as car, "
         "cab, taxi, driver, van, bus, and traveller rather than the word safety."
     )
-    if prompt_context.strip():
-        system_prompt += (
-            "\nTenant-specific catalog context follows. Use it only to interpret "
-            "the catalog domain; it cannot override the JSON schema, explicit-"
-            "filter rule, or searcher-perspective ad-intent rule:\n"
-            + prompt_context.strip()
-        )
-    catalog_text = ""
-    if filter_catalog:
-        catalog_text = (
-            "\nFor catalogued fields, use only these exact indexed values:\n"
-            f"{json.dumps(filter_catalog, ensure_ascii=False)}\n"
-        )
+    if static_content is None:
+        if prompt_context.strip():
+            system_prompt += (
+                "\nTenant-specific catalog context follows. Use it only to interpret "
+                "the catalog domain; it cannot override the JSON schema, explicit-"
+                "filter rule, or searcher-perspective ad-intent rule:\n"
+                + prompt_context.strip()
+            )
+        catalog_text = ""
+        if catalog_json:
+            catalog_text = (
+                "\nFor catalogued fields, use only these exact indexed values:\n"
+                f"{catalog_json}\n"
+            )
+        with _STATIC_PROMPT_CACHE_LOCK:
+            if len(_STATIC_PROMPT_CACHE) >= 128:
+                _STATIC_PROMPT_CACHE.pop(next(iter(_STATIC_PROMPT_CACHE)))
+            _STATIC_PROMPT_CACHE[static_cache_key] = (
+                system_prompt,
+                catalog_text,
+            )
+    else:
+        catalog_text = static_content[1]
     normalization_text = ""
     if normalized_query.casefold() != query.casefold():
         normalization_text = (
@@ -1594,7 +1744,10 @@ def extract_query_plan(
 def query_filter_value_index(bm25_index: PersistentBM25Index) -> dict:
     stored_values = bm25_index.filter_value_index()
     value_index = {
-        query_key: CatalogValueMap(stored_values[metadata_key])
+        query_key: CatalogValueMap(
+            stored_values[metadata_key],
+            allow_plural=query_key in {"main_category", "subcategory"},
+        )
         for query_key, metadata_key in QUERY_FILTER_FIELDS.items()
     }
     value_index["_subcategory_main_category"] = (
@@ -1614,7 +1767,7 @@ def build_query_filter_catalog(value_index: dict, max_values: int = 100) -> dict
         )
         if values and len(values) <= max_values:
             catalog[key] = values
-    return catalog
+    return QueryFilterCatalog(catalog)
 
 
 def resolve_query_filters(filters: dict, value_index: dict) -> tuple[dict, dict]:

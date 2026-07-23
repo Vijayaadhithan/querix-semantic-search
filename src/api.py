@@ -1212,6 +1212,52 @@ class TenantServicePool:
             results[company_id] = result
         return results
 
+    def prewarm_planner_catalogs(self) -> dict[str, dict[str, Any]]:
+        """Build and retain planner catalogs before the first API request."""
+        results: dict[str, dict[str, Any]] = {}
+        profiles = [
+            profile
+            for profile in self.registry.profiles.values()
+            if profile.storage.pgvector_prewarm_on_startup
+        ][: self.max_services]
+        for profile in profiles:
+            started = time.perf_counter()
+            try:
+                service = self.get(profile.company_id)
+                value_index = service.engine.filter_value_index
+                pattern_count = sum(
+                    len(getattr(values, "match_patterns", ()))
+                    for values in value_index.values()
+                )
+            except Exception as exc:
+                result = {
+                    "status": "failed",
+                    "error_type": type(exc).__name__,
+                    "duration_ms": (time.perf_counter() - started) * 1000,
+                }
+                LOGGER.warning(
+                    "planner catalog startup prewarm failed company=%s "
+                    "error_type=%s duration_ms=%.0f; continuing startup",
+                    profile.company_id,
+                    type(exc).__name__,
+                    result["duration_ms"],
+                )
+            else:
+                result = {
+                    "status": "complete",
+                    "patterns": pattern_count,
+                    "duration_ms": (time.perf_counter() - started) * 1000,
+                }
+                LOGGER.info(
+                    "planner catalog startup prewarm complete company=%s "
+                    "patterns=%d duration_ms=%.0f",
+                    profile.company_id,
+                    pattern_count,
+                    result["duration_ms"],
+                )
+            results[profile.company_id] = result
+        return results
+
     def get(self, company_id: str) -> ProductSearchService:
         with self._lock:
             existing = self._services.get(company_id)
@@ -1411,6 +1457,10 @@ def create_app(
             LOGGER.info(
                 "Ollama embedding model ready in %.0f ms.",
                 embedding_warmup["embedding_model"].get("total_ms", 0.0),
+            )
+        if pool is not None:
+            application.state.planner_catalog_prewarm = (
+                pool.prewarm_planner_catalogs()
             )
         admin_log_buffer = AdminLogBuffer(API_ADMIN_LOG_BUFFER_SIZE)
         application.state.admin_log_buffer = admin_log_buffer

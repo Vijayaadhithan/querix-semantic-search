@@ -977,6 +977,16 @@ class GainrCompatibilityService:
         usage_ms = 0.0
         trace_id = "-"
         eligibility_source = "database"
+        speculative_starter = getattr(
+            self.engine,
+            "start_speculative_embedding",
+            None,
+        )
+        speculative_embedding_future = (
+            speculative_starter(request.searchTerm)
+            if request.searchTerm and speculative_starter is not None
+            else None
+        )
         planned, effective, meta = self._effective_plan(request)
         planning_ms = (time.perf_counter() - request_started) * 1000
         page_size = self.profile.compatibility.page_size
@@ -1000,6 +1010,8 @@ class GainrCompatibilityService:
             or request.filter.fee
         )
         if execution_path == "deterministic_filter":
+            if speculative_embedding_future is not None:
+                speculative_embedding_future.cancel()
             database_started = time.perf_counter()
             rows, total = self.repository.search_catalog(
                 effective,
@@ -1045,6 +1057,15 @@ class GainrCompatibilityService:
                 planned_result=planned,
                 resolved_filters=effective,
                 allowed_ad_types=allowed_ad_types,
+                **(
+                    {
+                        "speculative_embedding_future": (
+                            speculative_embedding_future
+                        )
+                    }
+                    if speculative_embedding_future is not None
+                    else {}
+                ),
                 # The compatibility repository checks current eligibility and
                 # hydrates the requested 20-row page. Avoid fetching the full
                 # semantic result window first unless a price sort needs the

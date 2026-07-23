@@ -4,6 +4,7 @@ import time
 from urllib.parse import quote
 
 import requests
+from requests.adapters import HTTPAdapter
 
 from settings import (
     GEMINI_API_BASE_URL,
@@ -17,6 +18,31 @@ from settings import (
 
 FALLBACK_HTTP_STATUSES = {408, 429, 500, 502, 503, 504}
 LOGGER = logging.getLogger("uvicorn.error")
+
+
+def pooled_http_adapter() -> HTTPAdapter:
+    """Return an application-lifetime, thread-safe urllib3 connection pool."""
+    return HTTPAdapter(
+        pool_connections=16,
+        pool_maxsize=16,
+        max_retries=0,
+        pool_block=True,
+    )
+
+
+def thread_http_session(
+    state: threading.local,
+    adapter: HTTPAdapter,
+) -> requests.Session:
+    session = getattr(state, "http_session", None)
+    if session is None:
+        session = requests.Session()
+        # Sessions remain thread-local, while urllib3's thread-safe pool is
+        # shared so worker-thread changes do not force a fresh TLS connection.
+        session.mount("https://", adapter)
+        session.mount("http://", adapter)
+        state.http_session = session
+    return session
 
 
 class GeminiModelUnavailableError(RuntimeError):
@@ -48,6 +74,7 @@ class GeminiProvider:
         self.base_url = base_url.rstrip("/")
         self.timeout_seconds = timeout_seconds
         self._state = threading.local()
+        self._http_adapter = pooled_http_adapter()
 
     @property
     def last_chat_metrics(self) -> dict[str, object]:
@@ -58,11 +85,10 @@ class GeminiProvider:
         self._state.last_chat_metrics = value
 
     def _post(self, *args, **kwargs):
-        session = getattr(self._state, "http_session", None)
-        if session is None:
-            session = requests.Session()
-            self._state.http_session = session
-        return session.post(*args, **kwargs)
+        return thread_http_session(
+            self._state,
+            self._http_adapter,
+        ).post(*args, **kwargs)
 
     def structured_chat(
         self,
@@ -192,6 +218,7 @@ class GroqProvider:
         self.base_url = base_url.rstrip("/")
         self.timeout_seconds = timeout_seconds
         self._state = threading.local()
+        self._http_adapter = pooled_http_adapter()
 
     @property
     def last_chat_metrics(self) -> dict[str, object]:
@@ -202,11 +229,10 @@ class GroqProvider:
         self._state.last_chat_metrics = value
 
     def _post(self, *args, **kwargs):
-        session = getattr(self._state, "http_session", None)
-        if session is None:
-            session = requests.Session()
-            self._state.http_session = session
-        return session.post(*args, **kwargs)
+        return thread_http_session(
+            self._state,
+            self._http_adapter,
+        ).post(*args, **kwargs)
 
     @staticmethod
     def _output_text(payload: dict) -> str:

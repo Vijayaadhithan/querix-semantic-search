@@ -100,6 +100,7 @@ def vector_search(
     post_filter_metadata=False,
     include_unpriced=False,
     metrics=None,
+    query_embedding=None,
 ):
     metrics = metrics if metrics is not None else {}
     count_started = time.perf_counter()
@@ -108,13 +109,20 @@ def vector_search(
     if row_count <= 0:
         return []
 
-    embedding_started = time.perf_counter()
-    query_embedding = (
-        embedding_provider.embed_text(query)
-        if embedding_provider is not None
-        else embed_text(query)
-    )
-    metrics["embedding_ms"] = (time.perf_counter() - embedding_started) * 1000
+    if query_embedding is None:
+        embedding_started = time.perf_counter()
+        query_embedding = (
+            embedding_provider.embed_text(query)
+            if embedding_provider is not None
+            else embed_text(query)
+        )
+        metrics["embedding_ms"] = (
+            time.perf_counter() - embedding_started
+        ) * 1000
+        metrics["embedding_prefetch_reused"] = False
+    else:
+        metrics["embedding_ms"] = 0.0
+        metrics["embedding_prefetch_reused"] = True
     query_options = {
         "query_embeddings": [query_embedding],
         "n_results": min(max(candidate_k, top_k), row_count),

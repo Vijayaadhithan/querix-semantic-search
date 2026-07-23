@@ -1,14 +1,18 @@
 import json
 import sys
 import threading
+from concurrent.futures import Future
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 import search_engine
+import query_planner
 from bm25_index import PersistentBM25Index
 from query_planner import (
+    QueryFilterCatalog,
     deterministic_filter_query_plan,
+    extract_query_plan,
     extract_sort_order,
     normalize_transliterated_query,
     query_filter_value_index,
@@ -57,6 +61,31 @@ class CapturingQueryProvider(CountingQueryProvider):
             {
                 "semantic_query": "portable recording equipment",
                 "keyword_query": "camera recorder",
+                "target_ad_type": "offer",
+                "filters": {},
+            }
+        )
+
+
+class PromptIdentityProvider(CountingQueryProvider):
+    def __init__(self):
+        super().__init__()
+        self.system_prompt_ids = []
+
+    def structured_chat(
+        self,
+        _model,
+        system_prompt,
+        _user_prompt,
+        _schema,
+        _temperature,
+    ):
+        self.calls += 1
+        self.system_prompt_ids.append(id(system_prompt))
+        return json.dumps(
+            {
+                "semantic_query": "camera",
+                "keyword_query": "camera",
                 "target_ad_type": "offer",
                 "filters": {},
             }
@@ -150,6 +179,32 @@ def test_tenant_prompt_context_is_added_only_to_llm_planning(tmp_path):
     )
     assert "Return the structured query plan." in provider.user_prompt
     assert '"semantic_query"' not in provider.user_prompt
+
+
+def test_static_planner_prompt_is_reused_for_the_same_tenant_catalog():
+    provider = PromptIdentityProvider()
+    catalog = QueryFilterCatalog(
+        {
+            "main_category": ["Audio & Video"],
+            "state": ["Tamil Nadu"],
+        }
+    )
+
+    extract_query_plan(
+        "camera for a wedding",
+        catalog,
+        query_provider=provider,
+        prompt_context="Professional rentals.",
+    )
+    extract_query_plan(
+        "camera for a conference",
+        catalog,
+        query_provider=provider,
+        prompt_context="Professional rentals.",
+    )
+
+    assert provider.calls == 2
+    assert len(set(provider.system_prompt_ids)) == 1
 
 
 def test_transliterated_queries_receive_trusted_semantic_normalization(tmp_path):
@@ -847,6 +902,77 @@ def test_normalized_query_plan_cache_skips_repeated_planner_work(
     index.close()
 
 
+def test_semantic_planner_reuses_exact_query_analysis_between_passes(
+    tmp_path,
+    monkeypatch,
+):
+    index = build_index(tmp_path / "analysis-reuse.sqlite3")
+    provider = CountingQueryProvider()
+    engine = ProductSearchEngine(
+        collection=FakeCollection(),
+        bm25_index=index,
+        query_provider=provider,
+    )
+    calls = []
+    original = query_planner.find_catalog_value
+
+    def counted(*args, **kwargs):
+        calls.append(args[0])
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(query_planner, "find_catalog_value", counted)
+
+    result = engine.plan("red bike")
+
+    assert result["query_plan"]["execution_path"] == "semantic"
+    assert provider.calls == 1
+    assert calls == ["red bike"] * 5
+    engine.close()
+    index.close()
+
+
+def test_plan_cache_fingerprint_changes_with_catalog(tmp_path):
+    first_index = build_index(tmp_path / "first-catalog.sqlite3")
+    second_index = build_index(tmp_path / "second-catalog.sqlite3")
+    second_index.upsert(
+        [
+            product_row(
+                "camera-chennai",
+                main_category_name="Audio & Video",
+                subcategory_name="Camera",
+                state_name="Tamil Nadu",
+                city_name="Chennai",
+            )
+        ]
+    )
+    cache = DictSharedCache()
+    first_provider = CountingQueryProvider()
+    second_provider = CountingQueryProvider()
+    first_engine = ProductSearchEngine(
+        collection=FakeCollection(),
+        bm25_index=first_index,
+        query_provider=first_provider,
+        shared_plan_cache=cache,
+    )
+    second_engine = ProductSearchEngine(
+        collection=FakeCollection(),
+        bm25_index=second_index,
+        query_provider=second_provider,
+        shared_plan_cache=cache,
+    )
+
+    first_engine.plan("red bike")
+    second = second_engine.plan("red bike")
+
+    assert first_provider.calls == 1
+    assert second_provider.calls == 1
+    assert second["plan_cache_hit"] is False
+    first_engine.close()
+    second_engine.close()
+    first_index.close()
+    second_index.close()
+
+
 def test_shared_plan_cache_survives_engine_restart(tmp_path):
     index = build_index(tmp_path / "shared-plan-cache.sqlite3")
     cache = DictSharedCache()
@@ -1031,6 +1157,96 @@ def test_simple_query_skips_model_retrieval_and_reranking(tmp_path, monkeypatch)
         "filtered",
         "filtered",
     ]
+    index.close()
+
+
+def test_speculative_embedding_is_reused_only_for_exact_semantic_query(
+    tmp_path,
+    monkeypatch,
+):
+    index = build_index(tmp_path / "embedding-prefetch.sqlite3")
+    engine = ProductSearchEngine(
+        collection=FakeCollection(),
+        bm25_index=index,
+        semantic_related_tail_enabled=False,
+    )
+    captured = []
+
+    def retrieve(*_args, **kwargs):
+        captured.append(kwargs.get("query_embedding"))
+        return {
+            "vector_results": [],
+            "bm25_results": [],
+            "candidates": [],
+            "hybrid_tail_candidates": [],
+            "vector_seconds": 0.0,
+            "bm25_seconds": 0.0,
+            "retrieval_seconds": 0.0,
+            "parallel_retrieval_seconds": 0.0,
+            "fusion_seconds": 0.0,
+            "type_lookup_seconds": 0.0,
+            "vector_query_metrics": {},
+            "embedding_model_metrics": {},
+            "retrieval_degraded": False,
+            "retrieval_error_type": None,
+            "degraded_stages": [],
+        }
+
+    monkeypatch.setattr(engine, "retrieve", retrieve)
+    exact_future = Future()
+    exact_future.set_result(
+        {
+            "query": "red bike",
+            "embedding": [1.0, 2.0],
+            "metrics": {},
+            "seconds": 0.01,
+        }
+    )
+    rewritten_future = Future()
+    rewritten_future.set_result(
+        {
+            "query": "camera for wedding",
+            "embedding": [3.0, 4.0],
+            "metrics": {},
+            "seconds": 0.01,
+        }
+    )
+
+    def planned(semantic_query):
+        return {
+            "query_plan": {
+                "semantic_query": semantic_query,
+                "keyword_query": semantic_query,
+                "target_ad_type": "offer",
+                "execution_path": "semantic",
+                "sort_order": None,
+                "filters": {},
+                "inferred_categories": {},
+            },
+            "resolved_filters": {"categorical": {}},
+            "unresolved_filters": {},
+            "query_model_metrics": {},
+            "seconds": 0.0,
+            "plan_cache_hit": False,
+        }
+
+    engine.search(
+        "red bike",
+        limit=1,
+        planned_result=planned("red bike"),
+        hydrate_products=False,
+        speculative_embedding_future=exact_future,
+    )
+    engine.search(
+        "camera for wedding",
+        limit=1,
+        planned_result=planned("wedding photography camera"),
+        hydrate_products=False,
+        speculative_embedding_future=rewritten_future,
+    )
+
+    assert captured == [[1.0, 2.0], None]
+    engine.close()
     index.close()
 
 

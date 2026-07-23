@@ -19,7 +19,7 @@ from database_store import (
     fetch_products_by_ids,
 )
 from gemini_client import last_gemini_metrics
-from ollama_client import last_ollama_embedding_metrics
+from ollama_client import embed_text, last_ollama_embedding_metrics
 from query_planner import (
     WANTED_AD_TYPE,
     build_query_filter_catalog,
@@ -27,6 +27,7 @@ from query_planner import (
     deterministic_filter_query_plan,
     enrich_query_plan,
     extract_query_plan,
+    query_analysis,
     query_filter_value_index,
     resolve_query_filters,
 )
@@ -69,7 +70,7 @@ from settings import (
 
 LOGGER = logging.getLogger("uvicorn.error")
 RESULT_CACHE_SCHEMA_VERSION = "v22"
-QUERY_PLAN_CACHE_SCHEMA_VERSION = "v9"
+QUERY_PLAN_CACHE_SCHEMA_VERSION = "v10"
 
 GAINR_VEHICLE_INTENT_TERMS = {
     "automobile",
@@ -315,13 +316,6 @@ class ProductSearchEngine:
         self.planner_enabled = planner_enabled
         self.planner_prompt_context = planner_prompt_context
         self.planner_query_aliases = dict(planner_query_aliases or {})
-        self.planner_alias_fingerprint = hashlib.sha256(
-            json.dumps(
-                self.planner_query_aliases,
-                sort_keys=True,
-                separators=(",", ":"),
-            ).encode("utf-8")
-        ).hexdigest()[:16]
         self.vector_post_filter_metadata = vector_post_filter_metadata
         self.semantic_related_tail_enabled = semantic_related_tail_enabled
         self.semantic_related_tail_requires_explicit_category = (
@@ -355,12 +349,42 @@ class ProductSearchEngine:
         )
         self.filter_value_index = query_filter_value_index(self.bm25_index)
         self.filter_catalog = build_query_filter_catalog(self.filter_value_index)
+        self.planner_cache_fingerprint = hashlib.sha256(
+            json.dumps(
+                {
+                    "aliases": self.planner_query_aliases,
+                    "catalog": self.filter_catalog,
+                    "filter_index": {
+                        key: sorted(
+                            value.items(),
+                            key=lambda item: str(item[0]),
+                        )
+                        for key, value in self.filter_value_index.items()
+                    },
+                    "models": list(QUERY_EXTRACT_MODELS),
+                    "planner_enabled": self.planner_enabled,
+                    "prompt_context": self.planner_prompt_context,
+                    "schema": QUERY_PLAN_CACHE_SCHEMA_VERSION,
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()[:24]
         self._query_plan_cache: OrderedDict[str, tuple[float, dict]] = (
             OrderedDict()
         )
         self._plan_cache_lock = threading.RLock()
+        self._embedding_executor = ThreadPoolExecutor(
+            max_workers=1,
+            thread_name_prefix="query-embedding-prefetch",
+        )
 
     def close(self) -> None:
+        self._embedding_executor.shutdown(
+            wait=False,
+            cancel_futures=True,
+        )
         if self.database_pool is not None:
             self.database_pool.close()
         if self._owns_bm25_index:
@@ -368,10 +392,36 @@ class ProductSearchEngine:
 
     def _query_cache_key(self, query: str) -> str:
         normalized = " ".join(query.casefold().split())
-        return f"{self.planner_alias_fingerprint}:{normalized}"
+        return f"{self.planner_cache_fingerprint}:{normalized}"
 
     def set_shared_plan_cache(self, cache) -> None:
         self.shared_plan_cache = cache
+
+    def start_speculative_embedding(self, query: str):
+        """Start the original embedding while the remote planner is running."""
+        if not self.planner_enabled or not query.strip():
+            return None
+
+        def run():
+            started = time.perf_counter()
+            embedding = (
+                self.embedding_provider.embed_text(query)
+                if self.embedding_provider is not None
+                else embed_text(query)
+            )
+            metrics = (
+                {}
+                if self.embedding_provider is not None
+                else last_ollama_embedding_metrics()
+            )
+            return {
+                "query": query,
+                "embedding": embedding,
+                "metrics": metrics,
+                "seconds": time.perf_counter() - started,
+            }
+
+        return self._embedding_executor.submit(run)
 
     def _cache_namespace(self, name: str) -> str:
         return f"{self.company_id}:{name}" if self.company_id else name
@@ -710,10 +760,13 @@ class ProductSearchEngine:
                 elapsed * 1000,
             )
             return cached
+        analysis_cache = {}
         query_plan = (
             deterministic_filter_query_plan(
                 query,
                 self.filter_value_index,
+                None,
+                analysis_cache,
             )
             if QUERY_DETERMINISTIC_FAST_PATH
             else None
@@ -735,6 +788,12 @@ class ProductSearchEngine:
                 query_plan,
                 self.filter_value_index,
                 self.planner_query_aliases,
+                analysis=query_analysis(
+                    query,
+                    self.filter_value_index,
+                    self.planner_query_aliases,
+                    analysis_cache,
+                ),
             )
             query_plan["execution_path"] = "semantic"
         resolved, unresolved = resolve_query_filters(
@@ -812,6 +871,8 @@ class ProductSearchEngine:
         trace_id: str = "-",
         allowed_ad_types: set[str] | None = None,
         strict_candidate_limit: bool = False,
+        query_embedding=None,
+        embedding_prefetch_metrics: dict | None = None,
     ) -> dict:
         retrieval_started = time.perf_counter()
         expected_types = (
@@ -876,7 +937,21 @@ class ProductSearchEngine:
                 post_filter_metadata=self.vector_post_filter_metadata,
                 include_unpriced=include_unpriced,
                 metrics=vector_metrics,
+                query_embedding=query_embedding,
             )
+            if query_embedding is not None:
+                vector_metrics["embedding_prefetch_ms"] = float(
+                    (embedding_prefetch_metrics or {}).get(
+                        "prefetch_total_ms",
+                        0.0,
+                    )
+                )
+                vector_metrics["embedding_prefetch_wait_ms"] = float(
+                    (embedding_prefetch_metrics or {}).get(
+                        "prefetch_wait_ms",
+                        0.0,
+                    )
+                )
             return results, time.perf_counter() - started, vector_metrics
 
         def run_bm25() -> tuple[list[dict], float]:
@@ -972,11 +1047,12 @@ class ProductSearchEngine:
         # rank-fusion order and have passed the same hard filters and ad-type
         # validation as the reranked window.
         hybrid_tail_candidates = eligible_candidates[hybrid_top_k:]
-        embedding_metrics = (
-            last_ollama_embedding_metrics()
-            if self.embedding_provider is None
-            else {}
-        )
+        embedding_metrics = dict(embedding_prefetch_metrics or {})
+        if (
+            not embedding_metrics
+            and self.embedding_provider is None
+        ):
+            embedding_metrics = last_ollama_embedding_metrics()
         retrieval_total_ms = (
             time.perf_counter() - retrieval_started
         ) * 1000
@@ -990,7 +1066,8 @@ class ProductSearchEngine:
             "vector_shadow_ms=%.0f vector_optimized_ms=%.0f "
             "parallel_ms=%.0f fusion_ms=%.0f type_lookup_ms=%.0f "
             "retrieval_total_ms=%.0f "
-            "embed_total_ms=%.0f embed_load_ms=%.0f",
+            "embed_total_ms=%.0f embed_load_ms=%.0f "
+            "embed_prefetch_reused=%s embed_prefetch_ms=%.0f",
             trace_id,
             len(vector_results),
             len(bm25_results),
@@ -1016,6 +1093,8 @@ class ProductSearchEngine:
             retrieval_total_ms,
             embedding_metrics.get("total_ms", 0.0),
             embedding_metrics.get("load_ms", 0.0),
+            vector_metrics.get("embedding_prefetch_reused", False),
+            vector_metrics.get("embedding_prefetch_ms", 0.0),
         )
         return {
             "vector_results": vector_results,
@@ -1298,6 +1377,7 @@ class ProductSearchEngine:
         allowed_ad_types: set[str] | None = None,
         ranking_window: int | None = None,
         hydrate_products: bool = True,
+        speculative_embedding_future=None,
     ) -> dict:
         if limit is not None and limit <= 0:
             raise ValueError("Search limit must be greater than zero.")
@@ -1352,6 +1432,13 @@ class ProductSearchEngine:
                 (time.perf_counter() - started) * 1000,
             )
             return cached_result
+        if (
+            speculative_embedding_future is None
+            and planned_result is None
+        ):
+            speculative_embedding_future = (
+                self.start_speculative_embedding(query)
+            )
         planned = (
             deepcopy(planned_result)
             if planned_result is not None
@@ -1363,6 +1450,8 @@ class ProductSearchEngine:
             planned["query_plan"].get("execution_path")
             == "deterministic_filter"
         ):
+            if speculative_embedding_future is not None:
+                speculative_embedding_future.cancel()
             result = self._filtered_search(
                 planned,
                 limit,
@@ -1382,6 +1471,36 @@ class ProductSearchEngine:
                 ranking_window,
             )
             return result
+        prefetched_embedding = None
+        prefetch_metrics = {}
+        semantic_query = planned["query_plan"]["semantic_query"]
+        if (
+            speculative_embedding_future is not None
+            and semantic_query == query
+        ):
+            prefetch_wait_started = time.perf_counter()
+            try:
+                prefetched = speculative_embedding_future.result()
+                if prefetched.get("query") == semantic_query:
+                    prefetched_embedding = prefetched["embedding"]
+                    prefetch_metrics = dict(
+                        prefetched.get("metrics") or {}
+                    )
+                    prefetch_metrics["prefetch_total_ms"] = (
+                        float(prefetched.get("seconds", 0.0)) * 1000
+                    )
+                    prefetch_metrics["prefetch_wait_ms"] = (
+                        time.perf_counter() - prefetch_wait_started
+                    ) * 1000
+            except Exception as exc:
+                LOGGER.warning(
+                    "[search:%s] step=embedding_prefetch "
+                    "status=degraded error_type=%s",
+                    trace_id,
+                    type(exc).__name__,
+                )
+        elif speculative_embedding_future is not None:
+            speculative_embedding_future.cancel()
         retrieved = self.retrieve(
             planned["query_plan"],
             planned["resolved_filters"],
@@ -1389,6 +1508,8 @@ class ProductSearchEngine:
             trace_id=trace_id,
             allowed_ad_types=allowed_ad_types,
             strict_candidate_limit=ranking_window is not None,
+            query_embedding=prefetched_embedding,
+            embedding_prefetch_metrics=prefetch_metrics,
         )
         candidates = retrieved["candidates"]
         if candidates:

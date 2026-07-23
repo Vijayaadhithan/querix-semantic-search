@@ -113,6 +113,35 @@ def test_structured_chat_requires_api_key():
         )
 
 
+def test_worker_sessions_share_the_provider_connection_pool(monkeypatch):
+    provider = GeminiProvider(api_key="test-key")
+    sessions = []
+    barrier = threading.Barrier(2, timeout=2)
+
+    def fake_post(session, *_args, **_kwargs):
+        sessions.append(session)
+        barrier.wait()
+        return object()
+
+    monkeypatch.setattr(requests.Session, "post", fake_post)
+
+    threads = [
+        threading.Thread(target=provider._post, args=("https://example.test",))
+        for _index in range(2)
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert len(sessions) == 2
+    assert sessions[0] is not sessions[1]
+    assert all(
+        session.adapters["https://"] is provider._http_adapter
+        for session in sessions
+    )
+
+
 def test_groq_structured_chat_uses_responses_json_schema(monkeypatch):
     captured = {}
     schema = {
