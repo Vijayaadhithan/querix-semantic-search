@@ -568,6 +568,72 @@ class GainrDatabaseRepository:
             self._attach_attributes(ordered, connection=connection)
         return ordered
 
+    def hydrate_ranked_page(
+        self,
+        product_ids: list[Any],
+        resolved_filters: dict,
+        request_filter: GainrSearchFilter,
+        allowed_ad_types: set[str] | None,
+        *,
+        page: int,
+        page_size: int,
+    ) -> tuple[list[dict], int]:
+        """Filter, count, and hydrate one semantic page in one main query."""
+        ranked_ids = _unique(product_ids)
+        if not ranked_ids:
+            return [], 0
+        where_clause, where_params = self._where_clause(
+            resolved_filters,
+            request_filter,
+            product_ids=ranked_ids,
+            allowed_ad_types=allowed_ad_types,
+        )
+        rank_placeholders = ", ".join("%s" for _ in ranked_ids)
+        offset = (page - 1) * page_size
+        with self.connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    f"""
+                    SELECT a.*, sr.city_name AS __city_name,
+                           sr.locality_name AS __locality_name,
+                           COUNT(*) OVER () AS __eligible_total
+                    FROM {self.search_table} AS sr
+                    JOIN {self.result_table} AS a ON a.id = sr.id
+                    WHERE {where_clause}
+                    ORDER BY FIELD(sr.id, {rank_placeholders})
+                    LIMIT %s OFFSET %s
+                    """,
+                    (
+                        *where_params,
+                        *ranked_ids,
+                        page_size,
+                        offset,
+                    ),
+                )
+                rows = list(cursor.fetchall())
+            total = (
+                int(rows[0].get("__eligible_total") or 0)
+                if rows
+                else 0
+            )
+            if not rows and page > 1:
+                with connection.cursor() as cursor:
+                    cursor.execute(
+                        f"""
+                        SELECT COUNT(DISTINCT sr.id) AS total
+                        FROM {self.search_table} AS sr
+                        JOIN {self.result_table} AS a ON a.id = sr.id
+                        WHERE {where_clause}
+                        """,
+                        where_params,
+                    )
+                    total = int(cursor.fetchone()["total"])
+
+            for row in rows:
+                row.pop("__eligible_total", None)
+            self._attach_attributes(rows, connection=connection)
+        return rows, total
+
     def filter_product_ids(
         self,
         product_ids: list[Any],
@@ -1080,16 +1146,23 @@ class GainrCompatibilityService:
             )
             engine_ms = (time.perf_counter() - engine_started) * 1000
             trace_id = str(result.get("trace_id") or "-")
-            eligibility_started = time.perf_counter()
             if database_only_filters or not result.get("products"):
-                eligible_ids = self.repository.filter_product_ids(
+                eligibility_source = "ranked_page"
+                hydration_started = time.perf_counter()
+                rows, total = self.repository.hydrate_ranked_page(
                     result.get("product_ids", []),
                     effective,
                     request.filter,
                     allowed_ad_types,
+                    page=request.page,
+                    page_size=page_size,
                 )
+                hydration_ms = (
+                    time.perf_counter() - hydration_started
+                ) * 1000
             else:
                 eligibility_source = "engine_rows"
+                eligibility_started = time.perf_counter()
                 id_column = self.repository.config.result_id_column
                 current_rows = {
                     str(row[id_column]): row
@@ -1110,21 +1183,21 @@ class GainrCompatibilityService:
                     ):
                         continue
                     eligible_ids.append(product_id)
-            eligibility_ms = (
-                time.perf_counter() - eligibility_started
-            ) * 1000
-            total = len(eligible_ids)
-            start = (request.page - 1) * page_size
-            hydration_started = time.perf_counter()
-            rows = self.repository.hydrate_filtered(
-                eligible_ids[start : start + page_size],
-                effective,
-                request.filter,
-                allowed_ad_types,
-            )
-            hydration_ms = (
-                time.perf_counter() - hydration_started
-            ) * 1000
+                eligibility_ms = (
+                    time.perf_counter() - eligibility_started
+                ) * 1000
+                total = len(eligible_ids)
+                start = (request.page - 1) * page_size
+                hydration_started = time.perf_counter()
+                rows = self.repository.hydrate_filtered(
+                    eligible_ids[start : start + page_size],
+                    effective,
+                    request.filter,
+                    allowed_ad_types,
+                )
+                hydration_ms = (
+                    time.perf_counter() - hydration_started
+                ) * 1000
             window_limited = (
                 len(result.get("product_ids", []))
                 >= self.product_search_service.max_results

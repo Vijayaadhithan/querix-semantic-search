@@ -1,4 +1,5 @@
 import sys
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -10,6 +11,7 @@ from gainr_compat import (
     GainrCompatibilityService,
     GainrDatabaseRepository,
     GainrFilterResultRequest,
+    GainrSearchFilter,
 )
 from mysql_store import MySQLRuntimeConfig
 from tenant_config import (
@@ -107,6 +109,7 @@ class FakeRepository:
         self.catalog_call = None
         self.filter_ids_call = None
         self.hydrate_call = None
+        self.ranked_page_call = None
 
     def suggestions(self, term, limit):
         return ["Bike", "Bike Cargo Rider"][:limit]
@@ -175,6 +178,31 @@ class FakeRepository:
         )
         return list(product_ids)
 
+    def hydrate_ranked_page(
+        self,
+        product_ids,
+        resolved,
+        request_filter,
+        allowed_ad_types,
+        *,
+        page,
+        page_size,
+    ):
+        self.ranked_page_call = (
+            product_ids,
+            resolved,
+            request_filter,
+            allowed_ad_types,
+            page,
+            page_size,
+        )
+        return self.hydrate_filtered(
+            product_ids[(page - 1) * page_size : page * page_size],
+            resolved,
+            request_filter,
+            allowed_ad_types,
+        ), len(product_ids)
+
 
 def service(tmp_path, execution_path="semantic", **compatibility):
     engine = FakeEngine(execution_path)
@@ -225,7 +253,8 @@ def test_explicit_filters_override_only_matching_auto_filters(tmp_path):
     assert search_kwargs["allowed_ad_types"] == {"2"}
     assert search_kwargs["ranking_window"] == 40
     assert search_kwargs["hydrate_products"] is False
-    assert repository.filter_ids_call[0] == [1, 2]
+    assert repository.filter_ids_call is None
+    assert repository.ranked_page_call[0] == [1, 2]
     assert repository.hydrate_call[0] == [1, 2]
     assert response["data"][0]["city"] == {
         "id": 456,
@@ -439,12 +468,23 @@ def test_semantic_result_hydrates_only_requested_twenty_row_page(
 
     hydrated_pages = []
 
-    def hydrate(product_ids, *_args):
-        hydrated_pages.append(list(product_ids))
-        return [{"id": str(product_id)} for product_id in product_ids]
+    def hydrate(
+        product_ids,
+        *_args,
+        page,
+        page_size,
+    ):
+        selected = product_ids[
+            (page - 1) * page_size : page * page_size
+        ]
+        hydrated_pages.append(list(selected))
+        return (
+            [{"id": str(product_id)} for product_id in selected],
+            len(product_ids),
+        )
 
     monkeypatch.setattr(engine, "search", search)
-    monkeypatch.setattr(repository, "hydrate_filtered", hydrate)
+    monkeypatch.setattr(repository, "hydrate_ranked_page", hydrate)
     request = GainrFilterResultRequest.model_validate(
         {
             "searchTerm": "comfortable vehicle",
@@ -461,6 +501,104 @@ def test_semantic_result_hydrates_only_requested_twenty_row_page(
     assert response["last_page"] == 3
     assert engine.calls[0][1] == 200
     assert engine.calls[0][2]["ranking_window"] == 40
+
+
+def test_ranked_page_query_preserves_order_total_and_relations(
+    tmp_path,
+    monkeypatch,
+):
+    repository = GainrDatabaseRepository(profile(tmp_path))
+    executions = []
+
+    class Cursor:
+        result_index = 0
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def execute(self, sql, params):
+            executions.append((sql, tuple(params)))
+            self.result_index = len(executions)
+
+        def fetchall(self):
+            if self.result_index == 1:
+                return [
+                    {
+                        "id": 2,
+                        "user_id": 7,
+                        "__eligible_total": 2,
+                    },
+                    {
+                        "id": 1,
+                        "user_id": 8,
+                        "__eligible_total": 2,
+                    },
+                ]
+            if self.result_index == 2:
+                return [
+                    {
+                        "ads_id": 2,
+                        "attribute_id": 959,
+                        "value": "hourly",
+                    }
+                ]
+            if self.result_index == 3:
+                return [
+                    {"user_id": 7, "service_ad_count": 3},
+                    {"user_id": 8, "service_ad_count": 1},
+                ]
+            return [
+                {
+                    "id": 7,
+                    "name": "Renter",
+                },
+                {
+                    "id": 8,
+                    "name": "Owner",
+                }
+            ]
+
+    class Connection:
+        def cursor(self):
+            return Cursor()
+
+        def rollback(self):
+            return None
+
+    @contextmanager
+    def connection():
+        yield Connection()
+
+    monkeypatch.setattr(repository, "connection", connection)
+
+    rows, total = repository.hydrate_ranked_page(
+        [2, 1],
+        {"categorical": {"city_id": 456}},
+        GainrSearchFilter(),
+        {"1"},
+        page=1,
+        page_size=20,
+    )
+
+    assert total == 2
+    assert [row["id"] for row in rows] == [2, 1]
+    assert rows[0]["__user"]["id"] == 7
+    assert rows[0]["__user"]["name"] == "Renter"
+    assert rows[0]["__ads_attributes"] == [
+        {
+            "ads_id": 2,
+            "attribute_id": 959,
+            "value": "hourly",
+        }
+    ]
+    assert rows[1]["__ads_attributes"] == []
+    assert "COUNT(*) OVER ()" in executions[0][0]
+    assert "ORDER BY FIELD(sr.id" in executions[0][0]
+    assert executions[0][1] == (456, "1", 2, 1, 2, 1, 20, 0)
+    assert executions[1][1] == (2, 1)
 
 
 def test_public_filter_result_matches_gainr_response_envelope(tmp_path):
