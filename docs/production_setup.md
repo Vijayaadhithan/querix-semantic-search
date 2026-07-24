@@ -540,6 +540,12 @@ docker stats --no-stream
 
 Monitor readiness, end-to-end duration, planner time, vector time, reranker time and usage, provider fallbacks, Redis connectivity, database latency, container memory, and HTTP error rates.
 
+For low-traffic production hosts, install the hourly local search-path warm-up
+timer documented in
+[Production commands](production_commands.md#hourly-local-search-path-warm-up).
+It keeps Ollama, representative HNSW paths, and BM25 warm without calling
+hosted planning or reranking providers.
+
 ## 16. Troubleshooting
 
 ### Port 8000 is already in use

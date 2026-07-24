@@ -1,0 +1,12 @@
+[Unit]
+Description=Warm semantic search local paths hourly
+
+[Timer]
+OnBootSec=10m
+OnUnitActiveSec=60m
+AccuracySec=1m
+RandomizedDelaySec=2m
+Unit=semantic-search-warmup.service
+
+[Install]
+WantedBy=timers.target

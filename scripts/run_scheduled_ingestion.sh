@@ -4,9 +4,18 @@ set -Eeuo pipefail
 PROJECT_DIR="${PROJECT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 COMPANY_ID="${COMPANY_ID:-gainr}"
 LOCK_FILE="${LOCK_FILE:-/tmp/semantic-search-ingest-${COMPANY_ID}.lock}"
+WARMUP_LOCK_FILE="${WARMUP_LOCK_FILE:-/tmp/semantic-search-warmup-${COMPANY_ID}.lock}"
 CONTAINER_NAME="${INGEST_CONTAINER_NAME:-semantic-search-ingest-${COMPANY_ID}}"
 
 cd "$PROJECT_DIR"
+# Ingestion has priority over the lightweight hourly job. If a warm-up is
+# already finishing, wait for it instead of treating the daily ingestion as a
+# duplicate and silently skipping the source scan.
+exec 8>"$WARMUP_LOCK_FILE"
+if ! flock -w 600 8; then
+  echo "Timed out waiting for the search-path warm-up lock." >&2
+  exit 1
+fi
 exec 9>"$LOCK_FILE"
 if ! flock -n 9; then
   echo "Scheduled ingestion is already running for ${COMPANY_ID}."

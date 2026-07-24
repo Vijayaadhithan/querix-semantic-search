@@ -191,6 +191,12 @@ if command -v systemctl >/dev/null 2>&1; then
   else
     warn "Scheduled backup timer is not both enabled and active"
   fi
+  if systemctl is-enabled --quiet semantic-search-warmup.timer && \
+    systemctl is-active --quiet semantic-search-warmup.timer; then
+    pass "Hourly search-path warm-up timer is enabled and active"
+  else
+    warn "Hourly search-path warm-up timer is not both enabled and active"
+  fi
   legacy_refs="$(
     grep -RIl --exclude='*.wants' '/Peronsal_rag/.venv' \
       /etc/systemd/system /etc/cron.d /etc/crontab 2>/dev/null || true

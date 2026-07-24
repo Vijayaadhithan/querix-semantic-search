@@ -564,6 +564,33 @@ The script uses a stable named run container and removes it when systemd stops
 or times out, so a failed unit cannot leave an orphan that overlaps tomorrow's
 run.
 
+### Hourly local search-path warm-up
+
+The API warms Ollama and pgvector during startup. On a low-traffic server,
+kernel and database cache paths can still cool after a long idle period. Install
+the hourly timer to run three lightweight, read-only representative queries
+through Ollama, pgvector HNSW, and BM25:
+
+```bash
+export PRODUCTION_REPO="$(pwd)"
+sed "s|/opt/semantic-search|$PRODUCTION_REPO|g" \
+  deploy/semantic-search-warmup.service | \
+  sudo tee /etc/systemd/system/semantic-search-warmup.service >/dev/null
+sudo cp deploy/semantic-search-warmup.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now semantic-search-warmup.timer
+sudo systemctl start semantic-search-warmup.service
+systemctl list-timers semantic-search-warmup.timer
+journalctl -u semantic-search-warmup.service -n 50 --no-pager
+```
+
+The timer runs approximately once every 60 minutes, with up to two minutes of
+jitter. It starts ten minutes after a reboot because API startup already warms
+the same paths. It skips a run when daily ingestion is active, does not call
+the hosted planner or reranker, and opens BM25 read-only. If a warm-up is just
+finishing when daily ingestion starts, ingestion waits for the short warm-up
+instead of skipping the daily source scan.
+
 ### Migrate a transferred Gainr index to the company namespace
 
 If `--list` shows the validated source
