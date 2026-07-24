@@ -25,6 +25,7 @@ from query_planner import (
     build_query_filter_catalog,
     default_query_plan,
     deterministic_filter_query_plan,
+    direct_semantic_query_plan,
     enrich_query_plan,
     extract_query_plan,
     query_analysis,
@@ -50,6 +51,7 @@ from settings import (
     MYSQL_TABLE,
     PRIMARY_RANKED_K,
     QUERY_DETERMINISTIC_FAST_PATH,
+    QUERY_DIRECT_SEMANTIC_FAST_PATH,
     QUERY_EXTRACT_MODELS,
     QUERY_PLAN_CACHE_SIZE,
     QUERY_PLAN_CACHE_TTL_SECONDS,
@@ -69,8 +71,8 @@ from settings import (
 )
 
 LOGGER = logging.getLogger("uvicorn.error")
-RESULT_CACHE_SCHEMA_VERSION = "v22"
-QUERY_PLAN_CACHE_SCHEMA_VERSION = "v10"
+RESULT_CACHE_SCHEMA_VERSION = "v23"
+QUERY_PLAN_CACHE_SCHEMA_VERSION = "v11"
 
 GAINR_VEHICLE_INTENT_TERMS = {
     "automobile",
@@ -292,6 +294,7 @@ class ProductSearchEngine:
         shared_reranker=None,
         close_bm25_index: bool = False,
         planner_enabled: bool = True,
+        direct_semantic_fast_path: bool = QUERY_DIRECT_SEMANTIC_FAST_PATH,
         planner_prompt_context: str = "",
         planner_query_aliases: dict[str, str] | None = None,
         vector_post_filter_metadata: bool | str = False,
@@ -314,6 +317,7 @@ class ProductSearchEngine:
         self.shared_reranker = shared_reranker
         self.company_id = company_id
         self.planner_enabled = planner_enabled
+        self.direct_semantic_fast_path = direct_semantic_fast_path
         self.planner_prompt_context = planner_prompt_context
         self.planner_query_aliases = dict(planner_query_aliases or {})
         self.vector_post_filter_metadata = vector_post_filter_metadata
@@ -363,6 +367,9 @@ class ProductSearchEngine:
                     },
                     "models": list(QUERY_EXTRACT_MODELS),
                     "planner_enabled": self.planner_enabled,
+                    "direct_semantic_fast_path": (
+                        self.direct_semantic_fast_path
+                    ),
                     "prompt_context": self.planner_prompt_context,
                     "schema": QUERY_PLAN_CACHE_SCHEMA_VERSION,
                 },
@@ -754,9 +761,11 @@ class ProductSearchEngine:
             )
             LOGGER.info(
                 "[search:%s] step=plan status=cache_hit path=%s "
+                "route_reason=%s "
                 "duration_ms=%.0f",
                 trace_id,
                 cached["query_plan"].get("execution_path", "semantic"),
+                cached["query_plan"].get("route_reason", "cached"),
                 elapsed * 1000,
             )
             return cached
@@ -771,6 +780,16 @@ class ProductSearchEngine:
             if QUERY_DETERMINISTIC_FAST_PATH
             else None
         )
+        direct_rejection_reason = "deterministic_match"
+        if query_plan is None and self.direct_semantic_fast_path:
+            query_plan, direct_rejection_reason = (
+                direct_semantic_query_plan(
+                    query,
+                    self.filter_value_index,
+                    self.planner_query_aliases,
+                    analysis_cache,
+                )
+            )
         if query_plan is None:
             query_plan = (
                 extract_query_plan(
@@ -796,6 +815,11 @@ class ProductSearchEngine:
                 ),
             )
             query_plan["execution_path"] = "semantic"
+            query_plan["route_reason"] = (
+                "llm_required:" + direct_rejection_reason
+                if self.direct_semantic_fast_path
+                else "llm_required:direct_path_disabled"
+            )
         resolved, unresolved = resolve_query_filters(
             query_plan["filters"],
             self.filter_value_index,
@@ -817,7 +841,10 @@ class ProductSearchEngine:
         attempted_label = ",".join(
             query_metrics.get("attempted_models", [])
         )
-        if query_plan["execution_path"] == "deterministic_filter":
+        if query_plan["execution_path"] in {
+            "deterministic_filter",
+            "direct_semantic",
+        }:
             model_label = "none"
             attempted_label = "none"
         elif not model_label:
@@ -829,7 +856,8 @@ class ProductSearchEngine:
             attempted_label = attempted_label or "custom"
         log_method(
             "[search:%s] step=plan status=%s path=%s model=%s attempted=%s "
-            "filters=%s unresolved=%d reason=%s duration_ms=%.0f",
+            "filters=%s unresolved=%d route_reason=%s reason=%s "
+            "duration_ms=%.0f",
             trace_id,
             (
                 "provider_fallback"
@@ -841,6 +869,7 @@ class ProductSearchEngine:
             attempted_label,
             ",".join(active_filter_names(query_plan["filters"])) or "none",
             len(unresolved),
+            query_plan.get("route_reason") or "none",
             query_plan.get("fallback_reason") or "none",
             elapsed * 1000,
         )

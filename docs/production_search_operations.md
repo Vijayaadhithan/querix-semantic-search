@@ -105,6 +105,21 @@ fusion, authoritative type lookup, eligibility, and hydration durations. Shadow
 mode intentionally adds database work and is for bounded validation windows,
 not steady-state production traffic.
 
+Planning has three observable execution paths:
+
+- `deterministic_filter` resolves a complete objective category/filter request
+  locally and queries the catalogue without an LLM.
+- `direct_semantic` accepts only a short, objective, explicitly catalogued
+  phrase with no location, price, duration, wanted-ad, multilingual,
+  functional, or subjective language. It skips hosted planning but retains the
+  normal embedding, vector/BM25 fusion, reranking, eligibility, and hydration.
+- `semantic` uses the hosted planner for every remaining or uncertain query.
+
+Plan logs include `route_reason`. Direct routing is deliberately asymmetric:
+uncertainty goes to the hosted planner because an unnecessary LLM call costs
+latency, while an incorrect bypass can cost relevance. Set
+`QUERY_DIRECT_SEMANTIC_FAST_PATH=false` for an immediate configuration rollback.
+
 Set `storage.pgvector.prewarm_on_startup: true` for a tenant to synchronously
 read its HNSW index into the host filesystem cache before the API reports
 ready. Startup prewarm is fail-open and logs the index, blocks, bytes, and

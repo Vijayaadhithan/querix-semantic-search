@@ -12,6 +12,7 @@ from bm25_index import PersistentBM25Index
 from query_planner import (
     QueryFilterCatalog,
     deterministic_filter_query_plan,
+    direct_semantic_query_plan,
     extract_query_plan,
     extract_sort_order,
     normalize_transliterated_query,
@@ -156,6 +157,68 @@ def test_deterministic_filter_plan_accepts_simple_explicit_queries(tmp_path):
     index.close()
 
 
+def test_direct_semantic_plan_accepts_objective_catalog_phrase(tmp_path):
+    index = build_index(tmp_path / "direct-semantic.sqlite3")
+    value_index = query_filter_value_index(index)
+
+    plan, reason = direct_semantic_query_plan(
+        "red bike with ABS",
+        value_index,
+    )
+
+    assert reason == "objective_catalog_phrase"
+    assert plan["execution_path"] == "direct_semantic"
+    assert plan["route_reason"] == reason
+    assert plan["semantic_query"] == "red bike with ABS"
+    assert plan["keyword_query"] == "red bike with ABS"
+    assert plan["filters"]["subcategory"] == "Bike"
+    assert plan["filters"]["main_category"] == "Automobiles"
+    index.close()
+
+
+def test_direct_semantic_plan_rejects_queries_that_need_llm_reasoning(tmp_path):
+    index = build_index(tmp_path / "direct-semantic-rejections.sqlite3")
+    value_index = query_filter_value_index(index)
+    cases = {
+        "red bike in Chennai": "location_language",
+        "bike under 1000": "numeric_constraint_or_model",
+        "comfortable bike for a long trip": "complex_or_subjective_language",
+        "someone looking for bikes": "ad_type_intent",
+        "red bke with ABS": "query_requires_normalization",
+        "சிவப்பு bike": "non_ascii_language",
+        "red bike venum": "complex_or_subjective_language",
+    }
+
+    for query, expected_reason in cases.items():
+        plan, reason = direct_semantic_query_plan(
+            query,
+            value_index,
+            {"bke": "bike"},
+        )
+        assert plan is None, query
+        assert reason == expected_reason, query
+    index.close()
+
+
+def test_engine_direct_semantic_route_skips_query_provider(tmp_path):
+    index = build_index(tmp_path / "direct-semantic-engine.sqlite3")
+    provider = CountingQueryProvider()
+    engine = ProductSearchEngine(
+        collection=FakeCollection(),
+        bm25_index=index,
+        query_provider=provider,
+    )
+
+    result = engine.plan("outdoor bike")
+
+    assert result["query_plan"]["execution_path"] == "direct_semantic"
+    assert result["query_plan"]["route_reason"] == "objective_catalog_phrase"
+    assert result["query_model_metrics"] == {}
+    assert provider.calls == 0
+    engine.close()
+    index.close()
+
+
 def test_tenant_prompt_context_is_added_only_to_llm_planning(tmp_path):
     index = build_index(tmp_path / "tenant-prompt.sqlite3")
     provider = CapturingQueryProvider()
@@ -214,6 +277,7 @@ def test_transliterated_queries_receive_trusted_semantic_normalization(tmp_path)
         collection=FakeCollection(),
         bm25_index=index,
         query_provider=provider,
+        direct_semantic_fast_path=False,
     )
     try:
         result = engine.plan("veetu vela kaari in Chennai")
@@ -889,6 +953,7 @@ def test_normalized_query_plan_cache_skips_repeated_planner_work(
         collection=FakeCollection(),
         bm25_index=index,
         query_provider=provider,
+        direct_semantic_fast_path=False,
     )
 
     first = engine.plan("red bike")
@@ -912,6 +977,7 @@ def test_semantic_planner_reuses_exact_query_analysis_between_passes(
         collection=FakeCollection(),
         bm25_index=index,
         query_provider=provider,
+        direct_semantic_fast_path=False,
     )
     calls = []
     original = query_planner.find_catalog_value
@@ -953,12 +1019,14 @@ def test_plan_cache_fingerprint_changes_with_catalog(tmp_path):
         bm25_index=first_index,
         query_provider=first_provider,
         shared_plan_cache=cache,
+        direct_semantic_fast_path=False,
     )
     second_engine = ProductSearchEngine(
         collection=FakeCollection(),
         bm25_index=second_index,
         query_provider=second_provider,
         shared_plan_cache=cache,
+        direct_semantic_fast_path=False,
     )
 
     first_engine.plan("red bike")
@@ -982,6 +1050,7 @@ def test_shared_plan_cache_survives_engine_restart(tmp_path):
         bm25_index=index,
         query_provider=first_provider,
         shared_plan_cache=cache,
+        direct_semantic_fast_path=False,
     )
 
     first = first_engine.plan("red bike")
@@ -992,6 +1061,7 @@ def test_shared_plan_cache_survives_engine_restart(tmp_path):
         bm25_index=index,
         query_provider=second_provider,
         shared_plan_cache=cache,
+        direct_semantic_fast_path=False,
     )
     second = second_engine.plan(" RED   BIKE ")
 
@@ -1025,6 +1095,7 @@ def test_shared_plan_cache_is_namespaced_by_company(tmp_path):
         query_provider=alpha_provider,
         shared_plan_cache=cache,
         company_id="alpha",
+        direct_semantic_fast_path=False,
     )
     beta_engine = ProductSearchEngine(
         collection=FakeCollection(),
@@ -1032,6 +1103,7 @@ def test_shared_plan_cache_is_namespaced_by_company(tmp_path):
         query_provider=beta_provider,
         shared_plan_cache=cache,
         company_id="beta",
+        direct_semantic_fast_path=False,
     )
 
     alpha_engine.plan("red bike")

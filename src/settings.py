@@ -125,6 +125,10 @@ if QUERY_EXTRACT_TIMEOUT_SECONDS <= 0:
 QUERY_DETERMINISTIC_FAST_PATH = bool(
     QUERY_EXTRACT_CONFIG.get("deterministic_fast_path", True)
 )
+QUERY_DIRECT_SEMANTIC_FAST_PATH = _env_bool(
+    "QUERY_DIRECT_SEMANTIC_FAST_PATH",
+    bool(QUERY_EXTRACT_CONFIG.get("direct_semantic_fast_path", True)),
+)
 QUERY_FUZZY_MATCHING = bool(
     QUERY_EXTRACT_CONFIG.get("fuzzy_matching", True)
 )

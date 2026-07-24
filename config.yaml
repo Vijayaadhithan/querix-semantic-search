@@ -17,6 +17,10 @@ query_extraction:
   # Per-model deadline. Timeouts advance to the next configured model.
   timeout_seconds: 10
   deterministic_fast_path: true
+  # Skip hosted planning only for short, objective, explicitly catalogued
+  # phrases with no location, price, duration, wanted-ad, multilingual, or
+  # functional language. Hybrid retrieval and reranking remain unchanged.
+  direct_semantic_fast_path: true
   fuzzy_matching: true
   # Exact normalized queries only; plans are fingerprinted by tenant prompt,
   # aliases, catalog, configured models, and schema before reuse.

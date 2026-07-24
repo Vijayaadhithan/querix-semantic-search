@@ -231,3 +231,28 @@ def test_strict_case_threshold_uses_median_rank():
     assert report["median_reciprocal_rank"] == 0.1
     assert report["success"] is False
     assert "median_rr<0.200" in report["failures"]
+
+
+def test_strict_case_threshold_enforces_expected_execution_path():
+    case = {
+        "name": "route_guard",
+        "query": "outdoor quad bike",
+        "relevant_ids": ["quad-1"],
+        "expected_execution_path": "semantic",
+    }
+    fixed = {
+        "execution_path": "direct_semantic",
+        "candidate_ids": ["quad-1"],
+        "candidate_fingerprint": "fixed",
+        "result_ids_by_run": [["quad-1"]],
+        "reranker_runs": [],
+    }
+
+    report = evaluate_fixed_case(
+        SimpleNamespace(database=None),
+        case,
+        fixed,
+    )
+
+    assert report["success"] is False
+    assert "execution_path!=semantic" in report["failures"]

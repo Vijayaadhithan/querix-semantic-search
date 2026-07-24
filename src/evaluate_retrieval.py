@@ -392,7 +392,10 @@ def run_with_fixed_candidates(
             )
         )
     return {
-        "execution_path": "semantic",
+        "execution_path": planned["query_plan"].get(
+            "execution_path",
+            "semantic",
+        ),
         "candidate_ids": candidate_ids,
         "candidate_fingerprint": fixed_candidate_fingerprint(candidate_ids),
         "result_ids_by_run": [
@@ -494,6 +497,14 @@ def evaluate_fixed_case(
         for result_ids in result_runs
     ]
     failures = []
+    expected_execution_path = case.get("expected_execution_path")
+    if (
+        expected_execution_path is not None
+        and fixed["execution_path"] != expected_execution_path
+    ):
+        failures.append(
+            "execution_path!=" + str(expected_execution_path)
+        )
     minimum_rr = float(case.get("min_reciprocal_rank", 0.0))
     if median_rr < minimum_rr:
         failures.append(f"median_rr<{minimum_rr:.3f}")

@@ -218,6 +218,79 @@ FAST_PATH_WANTED_TOKENS = {
     "wanted",
     "who",
 }
+DIRECT_SEMANTIC_MAX_TOKENS = 8
+DIRECT_SEMANTIC_BLOCK_TOKENS = {
+    "above",
+    "affordable",
+    "around",
+    "away",
+    "below",
+    "best",
+    "budget",
+    "can",
+    "chahiye",
+    "cheap",
+    "cheapest",
+    "clearly",
+    "comfortable",
+    "comfort",
+    "could",
+    "distance",
+    "far",
+    "find",
+    "for",
+    "good",
+    "how",
+    "ideal",
+    "in",
+    "looking",
+    "need",
+    "near",
+    "people",
+    "per",
+    "person",
+    "recommend",
+    "recreational",
+    "reliable",
+    "request",
+    "rough",
+    "safe",
+    "safety",
+    "search",
+    "should",
+    "show",
+    "someone",
+    "something",
+    "suitable",
+    "terrain",
+    "thevai",
+    "to",
+    "under",
+    "venam",
+    "venda",
+    "venum",
+    "wanted",
+    "what",
+    "when",
+    "where",
+    "which",
+    "who",
+    "why",
+    "within",
+    "would",
+}
+DIRECT_SEMANTIC_COMPLEX_PATTERNS = (
+    re.compile(r"[?!]"),
+    re.compile(r"\b(?:anything|anyone|somebody)\b", re.IGNORECASE),
+    re.compile(
+        r"\b(?:use|using|suitable)\s+(?:for|to)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:long[\s-]+distance|road[\s-]+trip|off[\s-]?road)\b",
+        re.IGNORECASE,
+    ),
+)
 FAST_PATH_PRICE_TOKENS = {
     "above",
     "and",
@@ -1608,7 +1681,87 @@ def deterministic_filter_query_plan(
     plan["keyword_query"] = query
     plan["query_corrections"] = corrections
     plan["execution_path"] = "deterministic_filter"
+    plan["route_reason"] = "complete_structured_catalog_match"
     return plan
+
+
+def direct_semantic_query_plan(
+    query: str,
+    value_index: dict,
+    query_aliases: dict[str, str] | None = None,
+    analysis_cache: dict[tuple[str, str], QueryAnalysis] | None = None,
+) -> tuple[dict | None, str]:
+    """Route only high-confidence objective catalog phrases around the LLM."""
+    analysis = query_analysis(
+        query,
+        value_index,
+        query_aliases,
+        analysis_cache,
+    )
+    normalized = normalize_filter_value(query)
+    tokens = re.findall(r"[^\W_]+", normalized)
+    token_set = set(tokens)
+    if not tokens:
+        return None, "empty_query"
+    if len(tokens) > DIRECT_SEMANTIC_MAX_TOKENS:
+        return None, "too_many_tokens"
+    if not query.isascii():
+        return None, "non_ascii_language"
+    if analysis.query_was_normalized:
+        return None, "query_requires_normalization"
+    if any(token.isdigit() for token in tokens):
+        return None, "numeric_constraint_or_model"
+    if infer_target_ad_type(query) != "offer" or token_set & {
+        "wanted",
+        "request",
+        "requests",
+        "renters",
+        "customers",
+    }:
+        return None, "ad_type_intent"
+    if (
+        any(
+            analysis.exact_values.get(key) is not None
+            for key in ("state", "city", "locality")
+        )
+        or analysis.fuzzy_location(value_index) is not None
+    ):
+        return None, "location_language"
+    if (
+        analysis.rental_duration is not None
+        or any(value is not None for value in analysis.price_constraints)
+    ):
+        return None, "price_or_duration_language"
+    if extract_sort_order(query) is not None:
+        return None, "sort_language"
+    if not any(
+        analysis.exact_values.get(key) is not None
+        for key in ("main_category", "subcategory")
+    ):
+        return None, "no_explicit_catalog_category"
+    if token_set & DIRECT_SEMANTIC_BLOCK_TOKENS:
+        return None, "complex_or_subjective_language"
+    if any(pattern.search(query) for pattern in DIRECT_SEMANTIC_COMPLEX_PATTERNS):
+        return None, "complex_query_shape"
+
+    plan = enrich_query_plan(
+        query,
+        default_query_plan(query),
+        value_index,
+        query_aliases,
+        analysis,
+    )
+    non_category_filters = {
+        key: value
+        for key, value in plan["filters"].items()
+        if key not in {"main_category", "subcategory"}
+        and value is not None
+    }
+    if non_category_filters or plan["target_ad_type"] != "offer":
+        return None, "structured_intent_detected"
+    plan["execution_path"] = "direct_semantic"
+    plan["route_reason"] = "objective_catalog_phrase"
+    return plan, plan["route_reason"]
 
 
 def extract_query_plan(

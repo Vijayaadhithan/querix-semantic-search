@@ -7,6 +7,30 @@
     {
       "name": "quad_bike_bangalore",
       "query": "Quad Bike for Hourly Rent in Bangalore",
+      "expected_execution_path": "deterministic_filter",
+      "relevant_ids": [
+        "3507",
+        "3508",
+        "3375",
+        "3485",
+        "3491",
+        "3499",
+        "3385",
+        "3488",
+        "3379",
+        "3398",
+        "3397",
+        "3380"
+      ],
+      "min_reciprocal_rank": 1.0,
+      "min_precision_at_3": 0.67,
+      "min_hit_rate_at_10": 1.0,
+      "min_candidate_recall": 0.5
+    },
+    {
+      "name": "objective_outdoor_quad_bike",
+      "query": "outdoor quad bike",
+      "expected_execution_path": "direct_semantic",
       "relevant_ids": [
         "3507",
         "3508",
@@ -29,6 +53,7 @@
     {
       "name": "functional_wedding_recording",
       "query": "something portable that can record a wedding clearly from far away in Chennai for a day",
+      "expected_execution_path": "semantic",
       "relevant_ids": ["183462", "209355", "34309", "165161", "209313"],
       "min_reciprocal_rank": 0.5,
       "min_precision_at_3": 0.33,
@@ -38,6 +63,7 @@
     {
       "name": "functional_off_road_vehicle",
       "query": "A vehicle for recreational driving on rough terrain.",
+      "expected_execution_path": "semantic",
       "relevant_ids": ["68971"],
       "min_reciprocal_rank": 0.333,
       "min_precision_at_3": 0.333,
@@ -47,6 +73,7 @@
     {
       "name": "wanted_hourly_bike",
       "query": "someone looking for bikes in 1000 range per hour",
+      "expected_execution_path": "deterministic_filter",
       "source_filters": {
         "type": 2,
         "main_category_name": "Automobiles",
@@ -64,6 +91,7 @@
     {
       "name": "weekly_bike_offer_has_no_match",
       "query": "need a bike for a week within 800",
+      "expected_execution_path": "deterministic_filter",
       "expected_empty": true
     }
   ]
