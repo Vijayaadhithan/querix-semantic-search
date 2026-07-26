@@ -1,0 +1,509 @@
+import os
+from pathlib import Path
+
+import yaml
+from dotenv import load_dotenv
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+CONFIG_PATH = PROJECT_ROOT / "config.yaml"
+
+load_dotenv(PROJECT_ROOT / ".env")
+load_dotenv(PROJECT_ROOT / ".env.keys", override=True)
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    normalized = raw.strip().casefold()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(
+        f"{name} must be one of true/false, yes/no, on/off, or 1/0."
+    )
+
+
+def _load_config() -> dict:
+    with CONFIG_PATH.open(encoding="utf-8") as config_file:
+        return yaml.safe_load(config_file) or {}
+
+
+CONFIG = _load_config()
+
+BM25_INDEX_PATH = PROJECT_ROOT / "storage" / "bm25.sqlite3"
+APP_NAME = CONFIG.get("app_name", "Local Data Assistant")
+USAGE_TRACKING_ENABLED = _env_bool(
+    "USAGE_TRACKING_ENABLED",
+    bool(CONFIG.get("api", {}).get("usage_tracking_enabled", True)),
+)
+_usage_db_path = Path(
+    os.getenv(
+        "USAGE_DB_PATH",
+        str(
+            CONFIG.get("api", {}).get(
+                "usage_db_path",
+                "storage/usage.sqlite3",
+            )
+        ),
+    )
+)
+USAGE_DB_PATH = (
+    _usage_db_path
+    if _usage_db_path.is_absolute()
+    else PROJECT_ROOT / _usage_db_path
+)
+
+OLLAMA_BASE_URL = os.getenv(
+    "OLLAMA_BASE_URL", "http://localhost:11434"
+).rstrip("/")
+OLLAMA_KEEP_ALIVE = os.getenv("OLLAMA_KEEP_ALIVE")
+if OLLAMA_KEEP_ALIVE is None:
+    OLLAMA_KEEP_ALIVE = CONFIG.get("ollama", {}).get("keep_alive", -1)
+OLLAMA_QUERY_TIMEOUT_SECONDS = float(
+    os.getenv(
+        "OLLAMA_QUERY_TIMEOUT_SECONDS",
+        str(CONFIG.get("ollama", {}).get("query_timeout_seconds", 10)),
+    )
+)
+if OLLAMA_QUERY_TIMEOUT_SECONDS <= 0:
+    raise ValueError("OLLAMA_QUERY_TIMEOUT_SECONDS must be greater than zero.")
+EMBED_MODEL = CONFIG.get("embedding", {}).get("model", "embeddinggemma:latest")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+GEMINI_API_BASE_URL = os.getenv(
+    "GEMINI_API_BASE_URL",
+    "https://generativelanguage.googleapis.com/v1beta",
+).rstrip("/")
+GROQ_API_KEY = os.getenv(
+    "GROQ_API_KEY",
+    os.getenv("grok_key", ""),
+)
+GROQ_API_BASE_URL = os.getenv(
+    "GROQ_API_BASE_URL",
+    "https://api.groq.com/openai/v1",
+).rstrip("/")
+GROQ_TIMEOUT_SECONDS = float(os.getenv("GROQ_TIMEOUT_SECONDS", "5"))
+if GROQ_TIMEOUT_SECONDS <= 0:
+    raise ValueError("GROQ_TIMEOUT_SECONDS must be greater than zero.")
+QUERY_EXTRACT_CONFIG = CONFIG.get("query_extraction", {})
+_query_extract_models_env = os.getenv("QUERY_EXTRACT_MODELS")
+_query_extract_models = (
+    [
+        model.strip()
+        for model in _query_extract_models_env.split(",")
+        if model.strip()
+    ]
+    if _query_extract_models_env
+    else QUERY_EXTRACT_CONFIG.get("models")
+)
+if not _query_extract_models:
+    _query_extract_models = [
+        QUERY_EXTRACT_CONFIG.get("model", "gemma-4-26b-a4b-it")
+    ]
+elif isinstance(_query_extract_models, str):
+    _query_extract_models = [_query_extract_models]
+QUERY_EXTRACT_MODELS = tuple(
+    str(model).strip()
+    for model in _query_extract_models
+    if str(model).strip()
+)
+if not QUERY_EXTRACT_MODELS:
+    raise ValueError("query_extraction.models must contain at least one model.")
+QUERY_EXTRACT_MODEL = QUERY_EXTRACT_MODELS[0]
+QUERY_EXTRACT_TEMPERATURE = float(
+    QUERY_EXTRACT_CONFIG.get("temperature", 0)
+)
+QUERY_EXTRACT_TIMEOUT_SECONDS = float(
+    os.getenv(
+        "GEMINI_TIMEOUT_SECONDS",
+        str(QUERY_EXTRACT_CONFIG.get("timeout_seconds", 10)),
+    )
+)
+if QUERY_EXTRACT_TIMEOUT_SECONDS <= 0:
+    raise ValueError("GEMINI_TIMEOUT_SECONDS must be greater than zero.")
+QUERY_DETERMINISTIC_FAST_PATH = bool(
+    QUERY_EXTRACT_CONFIG.get("deterministic_fast_path", True)
+)
+QUERY_DIRECT_SEMANTIC_FAST_PATH = _env_bool(
+    "QUERY_DIRECT_SEMANTIC_FAST_PATH",
+    bool(QUERY_EXTRACT_CONFIG.get("direct_semantic_fast_path", True)),
+)
+QUERY_FUZZY_MATCHING = bool(
+    QUERY_EXTRACT_CONFIG.get("fuzzy_matching", True)
+)
+QUERY_PLAN_CACHE_SIZE = int(
+    QUERY_EXTRACT_CONFIG.get("cache_size", 500)
+)
+QUERY_PLAN_CACHE_TTL_SECONDS = int(
+    QUERY_EXTRACT_CONFIG.get("cache_ttl_seconds", 900)
+)
+REDIS_CONFIG = CONFIG.get("redis", {})
+REDIS_ENABLED = _env_bool(
+    "REDIS_ENABLED",
+    bool(REDIS_CONFIG.get("enabled", True)),
+)
+REDIS_URL = os.getenv(
+    "REDIS_URL",
+    str(REDIS_CONFIG.get("url", "redis://127.0.0.1:6379/0")),
+)
+REDIS_KEY_PREFIX = os.getenv(
+    "REDIS_KEY_PREFIX",
+    str(REDIS_CONFIG.get("key_prefix", "semantic_ads")),
+)
+RESULT_CACHE_ENABLED = _env_bool(
+    "REDIS_RESULT_CACHE_ENABLED",
+    bool(REDIS_CONFIG.get("result_cache_enabled", True)),
+)
+RESULT_CACHE_TTL_SECONDS = int(
+    os.getenv(
+        "REDIS_RESULT_CACHE_TTL_SECONDS",
+        str(REDIS_CONFIG.get("result_cache_ttl_seconds", 300)),
+    )
+)
+if RESULT_CACHE_TTL_SECONDS <= 0:
+    raise ValueError("REDIS_RESULT_CACHE_TTL_SECONDS must be greater than zero.")
+
+UNPRICED_RENTAL_FEE_CEILING = float(
+    CONFIG.get("retrieval", {}).get("unpriced_rental_fee_ceiling", 1)
+)
+if UNPRICED_RENTAL_FEE_CEILING < 0:
+    raise ValueError(
+        "retrieval.unpriced_rental_fee_ceiling cannot be negative."
+    )
+
+VECTOR_CANDIDATE_K = int(
+    CONFIG.get("retrieval", {}).get("vector_candidate_k", 100)
+)
+VECTOR_EXACT_FILTER_MAX_ROWS = int(
+    os.getenv(
+        "VECTOR_EXACT_FILTER_MAX_ROWS",
+        str(
+            CONFIG.get("retrieval", {}).get(
+                "vector_exact_filter_max_rows",
+                10000,
+            )
+        ),
+    )
+)
+if VECTOR_EXACT_FILTER_MAX_ROWS <= 0:
+    raise ValueError("VECTOR_EXACT_FILTER_MAX_ROWS must be greater than zero.")
+VECTOR_POST_FILTER_OVERFETCH_FACTOR = int(
+    CONFIG.get("retrieval", {}).get(
+        "vector_post_filter_overfetch_factor",
+        10,
+    )
+)
+VECTOR_POST_FILTER_MAX_CANDIDATES = int(
+    CONFIG.get("retrieval", {}).get(
+        "vector_post_filter_max_candidates",
+        2000,
+    )
+)
+if (
+    VECTOR_POST_FILTER_OVERFETCH_FACTOR <= 0
+    or VECTOR_POST_FILTER_MAX_CANDIDATES <= 0
+):
+    raise ValueError(
+        "Vector post-filter over-fetch settings must be greater than zero."
+    )
+VECTOR_TOP_K = int(
+    os.getenv(
+        "VECTOR_TOP_K",
+        str(CONFIG.get("retrieval", {}).get("vector_top_k", 15)),
+    )
+)
+BM25_TOP_K = int(
+    os.getenv(
+        "BM25_TOP_K",
+        str(CONFIG.get("retrieval", {}).get("bm25_top_k", 15)),
+    )
+)
+HYBRID_CANDIDATE_K = int(
+    os.getenv(
+        "HYBRID_CANDIDATE_K",
+        str(CONFIG.get("retrieval", {}).get("hybrid_candidate_k", 60)),
+    )
+)
+RERANK_CANDIDATE_K = int(
+    os.getenv(
+        "RERANK_CANDIDATE_K",
+        str(CONFIG.get("retrieval", {}).get("rerank_candidate_k", 60)),
+    )
+)
+PRIMARY_RANKED_K = int(
+    os.getenv(
+        "PRIMARY_RANKED_K",
+        str(CONFIG.get("retrieval", {}).get("primary_ranked_k", 60)),
+    )
+)
+RELATED_TAIL_ENABLED = bool(
+    CONFIG.get("retrieval", {}).get("related_tail_enabled", True)
+)
+RETRIEVAL_OVERFETCH_FACTOR = int(
+    CONFIG.get("retrieval", {}).get("overfetch_factor", 2)
+)
+RRF_CONSTANT = int(CONFIG.get("retrieval", {}).get("rrf_constant", 60))
+VECTOR_WEIGHT = float(CONFIG.get("retrieval", {}).get("vector_weight", 1.0))
+BM25_WEIGHT = float(CONFIG.get("retrieval", {}).get("bm25_weight", 1.0))
+SOFT_CATEGORY_BOOST = float(
+    CONFIG.get("retrieval", {}).get("soft_category_boost", 0.005)
+)
+RERANK_TOP_K = int(CONFIG.get("retrieval", {}).get("final_top_k", 6))
+RERANK_MODEL = CONFIG.get("retrieval", {}).get(
+    "reranker_model", "hosted-reranker-chain"
+)
+RERANK_PROVIDER_CONFIG = CONFIG.get("retrieval", {}).get(
+    "reranker_providers",
+    {},
+)
+_rerank_provider_order = os.getenv(
+    "RERANK_PROVIDER_ORDER",
+    ",".join(
+        RERANK_PROVIDER_CONFIG.get(
+            "order",
+            ["voyage-2.5", "voyage-2.5-lite"],
+        )
+    ),
+)
+RERANK_PROVIDER_ORDER = tuple(
+    provider.strip().casefold()
+    for provider in _rerank_provider_order.split(",")
+    if provider.strip()
+)
+_invalid_rerank_providers = sorted(
+    set(RERANK_PROVIDER_ORDER)
+    - {
+        "voyage",
+        "voyage-2.5",
+        "voyage-2.5-lite",
+        "openrouter-nemotron",
+    }
+)
+if _invalid_rerank_providers:
+    raise ValueError(
+        f"Unsupported reranker providers: {_invalid_rerank_providers}"
+    )
+if not RERANK_PROVIDER_ORDER:
+    raise ValueError("RERANK_PROVIDER_ORDER must contain at least one provider.")
+RERANK_API_TIMEOUT_SECONDS = float(
+    os.getenv(
+        "RERANK_API_TIMEOUT_SECONDS",
+        str(RERANK_PROVIDER_CONFIG.get("timeout_seconds", 5)),
+    )
+)
+RERANK_FAILURE_COOLDOWN_SECONDS = float(
+    os.getenv(
+        "RERANK_FAILURE_COOLDOWN_SECONDS",
+        str(RERANK_PROVIDER_CONFIG.get("failure_cooldown_seconds", 15)),
+    )
+)
+RERANK_RATE_LIMIT_COOLDOWN_SECONDS = float(
+    os.getenv(
+        "RERANK_RATE_LIMIT_COOLDOWN_SECONDS",
+        str(RERANK_PROVIDER_CONFIG.get("rate_limit_cooldown_seconds", 60)),
+    )
+)
+RERANK_MAX_DOCUMENT_CHARS = int(
+    os.getenv(
+        "RERANK_MAX_DOCUMENT_CHARS",
+        str(RERANK_PROVIDER_CONFIG.get("max_document_chars", 4000)),
+    )
+)
+if (
+    RERANK_API_TIMEOUT_SECONDS <= 0
+    or RERANK_FAILURE_COOLDOWN_SECONDS < 0
+    or RERANK_RATE_LIMIT_COOLDOWN_SECONDS < 0
+    or RERANK_MAX_DOCUMENT_CHARS <= 0
+):
+    raise ValueError(
+        "Reranker timeout and document character limit must be positive; "
+        "cooldowns must be zero or greater."
+    )
+VOYAGE_API_KEY = os.getenv("VOYAGE_API_KEY", "")
+VOYAGE_RERANK_URL = os.getenv(
+    "VOYAGE_RERANK_URL",
+    "https://api.voyageai.com/v1/rerank",
+)
+VOYAGE_RERANK_MODEL = os.getenv(
+    "VOYAGE_RERANK_MODEL",
+    str(RERANK_PROVIDER_CONFIG.get("voyage_model", "rerank-2.5")),
+)
+VOYAGE_RERANK_LITE_MODEL = os.getenv(
+    "VOYAGE_RERANK_LITE_MODEL",
+    str(
+        RERANK_PROVIDER_CONFIG.get(
+            "voyage_lite_model",
+            "rerank-2.5-lite",
+        )
+    ),
+)
+VOYAGE_RERANK_RPM_PER_MODEL = int(
+    os.getenv(
+        "VOYAGE_RERANK_RPM_PER_MODEL",
+        str(
+            RERANK_PROVIDER_CONFIG.get(
+                "voyage_requests_per_minute_per_model",
+                3,
+            )
+        ),
+    )
+)
+if VOYAGE_RERANK_RPM_PER_MODEL <= 0:
+    raise ValueError("VOYAGE_RERANK_RPM_PER_MODEL must be greater than zero.")
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
+OPENROUTER_RERANK_URL = os.getenv(
+    "OPENROUTER_RERANK_URL",
+    str(
+        RERANK_PROVIDER_CONFIG.get(
+            "openrouter_url",
+            "https://openrouter.ai/api/v1/rerank",
+        )
+    ),
+)
+OPENROUTER_RERANK_MODEL = os.getenv(
+    "OPENROUTER_RERANK_MODEL",
+    str(
+        RERANK_PROVIDER_CONFIG.get(
+            "openrouter_model",
+            "nvidia/llama-nemotron-rerank-vl-1b-v2:free",
+        )
+    ),
+)
+OPENROUTER_RERANK_RPM = int(
+    os.getenv(
+        "OPENROUTER_RERANK_RPM",
+        str(
+            RERANK_PROVIDER_CONFIG.get(
+                "openrouter_requests_per_minute",
+                20,
+            )
+        ),
+    )
+)
+OPENROUTER_RERANK_RPD = int(
+    os.getenv(
+        "OPENROUTER_RERANK_RPD",
+        str(
+            RERANK_PROVIDER_CONFIG.get(
+                "openrouter_requests_per_day",
+                50,
+            )
+        ),
+    )
+)
+if OPENROUTER_RERANK_RPM <= 0 or OPENROUTER_RERANK_RPD <= 0:
+    raise ValueError("OpenRouter reranker request limits must be greater than zero.")
+
+API_HOST = os.getenv(
+    "API_HOST",
+    str(CONFIG.get("api", {}).get("host", "127.0.0.1")),
+)
+API_PORT = int(
+    os.getenv(
+        "API_PORT",
+        str(CONFIG.get("api", {}).get("port", 8000)),
+    )
+)
+API_LOG_LEVEL = os.getenv(
+    "API_LOG_LEVEL",
+    str(CONFIG.get("api", {}).get("log_level", "info")),
+).lower()
+API_READINESS_CACHE_SECONDS = int(
+    os.getenv(
+        "API_READINESS_CACHE_SECONDS",
+        str(CONFIG.get("api", {}).get("readiness_cache_seconds", 300)),
+    )
+)
+if not 0 <= API_READINESS_CACHE_SECONDS <= 3600:
+    raise ValueError(
+        "API_READINESS_CACHE_SECONDS must be between 0 and 3600."
+    )
+API_DEFAULT_PAGE_SIZE = int(
+    CONFIG.get("api", {}).get("default_page_size", 20)
+)
+API_PRELOAD_RERANKER = bool(
+    CONFIG.get("api", {}).get("preload_reranker", True)
+)
+API_PRELOAD_EMBEDDING = bool(
+    CONFIG.get("api", {}).get("preload_embedding", True)
+)
+API_MAX_PAGE_SIZE = int(CONFIG.get("api", {}).get("max_page_size", 20))
+API_MAX_RESULTS = int(CONFIG.get("api", {}).get("max_results", 200))
+API_SESSION_TTL_SECONDS = int(
+    CONFIG.get("api", {}).get("session_ttl_seconds", 600)
+)
+API_MAX_SESSIONS = int(CONFIG.get("api", {}).get("max_sessions", 500))
+API_CORS_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv("API_CORS_ORIGINS", "").split(",")
+    if origin.strip()
+]
+API_AUTH_ENABLED = _env_bool(
+    "API_AUTH_ENABLED",
+    bool(CONFIG.get("api", {}).get("auth_enabled", False)),
+)
+API_RATE_LIMIT_ENABLED = _env_bool(
+    "API_RATE_LIMIT_ENABLED",
+    bool(CONFIG.get("api", {}).get("rate_limit_enabled", True)),
+)
+API_ADMIN_KEY = os.getenv("API_ADMIN_KEY", "").strip()
+if API_ADMIN_KEY and len(API_ADMIN_KEY) < 24:
+    raise ValueError("API_ADMIN_KEY must contain at least 24 characters.")
+API_ADMIN_LOG_BUFFER_SIZE = int(
+    os.getenv(
+        "API_ADMIN_LOG_BUFFER_SIZE",
+        str(CONFIG.get("api", {}).get("admin_log_buffer_size", 1000)),
+    )
+)
+if not 100 <= API_ADMIN_LOG_BUFFER_SIZE <= 5000:
+    raise ValueError(
+        "API_ADMIN_LOG_BUFFER_SIZE must be between 100 and 5000."
+    )
+API_TENANT_CONFIG_DIR = PROJECT_ROOT / os.getenv(
+    "API_TENANT_CONFIG_DIR",
+    str(CONFIG.get("api", {}).get("tenant_config_dir", "configs/tenants")),
+)
+API_TENANT_ENGINE_CACHE_SIZE = int(
+    os.getenv(
+        "API_TENANT_ENGINE_CACHE_SIZE",
+        str(CONFIG.get("api", {}).get("tenant_engine_cache_size", 8)),
+    )
+)
+API_TENANT_MAX_CONCURRENT_SEARCHES = int(
+    os.getenv(
+        "API_TENANT_MAX_CONCURRENT_SEARCHES",
+        str(
+            CONFIG.get("api", {}).get(
+                "tenant_max_concurrent_searches",
+                4,
+            )
+        ),
+    )
+)
+API_SEARCH_SLOT_TIMEOUT_SECONDS = float(
+    os.getenv(
+        "API_SEARCH_SLOT_TIMEOUT_SECONDS",
+        str(CONFIG.get("api", {}).get("search_slot_timeout_seconds", 5)),
+    )
+)
+if API_TENANT_ENGINE_CACHE_SIZE <= 0:
+    raise ValueError("API_TENANT_ENGINE_CACHE_SIZE must be greater than zero.")
+if API_TENANT_MAX_CONCURRENT_SEARCHES <= 0:
+    raise ValueError(
+        "API_TENANT_MAX_CONCURRENT_SEARCHES must be greater than zero."
+    )
+if API_SEARCH_SLOT_TIMEOUT_SECONDS <= 0:
+    raise ValueError("API_SEARCH_SLOT_TIMEOUT_SECONDS must be greater than zero.")
+
+MYSQL_HOST = os.getenv("MYSQL_HOST", "localhost")
+MYSQL_PORT = int(os.getenv("MYSQL_PORT", "3306"))
+MYSQL_DATABASE = os.getenv("MYSQL_DATABASE", "rag_ht_test")
+MYSQL_USER = os.getenv("MYSQL_USER", "root")
+MYSQL_PASSWORD = os.getenv("MYSQL_PASSWORD", "")
+MYSQL_TABLE = os.getenv("MYSQL_TABLE", "ads_search_ready")
+MYSQL_CONTENT_COLUMN = os.getenv("MYSQL_CONTENT_COLUMN", "embedding_content")
+MYSQL_BM25_COLUMN = os.getenv("MYSQL_BM25_COLUMN", "bm25_content")
+MYSQL_SEARCH_ID_COLUMN = os.getenv("MYSQL_SEARCH_ID_COLUMN", "id")
+MYSQL_RESULT_TABLE = os.getenv("MYSQL_RESULT_TABLE", "ads")
+MYSQL_RESULT_ID_COLUMN = os.getenv("MYSQL_RESULT_ID_COLUMN", "id")

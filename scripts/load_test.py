@@ -17,7 +17,7 @@ from urllib.request import Request, urlopen
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from tenant_config import discover_tenant_profiles  # noqa: E402
+from core.tenant_config import discover_tenant_profiles  # noqa: E402
 
 
 def percentile(values: list[float], fraction: float) -> float:

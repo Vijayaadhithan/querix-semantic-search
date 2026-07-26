@@ -1,0 +1,861 @@
+from __future__ import annotations
+
+import hashlib
+import math
+import os
+import re
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Iterable
+
+import yaml
+
+from storage.mysql import MySQLRuntimeConfig
+from storage.postgres import PostgresRuntimeConfig
+from core.settings import PROJECT_ROOT
+from search.policy_registry import supported_search_policies
+
+
+TENANT_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,62}$")
+DEFAULT_TENANT_CONFIG_DIR = PROJECT_ROOT / "configs" / "tenants"
+GAINR_FILTER_FIELDS = {
+    "main_category_name",
+    "subcategory_name",
+    "state_name",
+    "city_name",
+    "locality_name",
+    "rental_duration",
+    "rental_fee",
+}
+
+
+@dataclass(frozen=True)
+class TenantStorageConfig:
+    bm25_path: Path
+    vector_backend: str = "pgvector"
+    pgvector_database: PostgresRuntimeConfig | None = None
+    pgvector_table: str = "search_vectors"
+    vector_dimensions: int = 768
+    pgvector_hnsw_m: int = 16
+    pgvector_hnsw_ef_construction: int = 64
+    pgvector_hnsw_ef_search: int = 100
+    pgvector_query_mode: str = "legacy"
+    pgvector_prewarm_on_startup: bool = False
+    pgvector_prewarm_mode: str = "read"
+
+
+@dataclass(frozen=True)
+class TenantRateLimit:
+    requests_per_minute: int = 60
+    burst: int = 10
+
+    def __post_init__(self) -> None:
+        if self.requests_per_minute <= 0:
+            raise ValueError("requests_per_minute must be greater than zero")
+        if self.burst <= 0:
+            raise ValueError("rate-limit burst must be greater than zero")
+
+
+@dataclass(frozen=True)
+class TenantRetrievalConfig:
+    adaptive_vector_post_filter_metadata: bool = False
+    semantic_related_tail_enabled: bool = True
+    semantic_related_tail_requires_explicit_category: bool = False
+    reranker_relative_score_floor: float = 0.0
+    reranker_min_score_by_provider: dict[str, float] = field(
+        default_factory=dict
+    )
+
+    def __post_init__(self) -> None:
+        if not 0 <= self.reranker_relative_score_floor <= 1:
+            raise ValueError(
+                "reranker_relative_score_floor must be between 0 and 1"
+            )
+        for provider, score in self.reranker_min_score_by_provider.items():
+            if not provider:
+                raise ValueError(
+                    "reranker_min_score_by_provider keys must not be empty"
+                )
+            if not math.isfinite(score):
+                raise ValueError(
+                    "reranker_min_score_by_provider values must be finite"
+                )
+
+
+@dataclass(frozen=True)
+class TenantPayloadConfig:
+    public_fields: tuple[str, ...]
+    field_mapping: dict[str, str] = field(default_factory=dict)
+    filter_schema: dict[str, str] = field(default_factory=dict)
+    request_mapping: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class TenantCompatibilityConfig:
+    adapter: str = ""
+    users_table: str = "users"
+    page_size: int = 20
+    semantic_ranked_window: int = 40
+    suggestions_limit: int = 8
+    recent_limit: int = 10
+    recent_ttl_seconds: int = 60 * 60 * 24 * 90
+    min_fee_field: str = "min_fee"
+    max_fee_field: str = "max_fee"
+    fixed_fee_id: int = 1
+    negotiable_fee_id: int = 0
+    emit_search_meta: bool = True
+    image_path: str = ""
+
+    def __post_init__(self) -> None:
+        if self.adapter not in {"", "gainr_legacy"}:
+            raise ValueError(
+                f"Unsupported compatibility adapter {self.adapter!r}"
+            )
+        if not self.users_table:
+            raise ValueError("Compatibility users_table must not be empty")
+        if self.page_size <= 0 or self.page_size > 100:
+            raise ValueError("Compatibility page_size must be between 1 and 100")
+        if (
+            self.semantic_ranked_window < self.page_size
+            or self.semantic_ranked_window > 100
+        ):
+            raise ValueError(
+                "Compatibility semantic_ranked_window must be between "
+                "page_size and 100"
+            )
+        if self.suggestions_limit <= 0 or self.suggestions_limit > 50:
+            raise ValueError(
+                "Compatibility suggestions_limit must be between 1 and 50"
+            )
+        if self.recent_limit <= 0 or self.recent_limit > 50:
+            raise ValueError(
+                "Compatibility recent_limit must be between 1 and 50"
+            )
+        if self.recent_ttl_seconds <= 0:
+            raise ValueError(
+                "Compatibility recent_ttl_seconds must be greater than zero"
+            )
+        if not self.min_fee_field or not self.max_fee_field:
+            raise ValueError("Compatibility fee field names must not be empty")
+        if self.min_fee_field == self.max_fee_field:
+            raise ValueError("Compatibility fee field names must be different")
+        if self.fixed_fee_id == self.negotiable_fee_id:
+            raise ValueError("Fixed and negotiable fee IDs must be different")
+        if self.image_path and not self.image_path.endswith("/"):
+            raise ValueError("Compatibility image_path must end with '/'")
+
+
+@dataclass(frozen=True)
+class TenantProfile:
+    company_id: str
+    database: MySQLRuntimeConfig | PostgresRuntimeConfig
+    storage: TenantStorageConfig
+    payload: TenantPayloadConfig
+    rate_limit: TenantRateLimit
+    planner_adapter: str
+    api_key_envs: tuple[str, ...]
+    config_path: Path
+    endpoint_slug: str = ""
+    search_policy: str = "default"
+    planner_enabled: bool = True
+    planner_prompt_context: str = ""
+    planner_query_aliases: dict[str, str] = field(default_factory=dict)
+    retrieval: TenantRetrievalConfig = field(
+        default_factory=TenantRetrievalConfig
+    )
+    compatibility: TenantCompatibilityConfig = field(
+        default_factory=TenantCompatibilityConfig
+    )
+
+
+def validate_tenant_id(value: str) -> str:
+    tenant_id = value.strip().casefold()
+    if not TENANT_ID_RE.fullmatch(tenant_id):
+        raise ValueError(
+            f"Unsafe company id {value!r}; use lowercase letters, numbers, "
+            "underscores, or hyphens."
+        )
+    return tenant_id
+
+
+def _read_yaml(path: Path) -> dict[str, Any]:
+    try:
+        raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except yaml.YAMLError as exc:
+        raise ValueError(f"Invalid tenant YAML: {path}") from exc
+    if not isinstance(raw, dict):
+        raise ValueError(f"Tenant profile must contain a YAML object: {path}")
+    return raw
+
+
+def _path(value: str | Path) -> Path:
+    path = Path(value)
+    return path if path.is_absolute() else PROJECT_ROOT / path
+
+
+def _env_name(section: dict[str, Any], key: str, default: str) -> str:
+    value = str(section.get(key, default)).strip()
+    if not value:
+        raise ValueError(f"Environment-variable name {key!r} must not be empty")
+    return value
+
+
+def _env_value(
+    section: dict[str, Any],
+    key: str,
+    default_env: str,
+    *,
+    default: str = "",
+) -> str:
+    return os.getenv(_env_name(section, key, default_env), default)
+
+
+def _identifier(section: dict[str, Any], key: str, default: str) -> str:
+    value = str(section.get(key, default)).strip()
+    if not value or "\x00" in value:
+        raise ValueError(f"Database identifier {key!r} must not be empty")
+    return value
+
+
+def load_tenant_profile(path: Path) -> TenantProfile:
+    path = path.resolve()
+    raw = _read_yaml(path)
+    company = dict(raw.get("company", {}))
+    company_id = validate_tenant_id(
+        str(company.get("id", path.stem))
+    )
+    if company_id != path.stem:
+        raise ValueError(
+            f"Tenant profile {path.name} declares company.id={company_id!r}; "
+            f"expected {path.stem!r}."
+        )
+    planner_adapter = str(company.get("planner_adapter", "gainr")).strip()
+    if not planner_adapter:
+        raise ValueError(f"Tenant {company_id!r} must configure planner_adapter")
+    search_policy = str(company.get("search_policy", "default")).strip().casefold()
+    if not TENANT_ID_RE.fullmatch(search_policy):
+        raise ValueError(
+            f"Tenant {company_id!r} has invalid search_policy "
+            f"{search_policy!r}"
+        )
+    if search_policy not in supported_search_policies():
+        raise ValueError(
+            f"Tenant {company_id!r} has unsupported search_policy "
+            f"{search_policy!r}"
+        )
+    planner = dict(raw.get("planner", {}))
+    planner_enabled = bool(planner.get("enabled", True))
+    planner_prompt_context = str(
+        planner.get("prompt_context", "")
+    ).strip()
+    if len(planner_prompt_context) > 4000:
+        raise ValueError(
+            f"Tenant {company_id!r} planner prompt context exceeds 4000 characters"
+        )
+    raw_query_aliases = planner.get("query_aliases", {})
+    if not isinstance(raw_query_aliases, dict):
+        raise ValueError(
+            f"Tenant {company_id!r} planner query_aliases must be an object"
+        )
+    if len(raw_query_aliases) > 500:
+        raise ValueError(
+            f"Tenant {company_id!r} planner query_aliases exceeds 500 entries"
+        )
+    planner_query_aliases = {}
+    for source, target in raw_query_aliases.items():
+        normalized_source = " ".join(str(source).casefold().split())
+        normalized_target = " ".join(str(target).casefold().split())
+        if (
+            not normalized_source
+            or not normalized_target
+            or len(normalized_source) > 100
+            or len(normalized_target) > 200
+        ):
+            raise ValueError(
+                f"Tenant {company_id!r} has an invalid planner query alias"
+            )
+        planner_query_aliases[normalized_source] = normalized_target
+
+    database = dict(raw.get("database", {}))
+    backend = str(database.get("backend", "mysql")).strip().casefold()
+    if backend not in {"mysql", "postgres"}:
+        raise ValueError(
+            f"Tenant {company_id!r} has unsupported database backend "
+            f"{backend!r}."
+        )
+    default_prefix = "POSTGRES" if backend == "postgres" else "MYSQL"
+    default_port = "5432" if backend == "postgres" else "3306"
+    timeouts = dict(database.get("timeouts", {}))
+    pool = dict(database.get("pool", {}))
+    tls = dict(database.get("tls", {}))
+    try:
+        port = int(
+            _env_value(
+                database,
+                "port_env",
+                f"{default_prefix}_PORT",
+                default=default_port,
+            )
+        )
+    except ValueError as exc:
+        raise ValueError(f"Tenant {company_id!r} has an invalid database port") from exc
+    common_database_values = dict(
+        host=_env_value(
+            database,
+            "host_env",
+            f"{default_prefix}_HOST",
+            default="localhost",
+        ),
+        port=port,
+        database=_env_value(
+            database,
+            "database_env",
+            f"{default_prefix}_DATABASE",
+        ),
+        user=_env_value(database, "user_env", f"{default_prefix}_USER"),
+        password=_env_value(
+            database,
+            "password_env",
+            f"{default_prefix}_PASSWORD",
+        ),
+        search_table=_identifier(database, "search_ready_table", "ads_search_ready"),
+        content_column=_identifier(database, "content_column", "embedding_content"),
+        bm25_column=_identifier(database, "bm25_column", "bm25_content"),
+        search_id_column=_identifier(database, "search_id_column", "id"),
+        result_table=_identifier(database, "result_table", "ads"),
+        result_id_column=_identifier(database, "result_id_column", "id"),
+        result_type_column=_identifier(database, "result_type_column", "type"),
+        connect_timeout_seconds=int(
+            timeouts.get("connect_seconds", 10)
+        ),
+        read_timeout_seconds=int(timeouts.get("read_seconds", 300)),
+        write_timeout_seconds=int(timeouts.get("write_seconds", 300)),
+        statement_timeout_ms=int(
+            timeouts.get("statement_timeout_ms", 0)
+        ),
+        pool_min_size=int(pool.get("min_size", 0)),
+        pool_max_size=int(pool.get("max_size", 4)),
+        pool_timeout_seconds=float(pool.get("timeout_seconds", 5)),
+        tls_mode=_env_value(
+            tls,
+            "mode_env",
+            f"{default_prefix}_TLS_MODE",
+            default=str(
+                tls.get(
+                    "mode",
+                    "prefer" if backend == "postgres" else "disable",
+                )
+            ),
+        )
+        .strip()
+        .casefold(),
+        tls_ca_file=_env_value(
+            tls,
+            "ca_file_env",
+            f"{default_prefix}_TLS_CA_FILE",
+        ),
+        tls_cert_file=_env_value(
+            tls,
+            "cert_file_env",
+            f"{default_prefix}_TLS_CERT_FILE",
+        ),
+        tls_key_file=_env_value(
+            tls,
+            "key_file_env",
+            f"{default_prefix}_TLS_KEY_FILE",
+        ),
+        index_namespace=_env_value(
+            database,
+            "index_namespace_env",
+            f"{default_prefix}_INDEX_NAMESPACE",
+            default=str(database.get("index_namespace", "")),
+        ).strip(),
+    )
+    mysql = (
+        PostgresRuntimeConfig(
+            **common_database_values,
+            schema=_identifier(database, "schema", "public"),
+        )
+        if backend == "postgres"
+        else MySQLRuntimeConfig(**common_database_values)
+    )
+    if not mysql.database:
+        raise ValueError(
+            f"Tenant {company_id!r} database environment variable is empty"
+        )
+    if not mysql.user:
+        raise ValueError(f"Tenant {company_id!r} database user is empty")
+
+    storage = dict(raw.get("storage", {}))
+    vector_backend = str(
+        storage.get("vector_backend", "pgvector")
+    ).strip().casefold()
+    if vector_backend != "pgvector":
+        raise ValueError(
+            f"Tenant {company_id!r} must use vector_backend 'pgvector'; "
+            f"received {vector_backend!r}."
+        )
+    pgvector_database = None
+    pgvector_table = "search_vectors"
+    pgvector_hnsw_m = 16
+    pgvector_hnsw_ef_construction = 64
+    pgvector_hnsw_ef_search = 100
+    pgvector_query_mode = "legacy"
+    pgvector_prewarm_on_startup = False
+    pgvector_prewarm_mode = "read"
+    vector_dimensions = int(storage.get("vector_dimensions", 768))
+    if vector_dimensions <= 0 or vector_dimensions > 2000:
+        raise ValueError(
+            f"Tenant {company_id!r} vector_dimensions must be between 1 and 2000"
+        )
+    pgvector = dict(storage.get("pgvector", {}))
+    use_company_database = bool(
+        pgvector.get("use_company_database", backend == "postgres")
+    )
+    if use_company_database:
+        if not isinstance(mysql, PostgresRuntimeConfig):
+            raise ValueError(
+                f"Tenant {company_id!r} pgvector use_company_database "
+                "requires a PostgreSQL company database."
+            )
+        pgvector_database = mysql
+    else:
+        vector_prefix = "PGVECTOR"
+        pgvector_database = PostgresRuntimeConfig(
+            host=_env_value(
+                pgvector,
+                "host_env",
+                f"{vector_prefix}_HOST",
+                default="localhost",
+            ),
+            port=int(
+                _env_value(
+                    pgvector,
+                    "port_env",
+                    f"{vector_prefix}_PORT",
+                    default="5432",
+                )
+            ),
+            database=_env_value(
+                pgvector,
+                "database_env",
+                f"{vector_prefix}_DATABASE",
+            ),
+            user=_env_value(
+                pgvector,
+                "user_env",
+                f"{vector_prefix}_USER",
+            ),
+            password=_env_value(
+                pgvector,
+                "password_env",
+                f"{vector_prefix}_PASSWORD",
+            ),
+            schema=_identifier(pgvector, "schema", "public"),
+        )
+    pgvector_table = _identifier(
+        pgvector,
+        "table",
+        f"{company_id}_search_vectors",
+    )
+    pgvector_hnsw = dict(pgvector.get("hnsw", {}))
+    pgvector_hnsw_m = int(pgvector_hnsw.get("m", 16))
+    pgvector_hnsw_ef_construction = int(
+        pgvector_hnsw.get("ef_construction", 64)
+    )
+    pgvector_hnsw_ef_search = int(pgvector_hnsw.get("ef_search", 100))
+    pgvector_query_mode = str(
+        pgvector.get("query_mode", "legacy")
+    ).strip().casefold()
+    pgvector_prewarm_on_startup = bool(
+        pgvector.get("prewarm_on_startup", False)
+    )
+    pgvector_prewarm_mode = str(
+        pgvector.get("prewarm_mode", "read")
+    ).strip().casefold()
+    if pgvector_hnsw_m <= 0:
+        raise ValueError(
+            f"Tenant {company_id!r} pgvector hnsw.m must be positive"
+        )
+    if pgvector_hnsw_ef_construction <= 0:
+        raise ValueError(
+            f"Tenant {company_id!r} pgvector hnsw.ef_construction "
+            "must be positive"
+        )
+    if pgvector_hnsw_ef_search <= 0:
+        raise ValueError(
+            f"Tenant {company_id!r} pgvector hnsw.ef_search must be positive"
+        )
+    if pgvector_query_mode not in {"legacy", "shadow", "optimized"}:
+        raise ValueError(
+            f"Tenant {company_id!r} pgvector query_mode must be "
+            "legacy, shadow, or optimized"
+        )
+    if pgvector_prewarm_mode not in {"buffer", "read", "prefetch"}:
+        raise ValueError(
+            f"Tenant {company_id!r} pgvector prewarm_mode must be "
+            "buffer, read, or prefetch"
+        )
+    if not pgvector_database.database or not pgvector_database.user:
+        raise ValueError(
+            f"Tenant {company_id!r} pgvector database and user must be "
+            "configured."
+        )
+    storage_config = TenantStorageConfig(
+        bm25_path=_path(
+            storage.get(
+                "bm25_path",
+                f"storage/companies/{company_id}/bm25.sqlite3",
+            )
+        ),
+        vector_backend=vector_backend,
+        pgvector_database=pgvector_database,
+        pgvector_table=pgvector_table,
+        vector_dimensions=vector_dimensions,
+        pgvector_hnsw_m=pgvector_hnsw_m,
+        pgvector_hnsw_ef_construction=pgvector_hnsw_ef_construction,
+        pgvector_hnsw_ef_search=pgvector_hnsw_ef_search,
+        pgvector_query_mode=pgvector_query_mode,
+        pgvector_prewarm_on_startup=pgvector_prewarm_on_startup,
+        pgvector_prewarm_mode=pgvector_prewarm_mode,
+    )
+
+    payload = dict(raw.get("payload", {}))
+    public_fields = tuple(
+        str(value).strip()
+        for value in payload.get("public_fields", ())
+        if str(value).strip()
+    )
+    if mysql.result_id_column not in public_fields:
+        raise ValueError(
+            f"Tenant {company_id!r} payload.public_fields must include "
+            f"result id column {mysql.result_id_column!r}."
+        )
+    field_mapping = {
+        str(key).strip(): str(value).strip()
+        for key, value in dict(payload.get("field_mapping", {})).items()
+        if str(key).strip() and str(value).strip()
+    }
+    filter_schema = {
+        str(key).strip(): str(value).strip().casefold()
+        for key, value in dict(payload.get("filter_schema", {})).items()
+        if str(key).strip() and str(value).strip()
+    }
+    allowed_filter_types = {"keyword", "number", "datetime", "boolean"}
+    invalid_filter_types = sorted(
+        {
+            value
+            for value in filter_schema.values()
+            if value not in allowed_filter_types
+        }
+    )
+    if invalid_filter_types:
+        raise ValueError(
+            f"Tenant {company_id!r} has unsupported filter types: "
+            f"{invalid_filter_types}"
+        )
+    if planner_adapter == "gainr":
+        unsupported_fields = sorted(set(filter_schema) - GAINR_FILTER_FIELDS)
+        if unsupported_fields:
+            raise ValueError(
+                f"Tenant {company_id!r} gainr planner requires canonical "
+                f"filter fields; unsupported: {unsupported_fields}"
+            )
+    request_mapping = {
+        "query": "query",
+        "cursor": "cursor",
+        "page_size": "page_size",
+    }
+    request_mapping.update(
+        {
+            str(key).strip(): str(value).strip()
+            for key, value in dict(
+                payload.get("request_mapping", {})
+            ).items()
+            if str(key).strip() and str(value).strip()
+        }
+    )
+    invalid_request_fields = sorted(
+        set(request_mapping) - {"query", "cursor", "page_size"}
+    )
+    if invalid_request_fields:
+        raise ValueError(
+            f"Tenant {company_id!r} has unsupported request mappings: "
+            f"{invalid_request_fields}"
+        )
+    if len(set(request_mapping.values())) != len(request_mapping):
+        raise ValueError(
+            f"Tenant {company_id!r} request payload fields must be unique."
+        )
+
+    rate = dict(raw.get("rate_limit", {}))
+    rate_limit = TenantRateLimit(
+        requests_per_minute=int(rate.get("requests_per_minute", 60)),
+        burst=int(rate.get("burst", 10)),
+    )
+    retrieval = dict(raw.get("retrieval", {}))
+    min_scores = retrieval.get("reranker_min_score_by_provider", {})
+    if not isinstance(min_scores, dict):
+        raise ValueError(
+            f"Tenant {company_id!r} reranker_min_score_by_provider "
+            "must be a mapping"
+        )
+    retrieval_config = TenantRetrievalConfig(
+        adaptive_vector_post_filter_metadata=bool(
+            retrieval.get(
+                "adaptive_vector_post_filter_metadata",
+                False,
+            )
+        ),
+        semantic_related_tail_enabled=bool(
+            retrieval.get("semantic_related_tail_enabled", True)
+        ),
+        semantic_related_tail_requires_explicit_category=bool(
+            retrieval.get(
+                "semantic_related_tail_requires_explicit_category",
+                False,
+            )
+        ),
+        reranker_relative_score_floor=float(
+            retrieval.get("reranker_relative_score_floor", 0.0)
+        ),
+        reranker_min_score_by_provider={
+            str(provider).strip().casefold(): float(score)
+            for provider, score in min_scores.items()
+        },
+    )
+    api = dict(raw.get("api", {}))
+    endpoint_slug = validate_tenant_id(
+        str(api.get("endpoint_slug", company_id))
+    )
+    api_key_envs = tuple(
+        str(value).strip()
+        for value in api.get("key_envs", ())
+        if str(value).strip()
+    )
+    if not api_key_envs:
+        api_key_envs = (f"{company_id.upper()}_API_KEY",)
+    compatibility = dict(raw.get("compatibility", {}))
+    compatibility_config = TenantCompatibilityConfig(
+        adapter=str(compatibility.get("adapter", "")).strip().casefold(),
+        users_table=str(
+            compatibility.get("users_table", "users")
+        ).strip(),
+        page_size=int(compatibility.get("page_size", 20)),
+        semantic_ranked_window=int(
+            compatibility.get("semantic_ranked_window", 40)
+        ),
+        suggestions_limit=int(
+            compatibility.get("suggestions_limit", 8)
+        ),
+        recent_limit=int(compatibility.get("recent_limit", 10)),
+        recent_ttl_seconds=int(
+            compatibility.get(
+                "recent_ttl_seconds",
+                60 * 60 * 24 * 90,
+            )
+        ),
+        min_fee_field=str(
+            compatibility.get("min_fee_field", "min_fee")
+        ).strip(),
+        max_fee_field=str(
+            compatibility.get("max_fee_field", "max_fee")
+        ).strip(),
+        fixed_fee_id=int(compatibility.get("fixed_fee_id", 1)),
+        negotiable_fee_id=int(
+            compatibility.get("negotiable_fee_id", 0)
+        ),
+        emit_search_meta=bool(
+            compatibility.get("emit_search_meta", True)
+        ),
+        image_path=str(compatibility.get("image_path", "")).strip(),
+    )
+
+    return TenantProfile(
+        company_id=company_id,
+        database=mysql,
+        storage=storage_config,
+        payload=TenantPayloadConfig(
+            public_fields=public_fields,
+            field_mapping=field_mapping,
+            filter_schema=filter_schema,
+            request_mapping=request_mapping,
+        ),
+        rate_limit=rate_limit,
+        planner_adapter=planner_adapter,
+        api_key_envs=api_key_envs,
+        config_path=path,
+        endpoint_slug=endpoint_slug,
+        search_policy=search_policy,
+        planner_enabled=planner_enabled,
+        planner_prompt_context=planner_prompt_context,
+        planner_query_aliases=planner_query_aliases,
+        retrieval=retrieval_config,
+        compatibility=compatibility_config,
+    )
+
+
+def discover_tenant_profiles(
+    directory: Path = DEFAULT_TENANT_CONFIG_DIR,
+) -> dict[str, TenantProfile]:
+    directory = _path(directory)
+    if not directory.exists():
+        return {}
+    profiles: dict[str, TenantProfile] = {}
+    for path in sorted(directory.glob("*.yaml")):
+        profile = load_tenant_profile(path)
+        if profile.company_id in profiles:
+            raise ValueError(f"Duplicate tenant profile: {profile.company_id}")
+        profiles[profile.company_id] = profile
+    validate_tenant_isolation(profiles.values())
+    return profiles
+
+
+def validate_tenant_isolation(profiles: Iterable[TenantProfile]) -> None:
+    pgvector_owners: dict[tuple[str, int, str, str, str], str] = {}
+    source_owners: dict[tuple[str, str, int, str, str, str], str] = {}
+    bm25_owners: dict[Path, str] = {}
+    endpoint_owners: dict[str, str] = {}
+    for profile in profiles:
+        endpoint_slug = profile.endpoint_slug or profile.company_id
+        endpoint_owner = endpoint_owners.get(endpoint_slug)
+        if endpoint_owner is not None:
+            raise ValueError(
+                f"Tenants {endpoint_owner!r} and {profile.company_id!r} "
+                f"share API endpoint slug {endpoint_slug!r}."
+            )
+        endpoint_owners[endpoint_slug] = profile.company_id
+
+        source_database = profile.database
+        source_key = (
+            "postgres"
+            if isinstance(source_database, PostgresRuntimeConfig)
+            else "mysql",
+            source_database.host.casefold(),
+            source_database.port,
+            source_database.database,
+            (
+                source_database.schema
+                if isinstance(source_database, PostgresRuntimeConfig)
+                else ""
+            ),
+            source_database.search_table,
+        )
+        source_owner = source_owners.get(source_key)
+        if source_owner is not None:
+            raise ValueError(
+                f"Tenants {source_owner!r} and {profile.company_id!r} "
+                "share a company search-data table."
+            )
+        source_owners[source_key] = profile.company_id
+
+        database = profile.storage.pgvector_database
+        if database is None:
+            raise ValueError(
+                f"Tenant {profile.company_id!r} has no pgvector database."
+            )
+        vector_key = (
+            database.host,
+            database.port,
+            database.database,
+            database.schema,
+            profile.storage.pgvector_table,
+        )
+        if vector_key in pgvector_owners:
+            raise ValueError(
+                f"Tenants {pgvector_owners[vector_key]!r} and "
+                f"{profile.company_id!r} share pgvector table "
+                f"{vector_key[-1]!r}."
+            )
+        pgvector_owners[vector_key] = profile.company_id
+
+        bm25_path = profile.storage.bm25_path.resolve()
+        if bm25_path in bm25_owners:
+            raise ValueError(
+                f"Tenants {bm25_owners[bm25_path]!r} and "
+                f"{profile.company_id!r} share BM25 path {bm25_path}."
+            )
+        bm25_owners[bm25_path] = profile.company_id
+
+
+def api_key_digest(api_key: str) -> str:
+    return hashlib.sha256(api_key.encode("utf-8")).hexdigest()
+
+
+class TenantRegistry:
+    def __init__(
+        self,
+        profiles: dict[str, TenantProfile],
+        *,
+        require_api_keys: bool = True,
+        api_keys: dict[str, Iterable[str]] | None = None,
+    ):
+        if not profiles:
+            raise ValueError("At least one tenant profile is required")
+        validate_tenant_isolation(profiles.values())
+        self._profiles = dict(profiles)
+        self._endpoint_profiles = {
+            (profile.endpoint_slug or profile.company_id): profile
+            for profile in self._profiles.values()
+        }
+        self._key_owners: dict[str, str] = {}
+        supplied = api_keys or {}
+        for company_id, profile in self._profiles.items():
+            values = [
+                value.strip()
+                for value in supplied.get(company_id, ())
+                if value and value.strip()
+            ]
+            if not values:
+                values = [
+                    value.strip()
+                    for name in profile.api_key_envs
+                    if (value := os.getenv(name, "")).strip()
+                ]
+            if require_api_keys and not values:
+                raise ValueError(
+                    f"Tenant {company_id!r} has no configured API key; set one "
+                    f"of: {', '.join(profile.api_key_envs)}"
+                )
+            for value in values:
+                digest = api_key_digest(value)
+                owner = self._key_owners.get(digest)
+                if owner is not None:
+                    raise ValueError(
+                        f"Tenants {owner!r} and {company_id!r} share an API key"
+                    )
+                self._key_owners[digest] = company_id
+
+    @property
+    def profiles(self) -> dict[str, TenantProfile]:
+        return dict(self._profiles)
+
+    def get(self, company_id: str) -> TenantProfile:
+        try:
+            return self._profiles[validate_tenant_id(company_id)]
+        except KeyError as exc:
+            raise KeyError(f"Unknown tenant {company_id!r}") from exc
+
+    def resolve_api_key(self, api_key: str) -> TenantProfile | None:
+        if not api_key:
+            return None
+        company_id = self._key_owners.get(api_key_digest(api_key))
+        return self._profiles.get(company_id) if company_id else None
+
+    def resolve_endpoint(self, endpoint_slug: str) -> TenantProfile | None:
+        try:
+            endpoint_slug = validate_tenant_id(endpoint_slug)
+        except ValueError:
+            return None
+        return self._endpoint_profiles.get(endpoint_slug)
+
+
+def load_tenant_registry(
+    directory: Path = DEFAULT_TENANT_CONFIG_DIR,
+    *,
+    require_api_keys: bool = True,
+) -> TenantRegistry:
+    return TenantRegistry(
+        discover_tenant_profiles(directory),
+        require_api_keys=require_api_keys,
+    )

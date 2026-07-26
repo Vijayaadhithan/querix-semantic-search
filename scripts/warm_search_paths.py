@@ -15,8 +15,8 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 sys.path.insert(0, str(SCRIPT_DIR))
 
-from bm25_index import tokenize_query  # noqa: E402
-from tenant_config import load_tenant_registry  # noqa: E402
+from search.bm25 import tokenize_query  # noqa: E402
+from core.tenant_config import load_tenant_registry  # noqa: E402
 from warm_hnsw import DEFAULT_QUERIES, warm_hnsw  # noqa: E402
 
 

@@ -37,7 +37,7 @@ fi
 trap cleanup_container EXIT TERM INT
 
 echo "Starting incremental ingestion for ${COMPANY_ID} at $(date --iso-8601=seconds)."
-docker compose run --rm --name "$CONTAINER_NAME" api python src/ingest.py \
+docker compose run --rm --name "$CONTAINER_NAME" api python -m cli.ingest \
   --company "$COMPANY_ID" \
   --database \
   --mysql-reconcile-deletions \

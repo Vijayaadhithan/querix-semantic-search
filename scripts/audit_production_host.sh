@@ -131,7 +131,7 @@ else
   fail "Strict production doctor failed"
 fi
 
-if docker compose exec -T api python src/ingest.py \
+if docker compose exec -T api python -m cli.ingest \
   --company "$COMPANY_ID" --list; then
   pass "Tenant vector source listing succeeded"
 else

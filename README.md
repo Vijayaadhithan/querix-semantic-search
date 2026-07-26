@@ -58,33 +58,34 @@ the fused hybrid order, marks the response degraded, and does not cache it.
 ## Repository layout
 
 ```text
-configs/tenants/        Tenant database, storage, API, and retrieval profiles
-eval/                   Query-planning and retrieval evaluation cases
-scripts/                Diagnostics, key generation, and maintenance utilities
-src/api.py              FastAPI application lifecycle and routes
-src/api_contracts.py    API schemas, cursor/session state, and process health
-src/api_service.py      Search request service, paging, usage, and monitoring
-src/api_tenants.py      Tenant engine/service lifecycle and prewarming
-src/search_engine.py    Retrieval, ranking, and end-to-end search orchestration
-src/search_engine_support.py
-                        Planning, hydration, and result/plan cache support
-src/search_ranking.py   Hosted reranking and fusion fallback behavior
-src/search_policy.py    Generic tenant search-policy contract and default
-src/gainr_search_policy.py
-                        Gainr-only planner, fusion, and reranker intent policy
-src/gainr_compat.py     Gainr compatibility API orchestration and card mapping
-src/gainr_models.py     Gainr compatibility request schemas and field contracts
-src/gainr_repository.py Gainr-specific read queries and canonical hydration
-src/query_planner.py    High-level query planning and routing
-src/query_planner_catalog.py
-                        Catalog matching, constraints, and query analysis
-src/query_planner_rules.py
-                        Planner schemas, vocabularies, and deterministic rules
-src/retrieval.py        Vector, BM25, filtering, and fusion logic
-src/pgvector_store.py   pgvector collection interface and HNSW management
-src/ingest.py           Tenant database ingestion CLI
-tests/                  Unit and contract tests
+configs/tenants/      Tenant database, storage, API, and retrieval profiles
+eval/                 Query-planning and retrieval evaluation cases
+scripts/              Diagnostics, key generation, and maintenance utilities
+src/
+  api/                FastAPI routes, contracts, services, and tenant lifecycle
+  cli/                Chat, ingestion, and evaluation entry points
+  core/               Settings, tenant configuration, and rate limiting
+  ingestion/          Document preparation and catalogue ingestion
+  observability/      Operational log capture and sanitization
+  providers/          Gemini/Groq and Ollama clients
+  search/             Planning, BM25, retrieval, ranking, and tenant policies
+  storage/            MySQL, PostgreSQL/pgvector, Redis, and usage stores
+  tenants/gainr/      Gainr compatibility contract, repository, and policy
+tests/
+  api/                API lifecycle and contract tests
+  cli/                CLI and evaluation tests
+  core/               Tenant configuration tests
+  ingestion/          Ingestion tests
+  operations/         Doctor and warm-up tests
+  providers/          External-provider client tests
+  search/             Planner, policy, retrieval, and reranker tests
+  storage/            Database, pgvector, Redis, and usage-store tests
+  tenants/gainr/      Gainr compatibility tests
 ```
+
+Run application modules from the repository root with `PYTHONPATH=src`, for
+example `PYTHONPATH=src .venv/bin/python -m api` or
+`PYTHONPATH=src .venv/bin/python -m cli.ingest --company gainr --list`.
 
 ## Documentation
 

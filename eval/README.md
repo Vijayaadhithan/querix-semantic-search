@@ -3,7 +3,7 @@
 Run the reviewed Gainr cases with:
 
 ```bash
-.venv/bin/python src/evaluate_retrieval.py \
+PYTHONPATH=src .venv/bin/python -m cli.evaluate_retrieval \
   --company gainr \
   --cases eval/retrieval_cases.json \
   --runs 3 \

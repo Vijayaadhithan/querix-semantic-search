@@ -7,8 +7,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from tenant_config import discover_tenant_profiles  # noqa: E402
-from vector_store import get_tenant_vector_collection  # noqa: E402
+from core.tenant_config import discover_tenant_profiles  # noqa: E402
+from storage.vector import get_tenant_vector_collection  # noqa: E402
 
 
 def main() -> None:

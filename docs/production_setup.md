@@ -325,7 +325,7 @@ For an existing indexed deployment, do not rebuild embeddings merely because the
 ```bash
 export COMPANY_ID=<tenant-slug>
 
-docker compose run --rm api python src/ingest.py \
+docker compose run --rm api python -m cli.ingest \
   --company "$COMPANY_ID" \
   --list
 ```

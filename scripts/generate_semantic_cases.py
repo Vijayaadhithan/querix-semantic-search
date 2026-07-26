@@ -10,14 +10,14 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from mysql_store import mysql_connection, quote_mysql_identifier  # noqa: E402
-from postgres_store import (  # noqa: E402
+from storage.mysql import mysql_connection, quote_mysql_identifier  # noqa: E402
+from storage.postgres import (  # noqa: E402
     PostgresRuntimeConfig,
     postgres_connection,
     qualified_table,
     quote_postgres_identifier,
 )
-from tenant_config import discover_tenant_profiles  # noqa: E402
+from core.tenant_config import discover_tenant_profiles  # noqa: E402
 
 
 DEFAULT_OUTPUT = ROOT / "eval" / "gainr_semantic_cases.generated.json"

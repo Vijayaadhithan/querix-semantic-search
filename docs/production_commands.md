@@ -348,7 +348,7 @@ The reranker is hosted, so there are no reranker weights to download or prefetch
 This is read-only and does not generate embeddings:
 
 ```bash
-docker compose run --rm api python src/ingest.py \
+docker compose run --rm api python -m cli.ingest \
   --company "$COMPANY_ID" \
   --database \
   --check \
@@ -367,13 +367,13 @@ embedding text changed:
 Verify vector and BM25 counts:
 
 ```bash
-docker compose run --rm api python src/ingest.py \
+docker compose run --rm api python -m cli.ingest \
   --company "$COMPANY_ID" \
   --list
 ```
 
 ```bash
-docker compose run --rm api python src/ingest.py \
+docker compose run --rm api python -m cli.ingest \
   --company "$COMPANY_ID" \
   --database \
   --mysql-reconcile-deletions \
@@ -613,13 +613,13 @@ docker compose exec -T pgvector sh -c \
   > "$BACKUP_DIR/pgvector.dump"
 tar -czf "$BACKUP_DIR/storage.tar.gz" storage
 
-docker compose run --rm api python src/ingest.py \
+docker compose run --rm api python -m cli.ingest \
   --company gainr \
   --migrate-source 'mysql:rag_ht_test.ads_search_ready' \
   --migration-batch-size 1000 \
   --yes
 
-docker compose run --rm api python src/ingest.py \
+docker compose run --rm api python -m cli.ingest \
   --company gainr \
   --bm25-only \
   --mysql-batch-size 5000
@@ -631,14 +631,14 @@ rows should be skipped; it must not classify all 500 as changed/new merely
 because production uses a different physical database name:
 
 ```bash
-docker compose run --rm api python src/ingest.py \
+docker compose run --rm api python -m cli.ingest \
   --company gainr \
   --database \
   --limit 500 \
   --mysql-batch-size 500 \
   --embed-batch-size 32
 
-docker compose run --rm api python src/ingest.py --company gainr --list
+docker compose run --rm api python -m cli.ingest --company gainr --list
 curl -fsS http://127.0.0.1:8000/api/v1/ready | jq
 
 export PRODUCTION_REPO="$(pwd)"

@@ -20,6 +20,25 @@ The service turns natural-language catalogue queries into tenant-isolated, filte
 | Redis | Stores result and plan caches shared by the API process |
 | Usage and event stores | Record tenant-safe request totals and redacted execution diagnostics |
 
+## Code boundaries
+
+Runtime code is grouped by responsibility under `src/`:
+
+- `api` owns HTTP contracts, routes, request services, and tenant-engine
+  lifecycle.
+- `core` owns process settings, tenant profiles, and admission controls.
+- `search` owns planning, BM25, retrieval, ranking, and the generic policy
+  contract.
+- `storage` owns database, pgvector, Redis, and usage persistence adapters.
+- `providers` owns external model-provider clients.
+- `ingestion` owns document preparation and index synchronization.
+- `tenants/<company>` owns compatibility contracts and company-specific search
+  behavior. Generic search modules do not import company vocabulary directly.
+- `cli` owns executable chat, ingestion, and evaluation entry points.
+
+The `tests/` tree mirrors these boundaries so ownership and regression coverage
+remain easy to locate.
+
 ## Request lifecycle
 
 1. The API resolves the tenant from the endpoint and API key.

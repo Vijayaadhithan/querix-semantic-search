@@ -37,7 +37,7 @@ PGVECTOR_PORT=15432
 ```bash
 docker compose up -d pgvector redis
 ollama list
-.venv/bin/python src/run_api.py
+PYTHONPATH=src .venv/bin/python -m api
 ```
 
 ### API in Docker on macOS
@@ -68,7 +68,7 @@ Stop the Docker API before returning to the direct Python API:
 
 ```bash
 docker compose stop api
-.venv/bin/python src/run_api.py
+PYTHONPATH=src .venv/bin/python -m api
 ```
 
 Neither mode rebuilds embeddings. Run `ollama pull embeddinggemma:latest`
@@ -113,7 +113,7 @@ The query-routing and semantic internals are summarized in
 This command is read-only and does not generate embeddings:
 
 ```bash
-.venv/bin/python src/ingest.py \
+PYTHONPATH=src .venv/bin/python -m cli.ingest \
   --company "$COMPANY_ID" \
   --database \
   --check \
@@ -125,7 +125,7 @@ This command is read-only and does not generate embeddings:
 Incremental ingestion safely skips unchanged vectors:
 
 ```bash
-.venv/bin/python src/ingest.py \
+PYTHONPATH=src .venv/bin/python -m cli.ingest \
   --company "$COMPANY_ID" \
   --database
 ```
@@ -133,7 +133,7 @@ Incremental ingestion safely skips unchanged vectors:
 After a complete source scan, reconcile source deletions:
 
 ```bash
-.venv/bin/python src/ingest.py \
+PYTHONPATH=src .venv/bin/python -m cli.ingest \
   --company "$COMPANY_ID" \
   --database \
   --mysql-reconcile-deletions
@@ -146,7 +146,7 @@ remain valid.
 ## Verify
 
 ```bash
-.venv/bin/python src/ingest.py --company "$COMPANY_ID" --list
+PYTHONPATH=src .venv/bin/python -m cli.ingest --company "$COMPANY_ID" --list
 .venv/bin/python scripts/doctor.py --company "$COMPANY_ID" --strict
 .venv/bin/pytest -q
 ```
@@ -154,7 +154,7 @@ remain valid.
 Run a one-shot search:
 
 ```bash
-.venv/bin/python src/chat.py \
+PYTHONPATH=src .venv/bin/python -m cli.chat \
   --company "$COMPANY_ID" \
   --query "example product query" \
   --limit 10
@@ -163,8 +163,8 @@ Run a one-shot search:
 ## Evaluate changes
 
 ```bash
-.venv/bin/python src/evaluate_queries.py --company "$COMPANY_ID"
-.venv/bin/python src/evaluate_retrieval.py --company "$COMPANY_ID"
+PYTHONPATH=src .venv/bin/python -m cli.evaluate_queries --company "$COMPANY_ID"
+PYTHONPATH=src .venv/bin/python -m cli.evaluate_retrieval --company "$COMPANY_ID"
 ```
 
 Use a reviewed tenant-specific case file when changing embeddings, candidate windows, reranking models, or ranking policy. Compare pass rate, mean reciprocal rank, wall time, and peak memory before adopting the change.

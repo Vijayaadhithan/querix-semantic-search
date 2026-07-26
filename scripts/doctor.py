@@ -9,13 +9,13 @@ import requests
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from mysql_store import mysql_connection, quote_mysql_identifier
-from postgres_store import (
+from storage.mysql import mysql_connection, quote_mysql_identifier
+from storage.postgres import (
     PostgresRuntimeConfig,
     postgres_connection,
     qualified_table,
 )
-from settings import (
+from core.settings import (
     API_ADMIN_KEY,
     API_AUTH_ENABLED,
     API_CORS_ORIGINS,
@@ -32,8 +32,8 @@ from settings import (
     REDIS_URL,
     VOYAGE_API_KEY,
 )
-from tenant_config import discover_tenant_profiles
-from vector_store import get_tenant_vector_collection
+from core.tenant_config import discover_tenant_profiles
+from storage.vector import get_tenant_vector_collection
 
 
 def report(name: str, ok: bool, detail: str) -> bool:
@@ -154,7 +154,7 @@ def check_bm25(profile=None) -> bool:
         return report(
             "BM25 index",
             False,
-            "missing; run src/ingest.py --company <slug> --database",
+            "missing; run python -m cli.ingest --company <slug> --database",
         )
     try:
         uri = f"file:{path}?mode=ro"

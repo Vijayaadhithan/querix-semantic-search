@@ -12,9 +12,9 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from ollama_client import embed_texts  # noqa: E402
-from tenant_config import load_tenant_registry  # noqa: E402
-from vector_store import get_tenant_vector_collection  # noqa: E402
+from providers.ollama import embed_texts  # noqa: E402
+from core.tenant_config import load_tenant_registry  # noqa: E402
+from storage.vector import get_tenant_vector_collection  # noqa: E402
 
 
 DEFAULT_QUERIES = (

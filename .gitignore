@@ -13,8 +13,9 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 
-# Generated local data
-storage/
+# Generated local data at the repository root. Source/test packages named
+# ``storage`` remain tracked.
+/storage/
 
 # Private/source documents (keep the directory itself)
 data/raw_docs/*
