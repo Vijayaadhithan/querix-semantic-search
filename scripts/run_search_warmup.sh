@@ -3,6 +3,7 @@ set -Eeuo pipefail
 
 PROJECT_DIR="${PROJECT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 COMPANY_ID="${COMPANY_ID:-gainr}"
+WARMUP_CANDIDATES="${WARMUP_CANDIDATES:-800}"
 LOCK_FILE="${LOCK_FILE:-/tmp/semantic-search-warmup-${COMPANY_ID}.lock}"
 INGEST_LOCK_FILE="${INGEST_LOCK_FILE:-/tmp/semantic-search-ingest-${COMPANY_ID}.lock}"
 
@@ -28,4 +29,5 @@ fi
 
 echo "Starting search-path warm-up for ${COMPANY_ID} at $(date --iso-8601=seconds)."
 docker compose exec -T api python scripts/warm_search_paths.py \
-  --company "$COMPANY_ID"
+  --company "$COMPANY_ID" \
+  --candidates "$WARMUP_CANDIDATES"

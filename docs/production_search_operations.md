@@ -126,7 +126,10 @@ the host filesystem cache; `prewarm_mode: buffer` targets PostgreSQL shared
 buffers and requires a buffer pool larger than the HNSW index. Startup prewarm
 is fail-open and logs the index, mode, blocks, bytes, and duration; it does not
 alter ranking behavior. The hourly local-path warm-up repeats the configured
-index prewarm before its representative HNSW queries.
+index prewarm before its representative HNSW queries. The scheduled Gainr
+warm-up uses an 800-row window so it exercises the same heap depth as the
+broad-filter post-filter path; override it with `WARMUP_CANDIDATES` only after
+latency and relevance testing.
 
 `vector_eligible=10001 vector_eligible_capped=True` means the bounded
 eligibility probe found more than the 10,000-row exact-ranking threshold; it
