@@ -1,6 +1,8 @@
 company:
   id: gainr
   planner_adapter: gainr
+  # Tenant-owned planning and ranking hooks. Generic tenants use "default".
+  search_policy: gainr
 
 planner:
   enabled: true

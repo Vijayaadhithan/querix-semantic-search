@@ -13,6 +13,7 @@ import yaml
 from mysql_store import MySQLRuntimeConfig
 from postgres_store import PostgresRuntimeConfig
 from settings import PROJECT_ROOT
+from tenant_search_policies import supported_search_policies
 
 
 TENANT_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,62}$")
@@ -155,6 +156,7 @@ class TenantProfile:
     api_key_envs: tuple[str, ...]
     config_path: Path
     endpoint_slug: str = ""
+    search_policy: str = "default"
     planner_enabled: bool = True
     planner_prompt_context: str = ""
     planner_query_aliases: dict[str, str] = field(default_factory=dict)
@@ -230,6 +232,17 @@ def load_tenant_profile(path: Path) -> TenantProfile:
     planner_adapter = str(company.get("planner_adapter", "gainr")).strip()
     if not planner_adapter:
         raise ValueError(f"Tenant {company_id!r} must configure planner_adapter")
+    search_policy = str(company.get("search_policy", "default")).strip().casefold()
+    if not TENANT_ID_RE.fullmatch(search_policy):
+        raise ValueError(
+            f"Tenant {company_id!r} has invalid search_policy "
+            f"{search_policy!r}"
+        )
+    if search_policy not in supported_search_policies():
+        raise ValueError(
+            f"Tenant {company_id!r} has unsupported search_policy "
+            f"{search_policy!r}"
+        )
     planner = dict(raw.get("planner", {}))
     planner_enabled = bool(planner.get("enabled", True))
     planner_prompt_context = str(
@@ -673,6 +686,7 @@ def load_tenant_profile(path: Path) -> TenantProfile:
         api_key_envs=api_key_envs,
         config_path=path,
         endpoint_slug=endpoint_slug,
+        search_policy=search_policy,
         planner_enabled=planner_enabled,
         planner_prompt_context=planner_prompt_context,
         planner_query_aliases=planner_query_aliases,

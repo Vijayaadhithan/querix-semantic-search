@@ -3,6 +3,7 @@ company:
   # filename exactly.
   id: acme
   planner_adapter: gainr
+  search_policy: default
 
 planner:
   # Disable only the hosted LLM planner; deterministic filters and semantic

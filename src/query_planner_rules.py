@@ -1,0 +1,432 @@
+import re
+
+QUERY_FILTER_FIELDS = {
+    "main_category": "main_category_name",
+    "subcategory": "subcategory_name",
+    "state": "state_name",
+    "city": "city_name",
+    "locality": "locality_name",
+    "rental_duration": "rental_duration",
+}
+QUERY_FILTER_KEYS = (*QUERY_FILTER_FIELDS, "min_rental_fee", "max_rental_fee")
+
+QUERY_FILTER_ALIASES = {
+    "state": {
+        "orissa": "odisha",
+    },
+    "city": {
+        "bangalore": "bengaluru",
+        "bangaluru": "bengaluru",
+        "bombay": "mumbai",
+        "calcutta": "kolkata",
+        "cochin": "kochi",
+        "madras": "chennai",
+        "mysore": "mysuru",
+        "poona": "pune",
+        "trivandrum": "thiruvananthapuram",
+        "baroda": "vadodara",
+        "prayagraj": "allahabad",
+        "mangaluru": "mangalore",
+        "gurugram": "gurgaon",
+    },
+}
+
+# Small, high-confidence phrase normalizations protect retrieval from a model
+# treating romanized Indian-language words as similarly spelled English product
+# names. Keep these replacements narrow: the LLM planner remains responsible for
+# general multilingual interpretation, while confirmed marketplace phrases can be
+# added here without changing the public request or response contract.
+TRANSLITERATED_QUERY_REWRITES = (
+    (
+        re.compile(
+            r"(?<!\w)ve{1,2}t{1,2}u\s+ve(?:lai|la)\s*kaa?ri(?!\w)",
+            re.IGNORECASE,
+        ),
+        "house maid domestic worker",
+    ),
+    (
+        re.compile(
+            r"(?<!\w)(?:ghar\s+k[ai]\s+)?kaam\s+wali\s+bai(?!\w)",
+            re.IGNORECASE,
+        ),
+        "house maid domestic worker",
+    ),
+    (
+        re.compile(
+            r"(?<!\w)(?:kalyanathuku|kalyanathukku|"
+            r"kalyaanathuku|kalyaanathukku)(?!\w)",
+            re.IGNORECASE,
+        ),
+        "for wedding",
+    ),
+)
+FUZZY_MATCH_THRESHOLDS = {
+    "main_category": 0.90,
+    "subcategory": 0.90,
+    "state": 0.90,
+    "city": 0.88,
+    "locality": 0.92,
+}
+LOCATION_PREPOSITIONS = {"in", "near", "at", "around"}
+LOCATION_STOP_WORDS = {
+    "for",
+    "per",
+    "under",
+    "below",
+    "above",
+    "over",
+    "within",
+    "between",
+    "with",
+    "by",
+    "hourly",
+    "daily",
+    "weekly",
+    "monthly",
+}
+GENERIC_LOCATION_VALUES = {
+    "area",
+    "city",
+    "locality",
+    "location",
+    "town",
+    "village",
+}
+GENERIC_CATEGORY_HINT_TOKENS = {
+    "equipment",
+    "hire",
+    "item",
+    "off",
+    "product",
+    "rent",
+    "rental",
+    "service",
+    "thing",
+    "vehicle",
+}
+CATEGORY_ATTRIBUTE_PREFIXES = {
+    "beige",
+    "black",
+    "blue",
+    "brown",
+    "electric",
+    "gold",
+    "gray",
+    "green",
+    "grey",
+    "orange",
+    "pink",
+    "portable",
+    "purple",
+    "red",
+    "silver",
+    "white",
+    "yellow",
+}
+FAST_PATH_FILLER_TOKENS = {
+    "a",
+    "ad",
+    "ads",
+    "an",
+    "any",
+    "available",
+    "by",
+    "find",
+    "for",
+    "from",
+    "get",
+    "give",
+    "hire",
+    "i",
+    "in",
+    "item",
+    "items",
+    "looking",
+    "me",
+    "my",
+    "near",
+    "need",
+    "of",
+    "product",
+    "products",
+    "rent",
+    "rental",
+    "rentals",
+    "required",
+    "require",
+    "search",
+    "searching",
+    "show",
+    "some",
+    "the",
+    "to",
+    "want",
+}
+FAST_PATH_WANTED_TOKENS = {
+    "customers",
+    "people",
+    "person",
+    "persons",
+    "renters",
+    "request",
+    "someone",
+    "wanted",
+    "who",
+}
+DIRECT_SEMANTIC_MAX_TOKENS = 8
+DIRECT_SEMANTIC_BLOCK_TOKENS = {
+    "above",
+    "affordable",
+    "around",
+    "away",
+    "below",
+    "best",
+    "budget",
+    "can",
+    "chahiye",
+    "cheap",
+    "cheapest",
+    "clearly",
+    "comfortable",
+    "comfort",
+    "could",
+    "distance",
+    "far",
+    "find",
+    "for",
+    "good",
+    "how",
+    "ideal",
+    "in",
+    "looking",
+    "need",
+    "near",
+    "people",
+    "per",
+    "person",
+    "recommend",
+    "recreational",
+    "reliable",
+    "request",
+    "rough",
+    "safe",
+    "safety",
+    "search",
+    "should",
+    "show",
+    "someone",
+    "something",
+    "suitable",
+    "terrain",
+    "thevai",
+    "to",
+    "under",
+    "venam",
+    "venda",
+    "venum",
+    "wanted",
+    "what",
+    "when",
+    "where",
+    "which",
+    "who",
+    "why",
+    "within",
+    "would",
+}
+DIRECT_SEMANTIC_COMPLEX_PATTERNS = (
+    re.compile(r"[?!]"),
+    re.compile(r"\b(?:anything|anyone|somebody)\b", re.IGNORECASE),
+    re.compile(
+        r"\b(?:use|using|suitable)\s+(?:for|to)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:long[\s-]+distance|road[\s-]+trip|off[\s-]?road)\b",
+        re.IGNORECASE,
+    ),
+)
+FAST_PATH_PRICE_TOKENS = {
+    "above",
+    "and",
+    "below",
+    "between",
+    "budget",
+    "inr",
+    "less",
+    "max",
+    "maximum",
+    "min",
+    "minimum",
+    "more",
+    "not",
+    "over",
+    "price",
+    "range",
+    "rs",
+    "than",
+    "under",
+    "up",
+    "withing",
+    "within",
+}
+FAST_PATH_DURATION_TOKENS = {
+    "1",
+    "a",
+    "an",
+    "daily",
+    "day",
+    "hour",
+    "hourly",
+    "month",
+    "monthly",
+    "one",
+    "per",
+    "ride",
+    "week",
+    "weekly",
+}
+FAST_PATH_SORT_TOKENS = {
+    "asc",
+    "ascending",
+    "affordable",
+    "budget",
+    "cheap",
+    "cheapest",
+    "cost",
+    "costs",
+    "desc",
+    "descending",
+    "expensive",
+    "fee",
+    "fees",
+    "first",
+    "friendly",
+    "high",
+    "highest",
+    "least",
+    "low",
+    "lowest",
+    "most",
+    "order",
+    "ordered",
+    "price",
+    "prices",
+    "rate",
+    "rates",
+    "sort",
+    "sorted",
+}
+OFFER_AD_TYPE = "1"
+WANTED_AD_TYPE = "2"
+DURATION_PATTERNS = (
+    (
+        "Per Hour",
+        r"\b(?:hourly|per\s+hour|by\s+the\s+hour|"
+        r"for\s+(?:(?:an|one|1)\s+)?hour)\b",
+    ),
+    (
+        "Per Day",
+        r"\b(?:daily|per\s+day|by\s+the\s+day|"
+        r"for\s+(?:(?:a|one|1)\s+)?day)\b",
+    ),
+    (
+        "Per Week",
+        r"\b(?:weekly|per\s+week|by\s+the\s+week|"
+        r"for\s+(?:(?:a|one|1)\s+)?week)\b",
+    ),
+    (
+        "Per Month",
+        r"\b(?:monthly|per\s+month|by\s+the\s+month|"
+        r"for\s+(?:(?:a|one|1)\s+)?month)\b",
+    ),
+    (
+        "Per Ride",
+        r"\b(?:per\s+ride|by\s+the\s+ride|for\s+(?:a|one|1)\s+ride)\b",
+    ),
+)
+QUERY_PLAN_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "semantic_query": {"type": "string"},
+        "keyword_query": {"type": "string"},
+        "target_ad_type": {
+            "type": "string",
+            "enum": ["offer", "wanted"],
+            "description": (
+                "Use offer when the searcher wants to rent, buy, or hire something. "
+                "Use wanted only when they explicitly ask to find request/wanted ads "
+                "posted by other people."
+            ),
+        },
+        "filters": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "main_category": {
+                    "type": ["string", "null"],
+                    "description": (
+                        "Explicit broad department, such as Accommodation & Spaces "
+                        "or Automobiles; never put a specific product type here."
+                    ),
+                },
+                "subcategory": {
+                    "type": ["string", "null"],
+                    "description": (
+                        "Explicit specific indexed listing type, such as Mansion, Car, "
+                        "Bike, or Laptop."
+                    ),
+                },
+                "state": {
+                    "type": ["string", "null"],
+                    "description": "Explicit state location.",
+                },
+                "city": {
+                    "type": ["string", "null"],
+                    "description": "Explicit city location.",
+                },
+                "locality": {
+                    "type": ["string", "null"],
+                    "description": "Explicit neighborhood or locality.",
+                },
+                "rental_duration": {
+                    "type": ["string", "null"],
+                    "description": (
+                        "Explicit rental period. Allowed values are Per Hour, Per Day, "
+                        "Per Week, Per Month, and Per Ride."
+                    ),
+                },
+                "min_rental_fee": {"type": ["number", "null"]},
+                "max_rental_fee": {"type": ["number", "null"]},
+            },
+            "required": list(QUERY_FILTER_KEYS),
+        },
+    },
+    "required": ["semantic_query", "keyword_query", "target_ad_type", "filters"],
+}
+
+__all__ = (
+    "CATEGORY_ATTRIBUTE_PREFIXES",
+    "DIRECT_SEMANTIC_BLOCK_TOKENS",
+    "DIRECT_SEMANTIC_COMPLEX_PATTERNS",
+    "DIRECT_SEMANTIC_MAX_TOKENS",
+    "DURATION_PATTERNS",
+    "FAST_PATH_DURATION_TOKENS",
+    "FAST_PATH_FILLER_TOKENS",
+    "FAST_PATH_PRICE_TOKENS",
+    "FAST_PATH_SORT_TOKENS",
+    "FAST_PATH_WANTED_TOKENS",
+    "FUZZY_MATCH_THRESHOLDS",
+    "GENERIC_CATEGORY_HINT_TOKENS",
+    "GENERIC_LOCATION_VALUES",
+    "LOCATION_PREPOSITIONS",
+    "LOCATION_STOP_WORDS",
+    "OFFER_AD_TYPE",
+    "QUERY_FILTER_ALIASES",
+    "QUERY_FILTER_FIELDS",
+    "QUERY_FILTER_KEYS",
+    "QUERY_PLAN_SCHEMA",
+    "TRANSLITERATED_QUERY_REWRITES",
+    "WANTED_AD_TYPE",
+)

@@ -6,7 +6,8 @@ A tenant-isolated semantic search service for product and classified catalogues.
 
 - PostgreSQL/pgvector HNSW retrieval with one table per tenant.
 - SQLite-backed BM25 lexical retrieval.
-- Hybrid candidate fusion and a failover chain of hosted rerankers.
+- Hybrid candidate fusion and a credential-aware failover chain of hosted
+  Voyage and OpenRouter rerankers.
 - Structured category, location, price, duration, and listing-type filters.
 - Tenant-scoped API keys, rate limits, caches, indexes, and database configuration.
 - Cursor-based search pagination and monthly usage reporting.
@@ -17,7 +18,10 @@ A tenant-isolated semantic search service for product and classified catalogues.
 - Real serving-path readiness, bounded overload admission, rotated container
   logs, and a guarded daily incremental-ingestion timer.
 
-The production vector backend is pgvector only. Chroma is not a runtime or ingestion dependency.
+The runtime and ingestion vector backend is PostgreSQL/pgvector only. Tenant
+configuration still carries a `storage.vector_backend` discriminator, but
+startup accepts only `pgvector`; it is not a pluggable-backend switch. Chroma is
+not installed, opened, migrated, or used as a fallback.
 
 ## Search flow
 
@@ -31,7 +35,7 @@ request
         -> tenant-aware query plan and query embedding
         -> pgvector HNSW + BM25 candidate retrieval
         -> reciprocal-rank fusion and intent shaping
-        -> hosted reranking
+        -> configured hosted reranker chain
   -> canonical database hydration
   -> pagination, diagnostics, and cache
 ```
@@ -44,10 +48,12 @@ aliases remain soft semantic evidence; they never become fuzzy hard filters.
 The semantic path uses a shared planner prompt plus tenant-specific context and
 aliases, Ollama `embeddinggemma:latest`, pgvector HNSW, persistent BM25,
 reciprocal-rank fusion, intent shaping, and the configured hosted-reranker
-failover chain. Explicit client filters remain authoritative. If one retrieval
-path or a reranker is unavailable, the API uses the remaining safe result path
-and reports degraded diagnostics. A request fails only when no serving path
-remains.
+failover chain. Supported chain entries are Voyage 2.5, Voyage 2.5 Lite, and
+OpenRouter Nemotron; entries without matching credentials are skipped. There is
+no local reranker model or local reranker fallback. Explicit client filters
+remain authoritative. If vector or BM25 retrieval is unavailable, the other
+retrieval path can continue. If every hosted reranker fails, the service keeps
+the fused hybrid order, marks the response degraded, and does not cache it.
 
 ## Repository layout
 
@@ -55,8 +61,25 @@ remains.
 configs/tenants/        Tenant database, storage, API, and retrieval profiles
 eval/                   Query-planning and retrieval evaluation cases
 scripts/                Diagnostics, key generation, and maintenance utilities
-src/api.py              FastAPI routes and tenant service pool
-src/search_engine.py    Search orchestration, ranking, cache, and pagination state
+src/api.py              FastAPI application lifecycle and routes
+src/api_contracts.py    API schemas, cursor/session state, and process health
+src/api_service.py      Search request service, paging, usage, and monitoring
+src/api_tenants.py      Tenant engine/service lifecycle and prewarming
+src/search_engine.py    Retrieval, ranking, and end-to-end search orchestration
+src/search_engine_support.py
+                        Planning, hydration, and result/plan cache support
+src/search_ranking.py   Hosted reranking and fusion fallback behavior
+src/search_policy.py    Generic tenant search-policy contract and default
+src/gainr_search_policy.py
+                        Gainr-only planner, fusion, and reranker intent policy
+src/gainr_compat.py     Gainr compatibility API orchestration and card mapping
+src/gainr_models.py     Gainr compatibility request schemas and field contracts
+src/gainr_repository.py Gainr-specific read queries and canonical hydration
+src/query_planner.py    High-level query planning and routing
+src/query_planner_catalog.py
+                        Catalog matching, constraints, and query analysis
+src/query_planner_rules.py
+                        Planner schemas, vocabularies, and deterministic rules
 src/retrieval.py        Vector, BM25, filtering, and fusion logic
 src/pgvector_store.py   pgvector collection interface and HNSW management
 src/ingest.py           Tenant database ingestion CLI
@@ -114,13 +137,14 @@ Keep non-secret defaults in `.env` and tenant YAML files. Keep passwords, API ke
 
 Each tenant profile must define a unique endpoint slug, company search-data
 table, BM25 path, and pgvector table. Startup validation rejects shared tenant
-resources.
+resources. Tenant-specific ranking or interpretation belongs behind the
+`company.search_policy` hook; `default` performs no domain-specific rewriting.
 
 Important reranker controls:
 
 | Variable | Purpose |
 |---|---|
-| `RERANK_PROVIDER_ORDER` | Ordered hosted-provider failover chain |
+| `RERANK_PROVIDER_ORDER` | Ordered hosted-provider chain; providers without credentials are skipped |
 | `RERANK_CANDIDATE_K` | Number of fused candidates sent to reranking |
 | `PRIMARY_RANKED_K` | Ranked window retained for paging |
 | `HYBRID_CANDIDATE_K` | Candidate window produced by hybrid retrieval |

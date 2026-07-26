@@ -126,6 +126,7 @@ def test_tenant_profiles_resolve_separate_storage_and_api_keys(
     assert profiles["alpha"].storage.pgvector_prewarm_mode == "buffer"
     assert profiles["alpha"].storage.bm25_path != profiles["beta"].storage.bm25_path
     assert profiles["alpha"].endpoint_slug == "alpha"
+    assert profiles["alpha"].search_policy == "default"
     assert profiles["alpha"].payload.request_mapping["query"] == "query"
     assert profiles["alpha"].database.connect_timeout_seconds == 7
     assert profiles["alpha"].database.read_timeout_seconds == 31
@@ -169,6 +170,22 @@ def test_tenant_profile_rejects_unknown_pgvector_prewarm_mode(
     )
 
     with pytest.raises(ValueError, match="prewarm_mode"):
+        discover_tenant_profiles(tmp_path)
+
+
+def test_tenant_profile_rejects_unknown_search_policy(tmp_path, monkeypatch):
+    write_profile(tmp_path, "alpha")
+    set_database_environment(monkeypatch, "alpha")
+    profile_path = tmp_path / "alpha.yaml"
+    profile_path.write_text(
+        profile_path.read_text(encoding="utf-8").replace(
+            "planner_adapter: gainr",
+            "planner_adapter: gainr\n  search_policy: unknown",
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="unsupported search_policy"):
         discover_tenant_profiles(tmp_path)
 
 

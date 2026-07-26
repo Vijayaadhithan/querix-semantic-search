@@ -8,7 +8,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 import search_engine
 import query_planner
+import query_planner_catalog
 from bm25_index import PersistentBM25Index
+from gainr_search_policy import GainrSearchPolicy, contains_phrase
 from query_planner import (
     QueryFilterCatalog,
     deterministic_filter_query_plan,
@@ -980,13 +982,17 @@ def test_semantic_planner_reuses_exact_query_analysis_between_passes(
         direct_semantic_fast_path=False,
     )
     calls = []
-    original = query_planner.find_catalog_value
+    original = query_planner_catalog.find_catalog_value
 
     def counted(*args, **kwargs):
         calls.append(args[0])
         return original(*args, **kwargs)
 
-    monkeypatch.setattr(query_planner, "find_catalog_value", counted)
+    monkeypatch.setattr(
+        query_planner_catalog,
+        "find_catalog_value",
+        counted,
+    )
 
     result = engine.plan("red bike")
 
@@ -1434,6 +1440,7 @@ def test_small_rerank_window_preserves_deep_gainr_recall(
         collection=FakeCollection(),
         bm25_index=index,
         company_id="gainr",
+        search_policy=GainrSearchPolicy(),
     )
     captured = {}
 
@@ -1537,10 +1544,9 @@ def test_gainr_vehicle_travel_intent_demotes_vehicle_services():
         },
     ]
 
-    adjusted = search_engine._apply_gainr_domain_intent_adjustments(
+    adjusted = GainrSearchPolicy().adjust_candidates(
         query_plan,
         candidates,
-        "gainr",
     )
 
     assert [candidate["id"] for candidate in adjusted] == [
@@ -1551,9 +1557,9 @@ def test_gainr_vehicle_travel_intent_demotes_vehicle_services():
 
 
 def test_gainr_vehicle_phrases_require_word_boundaries():
-    assert search_engine._contains_phrase("car for rent", {"car"})
-    assert not search_engine._contains_phrase("carpet cleaning", {"car"})
-    assert not search_engine._contains_phrase("advanced service", {"van"})
+    assert contains_phrase("car for rent", {"car"})
+    assert not contains_phrase("carpet cleaning", {"car"})
+    assert not contains_phrase("advanced service", {"van"})
 
 
 def test_gainr_vehicle_service_query_is_not_demoted():
@@ -1576,10 +1582,9 @@ def test_gainr_vehicle_service_query_is_not_demoted():
         },
     ]
 
-    adjusted = search_engine._apply_gainr_domain_intent_adjustments(
+    adjusted = GainrSearchPolicy().adjust_candidates(
         query_plan,
         candidates,
-        "gainr",
     )
 
     assert adjusted == candidates
@@ -1606,6 +1611,7 @@ def test_gainr_vehicle_intent_context_is_passed_to_reranker(tmp_path):
         bm25_index=index,
         ranker=ranker,
         company_id="gainr",
+        search_policy=GainrSearchPolicy(),
     )
     query_plan = {
         "semantic_query": "vehicle for long distance with comfort and safety",
@@ -1627,7 +1633,7 @@ def test_gainr_vehicle_intent_context_is_passed_to_reranker(tmp_path):
         top_k=1,
     )
 
-    assert "Gainr domain intent" in ranker.queries[0]
+    assert "Tenant domain intent" in ranker.queries[0]
     assert "generic safety officers" in ranker.queries[0]
     assert "Demote services about vehicles" in ranker.queries[0]
     index.close()

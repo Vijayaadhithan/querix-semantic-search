@@ -157,6 +157,7 @@ Tenant query behavior belongs in `configs/tenants/<company>.yaml`:
 company:
   id: acme
   planner_adapter: gainr
+  search_policy: default
 
 planner:
   enabled: true
@@ -172,6 +173,8 @@ The planner adapter supplies the common prompt and canonical filter schema.
 tenant's spelling, colloquial, or transliterated language as semantic evidence
 only; it never creates a fuzzy hard category filter. Alias configuration is
 part of the plan-cache fingerprint, and Redis keys are tenant-prefixed.
+`search_policy` selects optional tenant-owned planning and ranking hooks;
+`default` performs no domain-specific rewrites or score adjustments.
 
 Use the existing `gainr` adapter only when a new tenant shares its canonical
 marketplace meanings. A company with different filters, listing semantics, or

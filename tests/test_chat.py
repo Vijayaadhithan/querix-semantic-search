@@ -7,6 +7,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from bm25_index import PersistentBM25Index
+from gainr_search_policy import GainrSearchPolicy
 from mysql_store import fetch_products_by_ids
 from query_planner import (
     enrich_query_plan,
@@ -328,7 +329,12 @@ def test_enrich_query_plan_treats_safety_as_vehicle_quality():
         "_locality_location": {},
     }
 
-    enriched = enrich_query_plan(query, plan, value_index)
+    enriched = enrich_query_plan(
+        query,
+        plan,
+        value_index,
+        search_policy=GainrSearchPolicy(),
+    )
 
     assert "safe long-distance travel" in enriched["semantic_query"]
     assert "safety" not in enriched["keyword_query"].casefold()
@@ -689,6 +695,7 @@ def test_unique_keyword_concept_becomes_soft_subcategory_hint():
         "A vehicle for recreational driving on rough terrain.",
         plan,
         value_index,
+        search_policy=GainrSearchPolicy(),
     )
 
     assert enriched["filters"]["subcategory"] is None
@@ -782,6 +789,7 @@ def test_rough_terrain_query_gets_deterministic_atv_expansion():
         "A vehicle for recreational driving on rough terrain.",
         plan,
         value_index,
+        search_policy=GainrSearchPolicy(),
     )
 
     assert "ATV" in enriched["keyword_query"]

@@ -14,6 +14,7 @@ The service turns natural-language catalogue queries into tenant-isolated, filte
 | PostgreSQL/pgvector | Stores tenant vectors, retrieval text, and filter metadata; provides HNSW ANN search |
 | Persistent BM25 | Provides lexical and exact-term recall |
 | Fusion layer | Combines vector and BM25 ranks using reciprocal-rank fusion |
+| Tenant search policy | Optionally applies tenant-owned planner rewrites, soft candidate adjustments, and reranker context |
 | Hosted reranker chain | Scores the strongest candidates and fails over between configured APIs |
 | Canonical database | Supplies current public product fields and visibility state |
 | Redis | Stores result and plan caches shared by the API process |
@@ -32,7 +33,8 @@ The service turns natural-language catalogue queries into tenant-isolated, filte
 5. Ollama creates the query embedding; pgvector and standalone BM25 retrieve
    independent candidate windows.
 6. Reciprocal-rank fusion and intent shaping create a provider-independent
-   fallback order.
+   fallback order. The selected tenant search policy may adjust this deeper
+   fused pool before the bounded reranker window is selected.
 7. The hosted reranker scores the bounded candidate set.
 8. Ranking policy demotes or removes low-confidence and wrong-intent results.
 9. IDs are hydrated from the canonical result table.
@@ -52,6 +54,13 @@ The planner's base system prompt is common to all tenants. Each tenant may add
 `planner.prompt_context` and `planner.query_aliases` in its YAML profile. Alias
 configuration is included in the plan-cache fingerprint, and plan/result cache
 keys are tenant-prefixed, so language guidance cannot leak across companies.
+
+Marketplace-specific interpretation is not selected from `company_id` inside
+the planner or engine. `company.search_policy` is resolved while the tenant
+engine is built. The default policy is identity-only; a tenant policy may
+rewrite semantic/BM25 queries, supply soft category hints, adjust fused
+candidates, and add bounded reranker context. The policy cache key is part of
+the planner fingerprint.
 
 ## Ranking and failure behavior
 

@@ -15,8 +15,8 @@ from postgres_store import (
 )
 
 
-# These are the categorical fields accepted by the Gainr planner and explicit
-# API compatibility layer. B-tree expression indexes preserve the existing
+# These are the categorical fields accepted by the shared planner and current
+# compatibility adapters. B-tree expression indexes preserve the existing
 # text-comparison semantics for both string and numeric JSON values.
 FILTER_INDEX_KEYS = (
     "main_category_name",
