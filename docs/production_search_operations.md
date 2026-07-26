@@ -121,9 +121,19 @@ latency, while an incorrect bypass can cost relevance. Set
 `QUERY_DIRECT_SEMANTIC_FAST_PATH=false` for an immediate configuration rollback.
 
 Set `storage.pgvector.prewarm_on_startup: true` for a tenant to synchronously
-read its HNSW index into the host filesystem cache before the API reports
-ready. Startup prewarm is fail-open and logs the index, blocks, bytes, and
-duration; it does not execute a search or alter ranking behavior.
+warm its HNSW index before the API reports ready. `prewarm_mode: read` targets
+the host filesystem cache; `prewarm_mode: buffer` targets PostgreSQL shared
+buffers and requires a buffer pool larger than the HNSW index. Startup prewarm
+is fail-open and logs the index, mode, blocks, bytes, and duration; it does not
+alter ranking behavior. The hourly local-path warm-up repeats the configured
+index prewarm before its representative HNSW queries.
+
+`vector_eligible=10001 vector_eligible_capped=True` means the bounded
+eligibility probe found more than the 10,000-row exact-ranking threshold; it
+does not mean the vector query fetched 10,001 payload rows. The broad-filter
+path still retrieves its configured bounded ANN window. A semantic engine log
+with `products=0 hydration=deferred` likewise means the compatibility layer
+will hydrate the ranked IDs, not that retrieval found no products.
 
 A high reranker time or token count suggests reducing the ranked window or document-character cap only after relevance testing. A high vector time suggests checking HNSW use, metadata predicates, database load, and `ef_search`. A high planner time suggests deterministic fast-path coverage or query-provider latency.
 

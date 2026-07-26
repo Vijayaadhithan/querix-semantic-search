@@ -40,6 +40,7 @@ class TenantStorageConfig:
     pgvector_hnsw_ef_search: int = 100
     pgvector_query_mode: str = "legacy"
     pgvector_prewarm_on_startup: bool = False
+    pgvector_prewarm_mode: str = "read"
 
 
 @dataclass(frozen=True)
@@ -388,6 +389,7 @@ def load_tenant_profile(path: Path) -> TenantProfile:
     pgvector_hnsw_ef_search = 100
     pgvector_query_mode = "legacy"
     pgvector_prewarm_on_startup = False
+    pgvector_prewarm_mode = "read"
     vector_dimensions = int(storage.get("vector_dimensions", 768))
     if vector_dimensions <= 0 or vector_dimensions > 2000:
         raise ValueError(
@@ -455,6 +457,9 @@ def load_tenant_profile(path: Path) -> TenantProfile:
     pgvector_prewarm_on_startup = bool(
         pgvector.get("prewarm_on_startup", False)
     )
+    pgvector_prewarm_mode = str(
+        pgvector.get("prewarm_mode", "read")
+    ).strip().casefold()
     if pgvector_hnsw_m <= 0:
         raise ValueError(
             f"Tenant {company_id!r} pgvector hnsw.m must be positive"
@@ -472,6 +477,11 @@ def load_tenant_profile(path: Path) -> TenantProfile:
         raise ValueError(
             f"Tenant {company_id!r} pgvector query_mode must be "
             "legacy, shadow, or optimized"
+        )
+    if pgvector_prewarm_mode not in {"buffer", "read", "prefetch"}:
+        raise ValueError(
+            f"Tenant {company_id!r} pgvector prewarm_mode must be "
+            "buffer, read, or prefetch"
         )
     if not pgvector_database.database or not pgvector_database.user:
         raise ValueError(
@@ -494,6 +504,7 @@ def load_tenant_profile(path: Path) -> TenantProfile:
         pgvector_hnsw_ef_search=pgvector_hnsw_ef_search,
         pgvector_query_mode=pgvector_query_mode,
         pgvector_prewarm_on_startup=pgvector_prewarm_on_startup,
+        pgvector_prewarm_mode=pgvector_prewarm_mode,
     )
 
     payload = dict(raw.get("payload", {}))

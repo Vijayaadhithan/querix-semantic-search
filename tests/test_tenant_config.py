@@ -53,6 +53,7 @@ storage:
     use_company_database: {use_company_database}
     table: {company}_vectors
     prewarm_on_startup: true
+    prewarm_mode: buffer
     hnsw:
       m: 12
       ef_construction: 48
@@ -122,6 +123,7 @@ def test_tenant_profiles_resolve_separate_storage_and_api_keys(
 
     assert profiles["alpha"].storage.pgvector_table == "alpha_vectors"
     assert profiles["alpha"].storage.pgvector_prewarm_on_startup is True
+    assert profiles["alpha"].storage.pgvector_prewarm_mode == "buffer"
     assert profiles["alpha"].storage.bm25_path != profiles["beta"].storage.bm25_path
     assert profiles["alpha"].endpoint_slug == "alpha"
     assert profiles["alpha"].payload.request_mapping["query"] == "query"
@@ -149,6 +151,25 @@ def test_tenant_profiles_resolve_separate_storage_and_api_keys(
     assert registry.resolve_api_key("alpha-key").company_id == "alpha"
     assert registry.resolve_api_key("beta-key").company_id == "beta"
     assert registry.resolve_api_key("wrong") is None
+
+
+def test_tenant_profile_rejects_unknown_pgvector_prewarm_mode(
+    tmp_path,
+    monkeypatch,
+):
+    write_profile(tmp_path, "alpha")
+    set_database_environment(monkeypatch, "alpha")
+    profile_path = tmp_path / "alpha.yaml"
+    profile_path.write_text(
+        profile_path.read_text(encoding="utf-8").replace(
+            "prewarm_mode: buffer",
+            "prewarm_mode: invalid",
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="prewarm_mode"):
+        discover_tenant_profiles(tmp_path)
 
 
 def test_tenant_profile_allows_tls_env_override(tmp_path, monkeypatch):

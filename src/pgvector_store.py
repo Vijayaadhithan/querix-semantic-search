@@ -69,10 +69,12 @@ class PgVectorCollection:
         return self.table
 
     def prewarm_hnsw_index(self, *, mode: str = "read") -> dict[str, Any]:
-        """Synchronously load the HNSW index into the host filesystem cache."""
+        """Synchronously load the HNSW index into the selected cache layer."""
         normalized_mode = str(mode).strip().casefold()
-        if normalized_mode not in {"read", "prefetch"}:
-            raise ValueError("pgvector prewarm mode must be read or prefetch")
+        if normalized_mode not in {"buffer", "read", "prefetch"}:
+            raise ValueError(
+                "pgvector prewarm mode must be buffer, read, or prefetch"
+            )
         index_name = f"{self.table}_embedding_hnsw"
         relation_name = f"{self.config.schema}.{index_name}"
         started = time.perf_counter()
@@ -886,6 +888,11 @@ class PgVectorCollection:
         self._query_state.metrics = {
             "strategy": strategy,
             "eligible_rows": eligible_rows,
+            "eligible_rows_capped": bool(
+                eligible_rows is not None
+                and exact_filter_max_rows is not None
+                and eligible_rows == exact_filter_max_rows + 1
+            ),
             "query_mode": query_mode,
             "database_ms": (
                 optimized_ms if query_mode == "optimized" else legacy_ms

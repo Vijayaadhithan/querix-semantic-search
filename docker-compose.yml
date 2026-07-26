@@ -46,9 +46,9 @@ services:
     command:
       - postgres
       - -c
-      - shared_buffers=1GB
+      - shared_buffers=2GB
       - -c
-      - effective_cache_size=3GB
+      - effective_cache_size=5GB
     env_file:
       - path: .env
         required: true
@@ -66,8 +66,8 @@ services:
       timeout: 5s
       retries: 10
     # The Gainr vector relation is about 3.2 GB including its 1.1 GB HNSW
-    # index. Give PostgreSQL enough cgroup headroom to retain more of that
-    # working set in the filesystem cache on the current 8 GB test server.
+    # index. The 2 GB PostgreSQL buffer pool retains that complete index plus
+    # frequently accessed heap/filter pages on the current 8 GB test server.
     mem_limit: 4g
     logging:
       driver: json-file

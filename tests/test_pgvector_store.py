@@ -3,6 +3,8 @@ import json
 import threading
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 import pgvector_store
@@ -64,6 +66,22 @@ def test_pgvector_prewarm_reads_hnsw_index(monkeypatch):
         "tenant.gainr_vectors_embedding_hnsw",
         "read",
     )
+
+    buffered = collection.prewarm_hnsw_index(mode="buffer")
+
+    assert buffered["mode"] == "buffer"
+    assert statements[-1][1] == (
+        "tenant.gainr_vectors_embedding_hnsw",
+        "tenant.gainr_vectors_embedding_hnsw",
+        "buffer",
+    )
+
+
+def test_pgvector_prewarm_rejects_unknown_mode():
+    collection = PgVectorCollection.__new__(PgVectorCollection)
+
+    with pytest.raises(ValueError, match="buffer, read, or prefetch"):
+        collection.prewarm_hnsw_index(mode="unknown")
 
 
 def test_pgvector_metadata_filter_supports_collection_where_shape():
@@ -516,6 +534,7 @@ def test_pgvector_optimized_post_filter_fetches_only_filtered_payload(
     assert results["ids"] == [["filtered-result"]]
     metrics = collection.last_query_metrics()
     assert metrics["strategy"] == "hnsw_post_filter"
+    assert metrics["eligible_rows_capped"] is True
     optimized_sql, optimized_params = next(
         entry
         for entry in statements

@@ -1090,6 +1090,7 @@ class ProductSearchEngine:
             "merged=%d candidates=%d hybrid_tail=%d vector_ms=%.0f bm25_ms=%.0f "
             "vector_count_ms=%.0f vector_embed_ms=%.0f vector_db_ms=%.0f "
             "vector_filter_ms=%.0f vector_strategy=%s vector_eligible=%s "
+            "vector_eligible_capped=%s "
             "vector_query_mode=%s vector_shadow_equal=%s "
             "vector_shadow_error=%s "
             "vector_shadow_ms=%.0f vector_optimized_ms=%.0f "
@@ -1111,6 +1112,7 @@ class ProductSearchEngine:
             vector_metrics.get("post_filter_ms", 0.0),
             vector_metrics.get("strategy", "unknown"),
             vector_metrics.get("eligible_rows", "unknown"),
+            vector_metrics.get("eligible_rows_capped", False),
             vector_metrics.get("query_mode", "legacy"),
             vector_metrics.get("shadow_equal", "not_run"),
             vector_metrics.get("shadow_error", "none"),
@@ -1696,9 +1698,12 @@ class ProductSearchEngine:
             len(products),
         )
         LOGGER.info(
-            "[search:%s] step=search status=complete products=%d duration_ms=%.0f",
+            "[search:%s] step=search status=complete ranked_ids=%d "
+            "products=%d hydration=%s duration_ms=%.0f",
             trace_id,
+            len(product_ids),
             len(products),
+            "complete" if hydrate_products else "deferred",
             (time.perf_counter() - started) * 1000,
         )
         result = {

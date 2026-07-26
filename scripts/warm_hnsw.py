@@ -32,6 +32,17 @@ def warm_hnsw(company_id: str, queries: list[str], candidates: int) -> None:
         raise RuntimeError(f"Tenant {company_id!r} has no vectors to warm.")
 
     started = time.perf_counter()
+    if profile.storage.pgvector_prewarm_on_startup:
+        index_warm = collection.prewarm_hnsw_index(
+            mode=profile.storage.pgvector_prewarm_mode
+        )
+        print(
+            f"HNSW index prewarm complete company={company_id} "
+            f"mode={index_warm['mode']} blocks={index_warm['blocks']} "
+            f"bytes={index_warm['bytes']} "
+            f"duration_ms={index_warm['duration_ms']:.0f}",
+            flush=True,
+        )
     embeddings = embed_texts(queries, timeout=300)
     timings = []
     for embedding in embeddings:

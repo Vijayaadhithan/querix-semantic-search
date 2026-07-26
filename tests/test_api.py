@@ -90,6 +90,7 @@ def tenant_profile(
     endpoint_slug="",
     compatibility=None,
     prewarm_on_startup=False,
+    prewarm_mode="read",
 ):
     return TenantProfile(
         company_id=company_id,
@@ -117,6 +118,7 @@ def tenant_profile(
             ),
             pgvector_table=f"{company_id}_vectors",
             pgvector_prewarm_on_startup=prewarm_on_startup,
+            pgvector_prewarm_mode=prewarm_mode,
         ),
         payload=TenantPayloadConfig(
             public_fields=tuple(public_fields),
@@ -141,6 +143,7 @@ def test_tenant_pool_prewarms_enabled_pgvector_index(tmp_path, monkeypatch):
         tmp_path,
         "alpha",
         prewarm_on_startup=True,
+        prewarm_mode="buffer",
     )
     registry = TenantRegistry(
         {"alpha": profile},
@@ -168,7 +171,7 @@ def test_tenant_pool_prewarms_enabled_pgvector_index(tmp_path, monkeypatch):
 
     result = pool.prewarm_pgvector_indexes()
 
-    assert calls == ["read"]
+    assert calls == ["buffer"]
     assert result["alpha"]["status"] == "complete"
     assert result["alpha"]["blocks"] == 10
 

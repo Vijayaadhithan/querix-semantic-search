@@ -1183,7 +1183,9 @@ class TenantServicePool:
                     profile,
                     create=False,
                 )
-                result = collection.prewarm_hnsw_index(mode="read")
+                result = collection.prewarm_hnsw_index(
+                    mode=profile.storage.pgvector_prewarm_mode
+                )
             except Exception as exc:
                 result = {
                     "status": "failed",
