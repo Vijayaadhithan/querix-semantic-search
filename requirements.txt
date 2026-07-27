@@ -1,8 +1,0 @@
-fastapi>=0.115,<1
-PyMySQL>=1.1,<2
-psycopg[binary]>=3.2,<4
-python-dotenv>=1,<2
-PyYAML>=6,<7
-requests>=2.32,<3
-redis>=7,<9
-uvicorn>=0.34,<1

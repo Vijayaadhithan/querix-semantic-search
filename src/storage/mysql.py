@@ -101,7 +101,7 @@ def require_pymysql():
         import pymysql
     except ImportError as exc:
         raise RuntimeError(
-            "MySQL support requires PyMySQL. Install requirements.txt first."
+            "MySQL support requires PyMySQL. Run `uv sync` first."
         ) from exc
     return pymysql
 

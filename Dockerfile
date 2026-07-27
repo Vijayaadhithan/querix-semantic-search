@@ -1,13 +1,19 @@
-FROM python:3.12-slim
+ARG PYTHON_IMAGE=python:3.12.13-slim-bookworm@sha256:d50fb7611f86d04a3b0471b46d7557818d88983fc3136726336b2a4c657aa30b
+ARG UV_IMAGE=ghcr.io/astral-sh/uv:0.11.32@sha256:df4cae8f3a96d175e2e5f992e597550000edbe78fdc2594d5cd8de1a217f504c
+
+FROM ${UV_IMAGE} AS uv
+FROM ${PYTHON_IMAGE}
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1 \
     PYTHONPATH=/app/src \
+    PATH=/app/.venv/bin:$PATH \
     API_HOST=0.0.0.0 \
     API_PORT=8000
 
 WORKDIR /app
+
+COPY --from=uv /uv /usr/local/bin/uv
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -16,9 +22,8 @@ RUN apt-get update \
     && groupadd --system app \
     && useradd --system --gid app --create-home app
 
-COPY requirements.txt ./
-RUN python -m pip install --upgrade pip \
-    && python -m pip install -r requirements.txt
+COPY pyproject.toml uv.lock .python-version ./
+RUN uv sync --frozen --no-dev
 
 COPY . .
 RUN mkdir -p storage \

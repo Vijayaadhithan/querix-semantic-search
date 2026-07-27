@@ -74,7 +74,7 @@ def require_psycopg():
         from psycopg.rows import dict_row
     except ImportError as exc:
         raise RuntimeError(
-            "PostgreSQL support requires psycopg. Install requirements.txt first."
+            "PostgreSQL support requires psycopg. Run `uv sync` first."
         ) from exc
     return psycopg, dict_row
 

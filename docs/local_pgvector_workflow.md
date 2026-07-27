@@ -4,7 +4,7 @@ This workflow validates a tenant profile, builds local indexes, and runs a searc
 
 ## Prerequisites
 
-- Python environment with `requirements.txt` installed
+- Python 3.12.13 with locked dependencies installed by `uv sync`
 - PostgreSQL with the `vector` extension
 - Redis
 - Ollama with the configured embedding model
@@ -15,6 +15,13 @@ Set a reusable tenant slug:
 
 ```bash
 export COMPANY_ID=<tenant-slug>
+```
+
+Create the project environment from the committed lock before running direct
+Python commands:
+
+```bash
+uv sync --frozen
 ```
 
 ## Start dependencies

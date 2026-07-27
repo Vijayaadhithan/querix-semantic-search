@@ -53,7 +53,7 @@ class RedisJsonCache:
         if redis is None:
             raise RuntimeError(
                 "The redis Python package is not installed. "
-                "Run: .venv/bin/python -m pip install -r requirements.txt"
+                "Run: uv sync"
             )
         self._client = redis.Redis.from_url(
             url,

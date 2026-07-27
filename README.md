@@ -153,11 +153,21 @@ Important reranker controls:
 
 ## Development verification
 
-Use the commands in [Local pgvector workflow](docs/local_pgvector_workflow.md). The minimum code gate is:
+Python 3.12.13 and all direct/transitive packages are recorded in
+`.python-version` and `uv.lock`. Install the exact development environment and
+run the same gate as CI:
 
 ```bash
-.venv/bin/pytest -q
+uv lock --check
+uv sync --frozen
+uv run --frozen python -m compileall -q src scripts tests
+uv run --frozen pytest -q
 ```
+
+GitHub Actions runs this gate for every pull request and every push to `main`.
+Concurrent runs for the same branch are cancelled when a newer commit arrives.
+Use the commands in [Local pgvector workflow](docs/local_pgvector_workflow.md)
+for integration testing.
 
 Initial server preparation is documented in [Production setup](docs/production_setup.md). Deployment, ingestion, health checks, evaluation, and rollback commands are kept in [Production commands](docs/production_commands.md).
 
