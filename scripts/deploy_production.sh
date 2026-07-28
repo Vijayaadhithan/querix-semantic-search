@@ -82,6 +82,10 @@ if [[ "$RUN_DOCTOR" == "true" ]]; then
     --production
 fi
 
+docker compose exec -T api python scripts/warm_search_paths.py \
+  --company "$COMPANY_ID" \
+  --candidates 800
+
 docker compose ps
 docker compose logs --tail=100 api
 echo "Deployment complete: revision ${revision} is ready."

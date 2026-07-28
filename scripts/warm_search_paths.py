@@ -20,6 +20,24 @@ from core.tenant_config import load_tenant_registry  # noqa: E402
 from warm_hnsw import DEFAULT_QUERIES, warm_hnsw  # noqa: E402
 
 
+def prewarm_file(path: Path, chunk_size: int = 8 * 1024 * 1024) -> dict[str, float]:
+    """Read a file sequentially into the host page cache."""
+    if chunk_size <= 0:
+        raise ValueError("chunk_size must be greater than zero")
+    if not path.is_file():
+        raise RuntimeError(f"BM25 index does not exist: {path}")
+    started = time.perf_counter()
+    file_bytes = 0
+    buffer = bytearray(chunk_size)
+    with path.open("rb", buffering=0) as stream:
+        while read_bytes := stream.readinto(buffer):
+            file_bytes += read_bytes
+    return {
+        "file_bytes": float(file_bytes),
+        "file_read_ms": (time.perf_counter() - started) * 1000,
+    }
+
+
 def warm_bm25(
     path: Path,
     queries: list[str],
@@ -28,8 +46,7 @@ def warm_bm25(
     """Run representative FTS queries using a read-only SQLite connection."""
     if candidates <= 0:
         raise ValueError("candidates must be greater than zero")
-    if not path.is_file():
-        raise RuntimeError(f"BM25 index does not exist: {path}")
+    file_warm = prewarm_file(path)
 
     timings: list[float] = []
     result_counts: list[int] = []
@@ -60,6 +77,7 @@ def warm_bm25(
                 )
 
     return {
+        **file_warm,
         "query_ms": timings,
         "result_counts": result_counts,
     }
@@ -96,6 +114,8 @@ def main() -> None:
     )
     print(
         f"BM25 warm-up complete company={args.company} "
+        f"file_bytes={int(bm25['file_bytes'])} "
+        f"file_read_ms={bm25['file_read_ms']:.0f} "
         f"queries={len(queries)} query_ms=[{query_ms}] "
         f"results=[{result_counts}]",
         flush=True,

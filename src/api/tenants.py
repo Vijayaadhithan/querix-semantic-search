@@ -92,9 +92,13 @@ class TenantServicePool:
             else:
                 result = {"status": "complete", **result}
                 LOGGER.info(
-                    "pgvector startup prewarm complete company=%s index=%s "
-                    "mode=%s blocks=%d bytes=%d duration_ms=%.0f",
+                    "pgvector startup prewarm complete company=%s table=%s "
+                    "table_blocks=%d table_bytes=%d index=%s mode=%s "
+                    "index_blocks=%d index_bytes=%d duration_ms=%.0f",
                     company_id,
+                    result.get("table", profile.storage.pgvector_table),
+                    result.get("table_blocks", 0),
+                    result.get("table_bytes", 0),
                     result["index"],
                     result["mode"],
                     result["blocks"],

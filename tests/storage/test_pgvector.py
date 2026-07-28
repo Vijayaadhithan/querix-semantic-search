@@ -14,6 +14,15 @@ def test_pgvector_prewarm_reads_hnsw_index(monkeypatch):
     statements = []
 
     class FakeCursor:
+        rows = iter(
+            [
+                {"relation_bytes": 512, "blocks": 4},
+                {"relation_bytes": 1024, "blocks": 8},
+                {"relation_bytes": 512, "blocks": 4},
+                {"relation_bytes": 1024, "blocks": 8},
+            ]
+        )
+
         def __enter__(self):
             return self
 
@@ -24,7 +33,7 @@ def test_pgvector_prewarm_reads_hnsw_index(monkeypatch):
             statements.append((" ".join(query.split()), params))
 
         def fetchone(self):
-            return {"relation_bytes": 1024, "blocks": 8}
+            return next(self.rows)
 
     class FakeConnection:
         def __enter__(self):
@@ -55,11 +64,19 @@ def test_pgvector_prewarm_reads_hnsw_index(monkeypatch):
     result = collection.prewarm_hnsw_index()
 
     assert result["index"] == "tenant.gainr_vectors_embedding_hnsw"
+    assert result["table"] == "tenant.gainr_vectors"
+    assert result["table_blocks"] == 4
+    assert result["table_bytes"] == 512
     assert result["mode"] == "read"
     assert result["blocks"] == 8
     assert result["bytes"] == 1024
     assert statements[0][0] == "CREATE EXTENSION IF NOT EXISTS pg_prewarm"
     assert statements[1][1] == (
+        "tenant.gainr_vectors",
+        "tenant.gainr_vectors",
+        "read",
+    )
+    assert statements[2][1] == (
         "tenant.gainr_vectors_embedding_hnsw",
         "tenant.gainr_vectors_embedding_hnsw",
         "read",
@@ -68,6 +85,11 @@ def test_pgvector_prewarm_reads_hnsw_index(monkeypatch):
     buffered = collection.prewarm_hnsw_index(mode="buffer")
 
     assert buffered["mode"] == "buffer"
+    assert statements[-2][1] == (
+        "tenant.gainr_vectors",
+        "tenant.gainr_vectors",
+        "buffer",
+    )
     assert statements[-1][1] == (
         "tenant.gainr_vectors_embedding_hnsw",
         "tenant.gainr_vectors_embedding_hnsw",

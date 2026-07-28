@@ -62,7 +62,8 @@ if [[ "$api_ready" != "true" ]]; then
   exit 1
 fi
 
-echo "API is ready; warming representative HNSW paths."
-docker compose exec -T api python scripts/warm_hnsw.py \
-  --company "$COMPANY_ID"
-echo "Incremental ingestion and HNSW warm-up completed."
+echo "API is ready; warming vector and BM25 search paths."
+docker compose exec -T api python scripts/warm_search_paths.py \
+  --company "$COMPANY_ID" \
+  --candidates 800
+echo "Incremental ingestion and search-path warm-up completed."

@@ -37,9 +37,11 @@ def warm_hnsw(company_id: str, queries: list[str], candidates: int) -> None:
             mode=profile.storage.pgvector_prewarm_mode
         )
         print(
-            f"HNSW index prewarm complete company={company_id} "
+            f"Vector heap and HNSW prewarm complete company={company_id} "
             f"mode={index_warm['mode']} blocks={index_warm['blocks']} "
             f"bytes={index_warm['bytes']} "
+            f"table_blocks={index_warm.get('table_blocks', 0)} "
+            f"table_bytes={index_warm.get('table_bytes', 0)} "
             f"duration_ms={index_warm['duration_ms']:.0f}",
             flush=True,
         )
