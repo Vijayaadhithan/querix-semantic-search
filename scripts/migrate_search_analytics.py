@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create the configured tenant MySQL search-analytics tables."""
+"""Create or migrate tenant history and internal API-usage tables."""
 
 from __future__ import annotations
 
@@ -21,7 +21,10 @@ from storage.search_analytics import (  # noqa: E402
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Create durable MySQL search history and API usage tables.",
+        description=(
+            "Create or migrate durable tenant history and internal "
+            "API-usage tables."
+        ),
     )
     parser.add_argument("--company", default="gainr")
     args = parser.parse_args()

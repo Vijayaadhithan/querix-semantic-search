@@ -157,8 +157,9 @@ curl -fsS \
   -H "X-Admin-Key: $API_ADMIN_KEY" | jq
 ```
 
-Gainr also persists per-request search history and provider-call/token detail
-to its configured MySQL database. See
+Gainr also persists a reduced tenant-facing search history table and a
+separate operator-facing provider-call/token table to its configured MySQL
+database for now. See
 [`search_analytics.md`](search_analytics.md) for the two-table schema,
 migration command, privacy boundary, and reporting queries.
 

@@ -4,18 +4,25 @@ MySQL tenants can opt into durable, per-request search analytics with the
 tenant profile `analytics` section. Gainr enables this feature and stores two
 tables in its configured company database:
 
-- `semantic_search_history` stores one row per search request: UTC timestamp,
-  company and optional user ID, normalized query, route, filters, page,
-  result counts, cache state, total latency, aggregate provider calls, and
-  aggregate token counts.
-- `semantic_search_api_usage` stores the planner, embedding, and reranker
-  attempts associated with that request, including provider, model, operation,
-  status, duration, API-call count, and provider-reported tokens.
+- `semantic_search_history` is the tenant-facing table. It stores only the
+  normalized query, high-level execution path, result counts, status, final
+  end-to-end search latency, aggregate API calls, aggregate token counts, and
+  UTC timestamp. `request_id` is retained solely for idempotent delivery and
+  correlation.
+- `semantic_search_api_usage` is the operator-facing table. It stores the
+  planner, embedding, and reranker attempts associated with a request,
+  including company, provider, model, operation, attempt status, per-attempt
+  duration, API-call count, provider-reported tokens, and failure reason.
 
 The tables deliberately do not store API keys, authorization headers, IP
-addresses, or product payloads. Query text and user IDs can contain personal
-information, so database access and backups should follow the company's data
-retention and access policy.
+addresses, user IDs, query hashes, route reasons, resolved filters, or product
+payloads. Query text can contain personal information, so database access and
+backups should follow the company's data retention and access policy.
+
+Both tables currently use Gainr's configured MySQL database. The
+operator-facing table uses `(request_id, attempt_number)` instead of a foreign
+key to the tenant table, so it can move to a separately configured internal
+database later without changing the event format or losing correlation.
 
 Create or verify the tables with:
 
@@ -34,7 +41,9 @@ A bounded worker writes the parent and child rows in one transaction.
 
 Production uses `SEARCH_ANALYTICS_DELIVERY_MODE=daily_spool`. The same bounded
 request-path queue writes to `storage/search_analytics_spool.sqlite3` using
-SQLite WAL. The existing daily 03:00 IST ingestion job runs:
+SQLite WAL. New spool records use the same minimized field set and do not
+retain user IDs, route reasons, or resolved filters. The existing daily 03:00
+IST ingestion job runs:
 
 ```bash
 python scripts/flush_search_analytics.py --company gainr
@@ -84,6 +93,10 @@ ORDER BY usage_date DESC, provider, operation;
 
 Each history row represents one incoming search request, so `COUNT(*)` is the
 incoming request count. `SUM(api_call_count)` is the number of downstream
-planner, embedding, and reranker calls. The child table retains every provider
-attempt and its provider-reported token counts. Ollama embedding calls are
-counted even though its embedding endpoint does not report token usage.
+planner, embedding, and reranker calls. Its `duration_ms` is the final
+end-to-end API latency measured by the Gainr compatibility endpoint. The
+operator table retains every provider attempt and its provider-reported token
+counts; its `duration_ms` is only that attempt's elapsed time. Attempt
+durations can overlap and must not be summed to infer endpoint latency. Ollama
+embedding calls are counted even though its embedding endpoint does not report
+token usage.

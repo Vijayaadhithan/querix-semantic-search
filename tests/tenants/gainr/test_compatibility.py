@@ -280,7 +280,7 @@ def test_explicit_filters_override_only_matching_auto_filters(tmp_path):
     }
 
 
-def test_filter_result_queues_durable_history_with_user_and_filters(tmp_path):
+def test_filter_result_queues_minimized_durable_history(tmp_path):
     adapter, _engine, _repository = service(tmp_path)
     analytics = CaptureAnalyticsStore()
     adapter.product_search_service.analytics_store = analytics
@@ -297,10 +297,8 @@ def test_filter_result_queues_durable_history_with_user_and_filters(tmp_path):
     assert response["status"] is True
     event = analytics.events[0]
     assert event.query_text == "family bike"
-    assert event.user_id == "user-7"
-    assert event.page_number == 1
-    assert event.filters["explicit"]["city_id"] == 456
-    assert event.filters["effective"]["categorical"]["city_id"] == 456
+    assert not hasattr(event, "user_id")
+    assert not hasattr(event, "filters")
     assert event.result_count == len(response["data"])
 
 

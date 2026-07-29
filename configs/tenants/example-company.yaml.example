@@ -109,8 +109,8 @@ rate_limit:
   requests_per_minute: 60
   burst: 10
 
-# MySQL tenants can opt into durable per-search analytics. Run
-# scripts/migrate_search_analytics.py before enabling this setting.
+# MySQL tenants can opt into tenant-facing history plus internal provider
+# usage analytics. Run scripts/migrate_search_analytics.py before enabling it.
 analytics:
   enabled: false
   search_history_table: semantic_search_history

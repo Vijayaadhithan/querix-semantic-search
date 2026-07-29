@@ -15,7 +15,7 @@ from tenants.gainr.models import (
     GAINR_USER_INTEGER_FIELDS,
     GainrFilterDataRequest,
     GainrFilterResultRequest,
-    GainrSearchFilter,
+    GainrSearchFilter as GainrSearchFilter,
     GainrSuggestionRequest,
 )
 from tenants.gainr.repository import GainrDatabaseRepository
@@ -489,12 +489,6 @@ class GainrCompatibilityService:
             duration_ms=duration_ms,
             result_count=len(cards),
             total_results=total,
-            user_id=self._recent_scope(user_id),
-            page_number=request.page,
-            filters={
-                "explicit": request.filter.model_dump(mode="json"),
-                "effective": effective,
-            },
         )
         PERFORMANCE_LOGGER.info(
             "[search:%s] step=compat_response status=complete route=%s "

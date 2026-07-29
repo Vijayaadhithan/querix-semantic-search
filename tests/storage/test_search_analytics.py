@@ -1,3 +1,4 @@
+import json
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
@@ -133,14 +134,11 @@ def test_search_analytics_writer_inserts_parent_and_provider_rows(monkeypatch):
     event = SearchAnalyticsEvent(
         request_id="a" * 32,
         company_id="gainr",
-        user_id="user-7",
         query_text="  Family   Car  ",
         execution_path="semantic",
-        route_reason="llm_required",
         duration_ms=1234.5,
         result_count=20,
         total_results=80,
-        filters={"city_id": 456},
         created_at=datetime(2026, 7, 29, 3, 0, tzinfo=timezone.utc),
         api_usage=(
             SearchApiUsageEvent(
@@ -169,14 +167,18 @@ def test_search_analytics_writer_inserts_parent_and_provider_rows(monkeypatch):
     assert connection.begins == 1
     assert connection.commits == 1
     assert connection.rollbacks == 0
-    parent_params = connection.cursor_instance.execute_calls[0][1]
+    history_query, parent_params = (
+        connection.cursor_instance.execute_calls[0]
+    )
     assert parent_params[0] == "a" * 32
-    assert parent_params[2] == "user-7"
-    assert parent_params[3] == "Family Car"
-    assert parent_params[8] == '{"city_id":456}'
+    assert parent_params[1] == "Family Car"
+    assert "user_id" not in history_query
+    assert "query_hash" not in history_query
+    assert "route_reason" not in history_query
+    assert "filters_json" not in history_query
     usage_rows = connection.cursor_instance.executemany_calls[0][1]
-    assert usage_rows[0][0] == 41
-    assert usage_rows[0][2:5] == (
+    assert usage_rows[0][0:3] == ("a" * 32, "gainr", 1)
+    assert usage_rows[0][3:6] == (
         "groq",
         "openai/gpt-oss-20b",
         "query_planning",
@@ -193,13 +195,11 @@ def spool_event(request_id="b" * 32, query="family bike"):
     return SearchAnalyticsEvent(
         request_id=request_id,
         company_id="gainr",
-        user_id="user-7",
         query_text=query,
         execution_path="semantic",
         duration_ms=1234.5,
         result_count=20,
         total_results=80,
-        filters={"city_id": 456},
         created_at=datetime(2026, 7, 29, 3, 0, tzinfo=timezone.utc),
         api_usage=(
             SearchApiUsageEvent(
@@ -216,14 +216,43 @@ def spool_event(request_id="b" * 32, query="family bike"):
 
 def test_search_analytics_spool_round_trip_preserves_request_and_usage():
     original = spool_event()
+    payload_json = serialize_search_analytics_event(original)
+    payload = json.loads(payload_json)
 
     restored = deserialize_search_analytics_event(
-        serialize_search_analytics_event(original)
+        payload_json
     )
 
     assert restored == original
     assert restored.api_call_count == 1
     assert restored.total_tokens == 120
+    assert payload["schema_version"] == 2
+    assert {
+        "user_id",
+        "route_reason",
+        "page_number",
+        "filters",
+        "result_cache_hit",
+        "plan_cache_hit",
+    }.isdisjoint(payload)
+
+
+def test_spool_reader_accepts_legacy_payload_without_retaining_extra_fields():
+    payload = json.loads(serialize_search_analytics_event(spool_event()))
+    payload.update(
+        {
+            "schema_version": 1,
+            "user_id": "legacy-user",
+            "route_reason": "legacy-reason",
+            "filters": {"city_id": 456},
+        }
+    )
+
+    restored = deserialize_search_analytics_event(json.dumps(payload))
+
+    assert restored.company_id == "gainr"
+    assert restored.query_text == "family bike"
+    assert not hasattr(restored, "user_id")
 
 
 def test_daily_spool_persists_pending_event_off_request_path(tmp_path):

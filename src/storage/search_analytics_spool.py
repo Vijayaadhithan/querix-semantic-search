@@ -22,7 +22,7 @@ from storage.search_analytics import (
 
 LOGGER = logging.getLogger("uvicorn.error")
 _STOP = object()
-_SCHEMA_VERSION = 1
+_SCHEMA_VERSION = 2
 
 
 def _utc_iso(value: datetime) -> str:
@@ -36,17 +36,11 @@ def serialize_search_analytics_event(event: SearchAnalyticsEvent) -> str:
         "schema_version": _SCHEMA_VERSION,
         "request_id": event.request_id,
         "company_id": event.company_id,
-        "user_id": event.user_id,
         "query_text": event.query_text,
         "execution_path": event.execution_path,
-        "route_reason": event.route_reason,
-        "page_number": event.page_number,
-        "filters": event.filters,
         "result_count": event.result_count,
         "total_results": event.total_results,
         "status": event.status,
-        "result_cache_hit": event.result_cache_hit,
-        "plan_cache_hit": event.plan_cache_hit,
         "duration_ms": event.duration_ms,
         "created_at": _utc_iso(event.created_at),
         "api_usage": [
@@ -78,26 +72,16 @@ def deserialize_search_analytics_event(
     payload_json: str,
 ) -> SearchAnalyticsEvent:
     payload = json.loads(payload_json)
-    if int(payload.get("schema_version", 0)) != _SCHEMA_VERSION:
+    if int(payload.get("schema_version", 0)) not in {1, _SCHEMA_VERSION}:
         raise ValueError("Unsupported search analytics spool schema")
     return SearchAnalyticsEvent(
         request_id=str(payload["request_id"]),
         company_id=str(payload["company_id"]),
-        user_id=(
-            str(payload["user_id"])
-            if payload.get("user_id") is not None
-            else None
-        ),
         query_text=str(payload["query_text"]),
         execution_path=str(payload["execution_path"]),
-        route_reason=str(payload.get("route_reason") or ""),
-        page_number=int(payload.get("page_number", 1)),
-        filters=dict(payload.get("filters") or {}),
         result_count=int(payload.get("result_count", 0)),
         total_results=int(payload.get("total_results", 0)),
         status=str(payload.get("status") or "success"),
-        result_cache_hit=bool(payload.get("result_cache_hit")),
-        plan_cache_hit=bool(payload.get("plan_cache_hit")),
         duration_ms=float(payload.get("duration_ms", 0.0)),
         created_at=datetime.fromisoformat(str(payload["created_at"])),
         api_usage=tuple(

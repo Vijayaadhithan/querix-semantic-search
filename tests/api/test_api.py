@@ -1026,14 +1026,11 @@ def test_search_analytics_records_route_provider_calls_and_user_context():
         duration_ms=1500,
         result_count=20,
         total_results=80,
-        user_id="user-7",
-        filters={"city_id": 456},
     )
 
     assert submitted is True
     event = analytics.events[0]
     assert event.company_id == "gainr"
-    assert event.user_id == "user-7"
     assert event.execution_path == "semantic"
     assert event.api_call_count == 3
     assert event.total_tokens == 620

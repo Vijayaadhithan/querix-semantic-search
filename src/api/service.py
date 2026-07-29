@@ -712,7 +712,6 @@ class ProductSearchService:
             duration_ms=total_ms,
             result_count=len(items),
             total_results=len(result.get("product_ids") or items),
-            filters=result.get("resolved_filters") or {},
         )
         return self.sessions.create(
             query=query,
@@ -918,28 +917,19 @@ class ProductSearchService:
         duration_ms: float,
         result_count: int,
         total_results: int,
-        user_id: str | None = None,
-        page_number: int = 1,
-        filters: dict[str, Any] | None = None,
     ) -> bool:
         if self.analytics_store is None:
             return False
         query_plan = result.get("query_plan") or {}
         event = SearchAnalyticsEvent(
             company_id=self.company_id or "legacy",
-            user_id=user_id,
             query_text=query,
             execution_path=str(
                 query_plan.get("execution_path") or "unknown"
             ),
-            route_reason=str(query_plan.get("route_reason") or ""),
-            page_number=page_number,
-            filters=filters or result.get("resolved_filters") or {},
             result_count=result_count,
             total_results=total_results,
             status="success",
-            result_cache_hit=bool(result.get("result_cache_hit")),
-            plan_cache_hit=bool(result.get("plan_cache_hit")),
             duration_ms=duration_ms,
             api_usage=self._search_api_usage_events(result),
         )
