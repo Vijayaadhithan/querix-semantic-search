@@ -9,7 +9,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Protocol
 
 from storage.mysql import (
     MySQLRuntimeConfig,
@@ -88,6 +88,14 @@ class SearchAnalyticsEvent:
         return sum(max(int(item.total_tokens), 0) for item in self.api_usage)
 
 
+class SearchAnalyticsStore(Protocol):
+    def submit(self, event: SearchAnalyticsEvent) -> bool: ...
+
+    def status(self) -> dict[str, Any]: ...
+
+    def close(self, timeout_seconds: float = 5.0) -> None: ...
+
+
 def create_search_analytics_schema(
     config: MySQLRuntimeConfig,
     *,
@@ -155,6 +163,10 @@ def create_search_analytics_schema(
                     failure_reason VARCHAR(255) NOT NULL DEFAULT '',
                     created_at DATETIME(6) NOT NULL,
                     PRIMARY KEY (id),
+                    UNIQUE KEY uq_search_usage_attempt (
+                        search_history_id,
+                        attempt_number
+                    ),
                     KEY idx_usage_search (search_history_id),
                     KEY idx_usage_provider_created (
                         provider,
@@ -167,6 +179,33 @@ def create_search_analytics_schema(
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
                 """
             )
+            cursor.execute(
+                """
+                SELECT COUNT(*) AS index_count
+                FROM information_schema.statistics
+                WHERE table_schema = DATABASE()
+                  AND table_name = %s
+                  AND index_name = 'uq_search_usage_attempt'
+                """,
+                (api_usage_table,),
+            )
+            row = cursor.fetchone()
+            index_count = int(
+                row.get("index_count")
+                or row.get("INDEX_COUNT")
+                or next(iter(row.values()))
+                or 0
+            )
+            if index_count == 0:
+                cursor.execute(
+                    f"""
+                    ALTER TABLE {usage}
+                    ADD UNIQUE KEY uq_search_usage_attempt (
+                        search_history_id,
+                        attempt_number
+                    )
+                    """
+                )
 
 
 def search_analytics_schema_status(
@@ -203,6 +242,159 @@ def search_analytics_schema_status(
     return {table: table in present for table in sorted(expected)}
 
 
+def write_search_analytics_events(
+    connection,
+    events: list[SearchAnalyticsEvent] | tuple[SearchAnalyticsEvent, ...],
+    *,
+    search_history_table: str,
+    api_usage_table: str,
+) -> int:
+    """Atomically insert an idempotent batch into the tenant's MySQL DB."""
+    if not events:
+        return 0
+    history = quote_mysql_identifier(search_history_table)
+    usage = quote_mysql_identifier(api_usage_table)
+    connection.begin()
+    try:
+        with connection.cursor() as cursor:
+            for event in events:
+                created_at = mysql_utc(event.created_at)
+                normalized_query = " ".join(event.query_text.split())
+                query_hash = hashlib.sha256(
+                    normalized_query.casefold().encode("utf-8")
+                ).digest()
+                filters_json = json.dumps(
+                    event.filters,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    default=str,
+                    ensure_ascii=False,
+                )
+                cursor.execute(
+                    f"""
+                    INSERT INTO {history} (
+                        request_id,
+                        company_id,
+                        user_id,
+                        query_text,
+                        query_hash,
+                        execution_path,
+                        route_reason,
+                        page_number,
+                        filters_json,
+                        result_count,
+                        total_results,
+                        status,
+                        result_cache_hit,
+                        plan_cache_hit,
+                        api_call_count,
+                        input_tokens,
+                        output_tokens,
+                        thought_tokens,
+                        total_tokens,
+                        duration_ms,
+                        created_at
+                    )
+                    VALUES (
+                        %s, %s, %s, %s, %s, %s, %s,
+                        %s, %s, %s, %s, %s, %s, %s,
+                        %s, %s, %s, %s, %s, %s, %s
+                    )
+                    ON DUPLICATE KEY UPDATE
+                        id = LAST_INSERT_ID(id)
+                    """,
+                    (
+                        event.request_id[:32],
+                        event.company_id[:63],
+                        event.user_id[:128] if event.user_id else None,
+                        normalized_query[:1000],
+                        query_hash,
+                        event.execution_path[:32],
+                        event.route_reason[:191],
+                        max(int(event.page_number), 1),
+                        filters_json,
+                        max(int(event.result_count), 0),
+                        max(int(event.total_results), 0),
+                        event.status[:32],
+                        int(bool(event.result_cache_hit)),
+                        int(bool(event.plan_cache_hit)),
+                        event.api_call_count,
+                        event.input_tokens,
+                        event.output_tokens,
+                        event.thought_tokens,
+                        event.total_tokens,
+                        max(float(event.duration_ms), 0.0),
+                        created_at,
+                    ),
+                )
+                search_history_id = int(cursor.lastrowid)
+                if event.api_usage:
+                    cursor.executemany(
+                        f"""
+                        INSERT INTO {usage} (
+                            search_history_id,
+                            attempt_number,
+                            provider,
+                            model,
+                            operation,
+                            status,
+                            api_calls,
+                            input_tokens,
+                            output_tokens,
+                            thought_tokens,
+                            total_tokens,
+                            duration_ms,
+                            failure_reason,
+                            created_at
+                        )
+                        VALUES (
+                            %s, %s, %s, %s, %s, %s, %s,
+                            %s, %s, %s, %s, %s, %s, %s
+                        )
+                        ON DUPLICATE KEY UPDATE
+                            provider = VALUES(provider),
+                            model = VALUES(model),
+                            operation = VALUES(operation),
+                            status = VALUES(status),
+                            api_calls = VALUES(api_calls),
+                            input_tokens = VALUES(input_tokens),
+                            output_tokens = VALUES(output_tokens),
+                            thought_tokens = VALUES(thought_tokens),
+                            total_tokens = VALUES(total_tokens),
+                            duration_ms = VALUES(duration_ms),
+                            failure_reason = VALUES(failure_reason),
+                            created_at = VALUES(created_at)
+                        """,
+                        [
+                            (
+                                search_history_id,
+                                attempt_number,
+                                item.provider[:64],
+                                item.model[:191],
+                                item.operation[:64],
+                                item.status[:32],
+                                max(int(item.api_calls), 0),
+                                max(int(item.input_tokens), 0),
+                                max(int(item.output_tokens), 0),
+                                max(int(item.thought_tokens), 0),
+                                max(int(item.total_tokens), 0),
+                                max(float(item.duration_ms), 0.0),
+                                item.failure_reason[:255],
+                                created_at,
+                            )
+                            for attempt_number, item in enumerate(
+                                event.api_usage,
+                                start=1,
+                            )
+                        ],
+                    )
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+    return len(events)
+
+
 class MySQLSearchAnalyticsStore:
     """Best-effort ordered MySQL writer kept off the request latency path."""
 
@@ -236,6 +428,13 @@ class MySQLSearchAnalyticsStore:
         self._worker.start()
 
     def submit(self, event: SearchAnalyticsEvent) -> bool:
+        if event.company_id != self.company_id:
+            LOGGER.error(
+                "Search analytics tenant mismatch store=%s event=%s",
+                self.company_id,
+                event.company_id,
+            )
+            return False
         with self._lock:
             if self._closed:
                 return False
@@ -313,130 +512,12 @@ class MySQLSearchAnalyticsStore:
                         pass
 
     def _write(self, connection, event: SearchAnalyticsEvent) -> None:
-        history = quote_mysql_identifier(self.search_history_table)
-        usage = quote_mysql_identifier(self.api_usage_table)
-        created_at = mysql_utc(event.created_at)
-        normalized_query = " ".join(event.query_text.split())
-        query_hash = hashlib.sha256(
-            normalized_query.casefold().encode("utf-8")
-        ).digest()
-        filters_json = json.dumps(
-            event.filters,
-            sort_keys=True,
-            separators=(",", ":"),
-            default=str,
-            ensure_ascii=False,
+        write_search_analytics_events(
+            connection,
+            [event],
+            search_history_table=self.search_history_table,
+            api_usage_table=self.api_usage_table,
         )
-        connection.begin()
-        try:
-            with connection.cursor() as cursor:
-                cursor.execute(
-                    f"""
-                    INSERT INTO {history} (
-                        request_id,
-                        company_id,
-                        user_id,
-                        query_text,
-                        query_hash,
-                        execution_path,
-                        route_reason,
-                        page_number,
-                        filters_json,
-                        result_count,
-                        total_results,
-                        status,
-                        result_cache_hit,
-                        plan_cache_hit,
-                        api_call_count,
-                        input_tokens,
-                        output_tokens,
-                        thought_tokens,
-                        total_tokens,
-                        duration_ms,
-                        created_at
-                    )
-                    VALUES (
-                        %s, %s, %s, %s, %s, %s, %s,
-                        %s, %s, %s, %s, %s, %s, %s,
-                        %s, %s, %s, %s, %s, %s, %s
-                    )
-                    """,
-                    (
-                        event.request_id[:32],
-                        event.company_id[:63],
-                        event.user_id[:128] if event.user_id else None,
-                        normalized_query[:1000],
-                        query_hash,
-                        event.execution_path[:32],
-                        event.route_reason[:191],
-                        max(int(event.page_number), 1),
-                        filters_json,
-                        max(int(event.result_count), 0),
-                        max(int(event.total_results), 0),
-                        event.status[:32],
-                        int(bool(event.result_cache_hit)),
-                        int(bool(event.plan_cache_hit)),
-                        event.api_call_count,
-                        event.input_tokens,
-                        event.output_tokens,
-                        event.thought_tokens,
-                        event.total_tokens,
-                        max(float(event.duration_ms), 0.0),
-                        created_at,
-                    ),
-                )
-                search_history_id = int(cursor.lastrowid)
-                if event.api_usage:
-                    cursor.executemany(
-                        f"""
-                        INSERT INTO {usage} (
-                            search_history_id,
-                            attempt_number,
-                            provider,
-                            model,
-                            operation,
-                            status,
-                            api_calls,
-                            input_tokens,
-                            output_tokens,
-                            thought_tokens,
-                            total_tokens,
-                            duration_ms,
-                            failure_reason,
-                            created_at
-                        )
-                        VALUES (
-                            %s, %s, %s, %s, %s, %s, %s,
-                            %s, %s, %s, %s, %s, %s, %s
-                        )
-                        """,
-                        [
-                            (
-                                search_history_id,
-                                attempt_number,
-                                item.provider[:64],
-                                item.model[:191],
-                                item.operation[:64],
-                                item.status[:32],
-                                max(int(item.api_calls), 0),
-                                max(int(item.input_tokens), 0),
-                                max(int(item.output_tokens), 0),
-                                max(int(item.thought_tokens), 0),
-                                max(int(item.total_tokens), 0),
-                                max(float(item.duration_ms), 0.0),
-                                item.failure_reason[:255],
-                                created_at,
-                            )
-                            for attempt_number, item in enumerate(
-                                event.api_usage,
-                                start=1,
-                            )
-                        ],
-                    )
-            connection.commit()
-        except Exception:
-            connection.rollback()
-            raise
 
     def flush(self, timeout_seconds: float = 5.0) -> bool:
         deadline = time.monotonic() + max(timeout_seconds, 0.0)

@@ -474,6 +474,17 @@ Install the timer once using the current checkout path, following
 After later code pulls, the unit continues to call the script from that checkout;
 reinstall it only if the repository path or unit files change.
 
+Set the production-only analytics delivery mode in `.env`:
+
+```bash
+SEARCH_ANALYTICS_DELIVERY_MODE=daily_spool
+SEARCH_ANALYTICS_SPOOL_PATH=storage/search_analytics_spool.sqlite3
+```
+
+The mounted `storage/` directory keeps pending rows durable across API
+restarts. The scheduled job deletes and vacuums only rows committed to the
+tenant's external MySQL database.
+
 Verify the schedule without starting ingestion manually:
 
 ```bash

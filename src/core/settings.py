@@ -54,6 +54,25 @@ USAGE_DB_PATH = (
     if _usage_db_path.is_absolute()
     else PROJECT_ROOT / _usage_db_path
 )
+SEARCH_ANALYTICS_DELIVERY_MODE = os.getenv(
+    "SEARCH_ANALYTICS_DELIVERY_MODE",
+    "immediate",
+).strip().casefold()
+if SEARCH_ANALYTICS_DELIVERY_MODE not in {"immediate", "daily_spool"}:
+    raise ValueError(
+        "SEARCH_ANALYTICS_DELIVERY_MODE must be immediate or daily_spool."
+    )
+_search_analytics_spool_path = Path(
+    os.getenv(
+        "SEARCH_ANALYTICS_SPOOL_PATH",
+        "storage/search_analytics_spool.sqlite3",
+    )
+)
+SEARCH_ANALYTICS_SPOOL_PATH = (
+    _search_analytics_spool_path
+    if _search_analytics_spool_path.is_absolute()
+    else PROJECT_ROOT / _search_analytics_spool_path
+)
 
 OLLAMA_BASE_URL = os.getenv(
     "OLLAMA_BASE_URL", "http://localhost:11434"

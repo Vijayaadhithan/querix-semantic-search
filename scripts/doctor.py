@@ -11,6 +11,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from storage.mysql import mysql_connection, quote_mysql_identifier
 from storage.search_analytics import search_analytics_schema_status
+from storage.search_analytics_spool import search_analytics_spool_status
 from storage.postgres import (
     PostgresRuntimeConfig,
     postgres_connection,
@@ -31,6 +32,8 @@ from core.settings import (
     RERANK_PROVIDER_ORDER,
     REDIS_ENABLED,
     REDIS_URL,
+    SEARCH_ANALYTICS_DELIVERY_MODE,
+    SEARCH_ANALYTICS_SPOOL_PATH,
     VOYAGE_API_KEY,
 )
 from core.tenant_config import discover_tenant_profiles
@@ -180,11 +183,30 @@ def check_search_analytics(profile=None) -> bool:
     except Exception as exc:
         return report("Search analytics", False, type(exc).__name__)
     missing = [table for table, present in status.items() if not present]
+    detail = "history and API usage tables ready"
+    if not missing and SEARCH_ANALYTICS_DELIVERY_MODE == "daily_spool":
+        try:
+            spool = search_analytics_spool_status(
+                SEARCH_ANALYTICS_SPOOL_PATH,
+                company_id=profile.company_id,
+            )
+        except Exception as exc:
+            return report(
+                "Search analytics",
+                False,
+                f"daily spool {type(exc).__name__}",
+            )
+        detail += (
+            f"; delivery=daily_spool pending={spool['pending']} "
+            f"bytes={spool['spool_bytes']}"
+        )
+    elif not missing:
+        detail += "; delivery=immediate"
     return report(
         "Search analytics",
         not missing,
         (
-            "history and API usage tables ready"
+            detail
             if not missing
             else "missing: " + ", ".join(missing)
         ),

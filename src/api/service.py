@@ -29,8 +29,8 @@ from core.settings import (
     RERANK_MODEL,
 )
 from storage.search_analytics import (
-    MySQLSearchAnalyticsStore,
     SearchAnalyticsEvent,
+    SearchAnalyticsStore,
     SearchApiUsageEvent,
 )
 from storage.usage import MonthlyUsageStore
@@ -48,7 +48,7 @@ class ProductSearchService:
         public_fields: tuple[str, ...] = PUBLIC_PRODUCT_FIELDS,
         field_mapping: dict[str, str] | None = None,
         usage_store: MonthlyUsageStore | None = None,
-        analytics_store: MySQLSearchAnalyticsStore | None = None,
+        analytics_store: SearchAnalyticsStore | None = None,
         max_concurrent_searches: int = API_TENANT_MAX_CONCURRENT_SEARCHES,
         search_slot_timeout_seconds: float = API_SEARCH_SLOT_TIMEOUT_SECONDS,
     ):

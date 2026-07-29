@@ -535,6 +535,12 @@ succeeds. A host lock prevents overlapping runs. The BM25 revision now changes
 only when indexed content actually changes, so an unchanged daily scan does not
 invalidate every cached search.
 
+Before ingestion starts, the same job uploads the stable Gainr analytics-spool
+snapshot to Gainr's configured external MySQL database. Confirmed rows are
+deleted and their SQLite space is reclaimed. An analytics upload failure keeps
+the local rows for retry and does not block the existing ingestion or warm-up
+operations.
+
 Install the systemd units using the current production checkout path:
 
 ```bash

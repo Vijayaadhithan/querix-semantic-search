@@ -10,10 +10,15 @@ from search.bm25 import PersistentBM25Index
 from tenants.gainr.compatibility import GainrCompatibilityService
 from search.reranker import SharedReranker
 from search.engine import ProductSearchEngine
-from core.settings import API_TENANT_ENGINE_CACHE_SIZE
+from core.settings import (
+    API_TENANT_ENGINE_CACHE_SIZE,
+    SEARCH_ANALYTICS_DELIVERY_MODE,
+    SEARCH_ANALYTICS_SPOOL_PATH,
+)
 from core.tenant_config import TenantProfile, TenantRegistry
 from search.policy_registry import build_search_policy
 from storage.search_analytics import MySQLSearchAnalyticsStore
+from storage.search_analytics_spool import SQLiteSearchAnalyticsSpoolStore
 from storage.usage import MonthlyUsageStore
 from storage.vector import get_tenant_vector_collection
 
@@ -220,19 +225,24 @@ class TenantServicePool:
                 self.shared_cache,
                 self.shared_reranker,
             )
-        analytics_store = (
-            MySQLSearchAnalyticsStore(
-                profile.database,
-                company_id=profile.company_id,
-                search_history_table=(
-                    profile.analytics.search_history_table
-                ),
-                api_usage_table=profile.analytics.api_usage_table,
-                queue_capacity=profile.analytics.queue_capacity,
-            )
-            if profile.analytics.enabled
-            else None
-        )
+        analytics_store = None
+        if profile.analytics.enabled:
+            if SEARCH_ANALYTICS_DELIVERY_MODE == "daily_spool":
+                analytics_store = SQLiteSearchAnalyticsSpoolStore(
+                    SEARCH_ANALYTICS_SPOOL_PATH,
+                    company_id=profile.company_id,
+                    queue_capacity=profile.analytics.queue_capacity,
+                )
+            else:
+                analytics_store = MySQLSearchAnalyticsStore(
+                    profile.database,
+                    company_id=profile.company_id,
+                    search_history_table=(
+                        profile.analytics.search_history_table
+                    ),
+                    api_usage_table=profile.analytics.api_usage_table,
+                    queue_capacity=profile.analytics.queue_capacity,
+                )
         service = ProductSearchService(
             engine,
             company_id=profile.company_id,

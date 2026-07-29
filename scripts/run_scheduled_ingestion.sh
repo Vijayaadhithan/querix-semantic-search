@@ -6,6 +6,8 @@ COMPANY_ID="${COMPANY_ID:-gainr}"
 LOCK_FILE="${LOCK_FILE:-/tmp/semantic-search-ingest-${COMPANY_ID}.lock}"
 WARMUP_LOCK_FILE="${WARMUP_LOCK_FILE:-/tmp/semantic-search-warmup-${COMPANY_ID}.lock}"
 CONTAINER_NAME="${INGEST_CONTAINER_NAME:-semantic-search-ingest-${COMPANY_ID}}"
+RUN_ANALYTICS_FLUSH="${RUN_ANALYTICS_FLUSH:-true}"
+ANALYTICS_BATCH_SIZE="${ANALYTICS_BATCH_SIZE:-500}"
 
 cd "$PROJECT_DIR"
 # Ingestion has priority over the lightweight hourly job. If a warm-up is
@@ -35,6 +37,16 @@ if docker container inspect "$CONTAINER_NAME" >/dev/null 2>&1; then
   exit 1
 fi
 trap cleanup_container EXIT TERM INT
+
+if [[ "$RUN_ANALYTICS_FLUSH" == "true" ]]; then
+  echo "Uploading pending search analytics for ${COMPANY_ID}."
+  if ! docker compose run --rm --no-deps api \
+    python scripts/flush_search_analytics.py \
+      --company "$COMPANY_ID" \
+      --batch-size "$ANALYTICS_BATCH_SIZE"; then
+    echo "Search analytics upload failed; local rows retained for retry." >&2
+  fi
+fi
 
 echo "Starting incremental ingestion for ${COMPANY_ID} at $(date --iso-8601=seconds)."
 docker compose run --rm --name "$CONTAINER_NAME" api python -m cli.ingest \
