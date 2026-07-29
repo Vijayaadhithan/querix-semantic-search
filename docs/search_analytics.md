@@ -5,14 +5,14 @@ tenant profile `analytics` section. Gainr enables this feature and stores two
 tables in its configured company database:
 
 - `semantic_search_history` is the tenant-facing table. It stores only the
-  normalized query, high-level execution path, result counts, status, final
-  end-to-end search latency, aggregate API calls, aggregate token counts, and
-  UTC timestamp. `request_id` is retained solely for idempotent delivery and
-  correlation.
-- `semantic_search_api_usage` is the operator-facing table. It stores the
-  planner, embedding, and reranker attempts associated with a request,
-  including company, provider, model, operation, attempt status, per-attempt
-  duration, API-call count, provider-reported tokens, and failure reason.
+  normalized query and UTC timestamp. `id` is its table key and `request_id`
+  is retained solely for idempotent delivery and correlation.
+- `semantic_search_api_usage` is the operator-facing table, with one row per
+  search request. It stores company, execution path, result counts, status,
+  final end-to-end latency, aggregate API calls, aggregate token counts, and
+  UTC timestamp. Planner, embedding, and reranker attempts—including
+  provider, model, per-attempt tokens/duration, and failure reason—are
+  preserved in `attempts_json`.
 
 The tables deliberately do not store API keys, authorization headers, IP
 addresses, user IDs, query hashes, route reasons, resolved filters, or product
@@ -70,33 +70,27 @@ SELECT
     SUM(api_call_count) AS external_api_calls,
     SUM(total_tokens) AS total_tokens,
     ROUND(AVG(duration_ms), 1) AS average_latency_ms
-FROM semantic_search_history
+FROM semantic_search_api_usage
 GROUP BY DATE(created_at), execution_path
 ORDER BY search_date DESC, execution_path;
 ```
 
-Example provider usage:
+Example tenant search history:
 
 ```sql
 SELECT
-    DATE(created_at) AS usage_date,
-    provider,
-    model,
-    operation,
-    status,
-    SUM(api_calls) AS api_calls,
-    SUM(total_tokens) AS total_tokens
-FROM semantic_search_api_usage
-GROUP BY DATE(created_at), provider, model, operation, status
-ORDER BY usage_date DESC, provider, operation;
+    id,
+    query_text,
+    created_at
+FROM semantic_search_history
+ORDER BY created_at DESC;
 ```
 
-Each history row represents one incoming search request, so `COUNT(*)` is the
-incoming request count. `SUM(api_call_count)` is the number of downstream
-planner, embedding, and reranker calls. Its `duration_ms` is the final
-end-to-end API latency measured by the Gainr compatibility endpoint. The
-operator table retains every provider attempt and its provider-reported token
-counts; its `duration_ms` is only that attempt's elapsed time. Attempt
-durations can overlap and must not be summed to infer endpoint latency. Ollama
+Each internal usage row represents one incoming search request, so `COUNT(*)`
+is the request count and `SUM(api_call_count)` is the number of downstream
+planner, embedding, and reranker calls. Its top-level `duration_ms` is the
+final end-to-end API latency measured by the Gainr compatibility endpoint.
+Durations inside `attempts_json` apply only to individual provider attempts;
+they can overlap and must not be summed to infer endpoint latency. Ollama
 embedding calls are counted even though its embedding endpoint does not report
 token usage.

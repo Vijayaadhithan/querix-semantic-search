@@ -172,23 +172,25 @@ def test_search_analytics_writer_inserts_parent_and_provider_rows(monkeypatch):
     )
     assert parent_params[0] == "a" * 32
     assert parent_params[1] == "Family Car"
+    assert "execution_path" not in history_query
+    assert "result_count" not in history_query
+    assert "total_tokens" not in history_query
+    assert "duration_ms" not in history_query
     assert "user_id" not in history_query
     assert "query_hash" not in history_query
     assert "route_reason" not in history_query
     assert "filters_json" not in history_query
-    usage_rows = connection.cursor_instance.executemany_calls[0][1]
-    assert usage_rows[0][0:3] == ("a" * 32, "gainr", 1)
-    assert usage_rows[0][3:6] == (
-        "groq",
-        "openai/gpt-oss-20b",
-        "query_planning",
-    )
+    usage_query, usage_params = connection.cursor_instance.execute_calls[1]
+    assert usage_params[0:3] == ("a" * 32, "gainr", "semantic")
+    attempts = json.loads(usage_params[12])
+    assert attempts[0]["attempt_number"] == 1
+    assert attempts[0]["provider"] == "groq"
+    assert attempts[0]["model"] == "openai/gpt-oss-20b"
+    assert attempts[0]["operation"] == "query_planning"
     assert "ON DUPLICATE KEY UPDATE" in (
         connection.cursor_instance.execute_calls[0][0]
     )
-    assert "ON DUPLICATE KEY UPDATE" in (
-        connection.cursor_instance.executemany_calls[0][0]
-    )
+    assert "ON DUPLICATE KEY UPDATE" in usage_query
 
 
 def spool_event(request_id="b" * 32, query="family bike"):

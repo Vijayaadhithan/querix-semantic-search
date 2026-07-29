@@ -41,6 +41,7 @@ def main() -> None:
 
     create_search_analytics_schema(
         profile.database,
+        company_id=profile.company_id,
         search_history_table=profile.analytics.search_history_table,
         api_usage_table=profile.analytics.api_usage_table,
     )

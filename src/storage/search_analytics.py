@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import queue
 import threading
@@ -91,6 +92,7 @@ class SearchAnalyticsStore(Protocol):
 def create_search_analytics_schema(
     config: MySQLRuntimeConfig,
     *,
+    company_id: str,
     search_history_table: str,
     api_usage_table: str,
 ) -> None:
@@ -109,16 +111,6 @@ def create_search_analytics_schema(
                     request_id CHAR(32) CHARACTER SET ascii
                         COLLATE ascii_bin NOT NULL,
                     query_text TEXT NOT NULL,
-                    execution_path VARCHAR(32) NOT NULL,
-                    result_count INT UNSIGNED NOT NULL DEFAULT 0,
-                    total_results INT UNSIGNED NOT NULL DEFAULT 0,
-                    status VARCHAR(32) NOT NULL DEFAULT 'success',
-                    api_call_count INT UNSIGNED NOT NULL DEFAULT 0,
-                    input_tokens BIGINT UNSIGNED NOT NULL DEFAULT 0,
-                    output_tokens BIGINT UNSIGNED NOT NULL DEFAULT 0,
-                    thought_tokens BIGINT UNSIGNED NOT NULL DEFAULT 0,
-                    total_tokens BIGINT UNSIGNED NOT NULL DEFAULT 0,
-                    duration_ms DECIMAL(14, 3) NOT NULL DEFAULT 0,
                     created_at DATETIME(6) NOT NULL,
                     PRIMARY KEY (id),
                     UNIQUE KEY uq_search_request_id (request_id),
@@ -133,28 +125,23 @@ def create_search_analytics_schema(
                     request_id CHAR(32) CHARACTER SET ascii
                         COLLATE ascii_bin NOT NULL,
                     company_id VARCHAR(63) NOT NULL,
-                    attempt_number SMALLINT UNSIGNED NOT NULL,
-                    provider VARCHAR(64) NOT NULL,
-                    model VARCHAR(191) NOT NULL,
-                    operation VARCHAR(64) NOT NULL,
+                    execution_path VARCHAR(32) NOT NULL,
+                    result_count INT UNSIGNED NOT NULL DEFAULT 0,
+                    total_results INT UNSIGNED NOT NULL DEFAULT 0,
                     status VARCHAR(32) NOT NULL DEFAULT 'success',
-                    api_calls SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+                    api_call_count INT UNSIGNED NOT NULL DEFAULT 0,
                     input_tokens BIGINT UNSIGNED NOT NULL DEFAULT 0,
                     output_tokens BIGINT UNSIGNED NOT NULL DEFAULT 0,
                     thought_tokens BIGINT UNSIGNED NOT NULL DEFAULT 0,
                     total_tokens BIGINT UNSIGNED NOT NULL DEFAULT 0,
                     duration_ms DECIMAL(14, 3) NOT NULL DEFAULT 0,
-                    failure_reason VARCHAR(255) NOT NULL DEFAULT '',
+                    attempts_json LONGTEXT NOT NULL,
                     created_at DATETIME(6) NOT NULL,
                     PRIMARY KEY (id),
-                    UNIQUE KEY uq_api_usage_request_attempt (
-                        request_id,
-                        attempt_number
-                    ),
+                    UNIQUE KEY uq_api_usage_request (request_id),
                     KEY idx_usage_company_created (company_id, created_at),
-                    KEY idx_usage_provider_created (
-                        provider,
-                        operation,
+                    KEY idx_usage_execution_created (
+                        execution_path,
                         created_at
                     )
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
@@ -162,6 +149,7 @@ def create_search_analytics_schema(
             )
             _migrate_search_analytics_schema(
                 cursor,
+                company_id=company_id,
                 search_history_table=search_history_table,
                 api_usage_table=api_usage_table,
             )
@@ -250,32 +238,33 @@ def _add_index_if_missing(
 def _migrate_search_analytics_schema(
     cursor,
     *,
+    company_id: str,
     search_history_table: str,
     api_usage_table: str,
 ) -> None:
-    """Reduce tenant history fields and detach internal usage rows safely."""
+    """Move all operational metrics out of tenant-visible search history."""
     history = quote_mysql_identifier(search_history_table)
     usage = quote_mysql_identifier(api_usage_table)
     usage_columns = _table_columns(cursor, api_usage_table)
 
-    if "request_id" not in usage_columns:
-        cursor.execute(
-            f"""
-            ALTER TABLE {usage}
-            ADD COLUMN request_id CHAR(32) CHARACTER SET ascii
-                COLLATE ascii_bin NULL AFTER id
-            """
-        )
-    if "company_id" not in usage_columns:
-        cursor.execute(
-            f"""
-            ALTER TABLE {usage}
-            ADD COLUMN company_id VARCHAR(63) NULL AFTER request_id
-            """
-        )
-
-    usage_columns = _table_columns(cursor, api_usage_table)
+    # Version 1 usage rows linked to the tenant table by numeric foreign key.
+    # Add portable request/company keys before collapsing those rows.
     if "search_history_id" in usage_columns:
+        if "request_id" not in usage_columns:
+            cursor.execute(
+                f"""
+                ALTER TABLE {usage}
+                ADD COLUMN request_id CHAR(32) CHARACTER SET ascii
+                    COLLATE ascii_bin NULL AFTER id
+                """
+            )
+        if "company_id" not in usage_columns:
+            cursor.execute(
+                f"""
+                ALTER TABLE {usage}
+                ADD COLUMN company_id VARCHAR(63) NULL AFTER request_id
+                """
+            )
         cursor.execute(
             f"""
             UPDATE {usage} AS api_usage
@@ -307,72 +296,180 @@ def _migrate_search_analytics_schema(
                 "Cannot migrate API usage rows with missing search history"
             )
 
+    usage_columns = _table_columns(cursor, api_usage_table)
+    # Versions 1 and 2 stored one row per provider attempt. Version 3 stores
+    # one internal row per search, preserving attempts as JSON and keeping
+    # request totals non-duplicated and easy to aggregate.
+    if "attempt_number" in usage_columns:
         cursor.execute(
+            f"""
+            SELECT COUNT(*) AS orphan_count
+            FROM {usage} AS api_usage
+            LEFT JOIN {history} AS search_history
+                ON search_history.request_id = api_usage.request_id
+            WHERE search_history.id IS NULL
             """
-            SELECT constraint_name
-            FROM information_schema.key_column_usage
-            WHERE table_schema = DATABASE()
-              AND table_name = %s
-              AND column_name = 'search_history_id'
-              AND referenced_table_name IS NOT NULL
-            """,
-            (api_usage_table,),
         )
-        for row in cursor.fetchall():
-            constraint_name = str(
-                row.get("constraint_name")
-                or row.get("CONSTRAINT_NAME")
-                or next(iter(row.values()))
+        row = cursor.fetchone()
+        orphan_count = int(
+            row.get("orphan_count")
+            or row.get("ORPHAN_COUNT")
+            or next(iter(row.values()))
+            or 0
+        )
+        if orphan_count:
+            raise RuntimeError(
+                "Cannot migrate orphaned internal API usage rows"
             )
-            cursor.execute(
-                f"ALTER TABLE {usage} DROP FOREIGN KEY "
-                f"{quote_mysql_identifier(constraint_name)}"
-            )
-        _drop_indexes_for_columns(
-            cursor,
-            table_name=api_usage_table,
-            columns={"search_history_id"},
+
+        summary_table_name = (
+            f"{api_usage_table[:42]}_request_summary_v3"
+        )
+        backup_table_name = f"{api_usage_table[:47]}_pre_v3"
+        summary = quote_mysql_identifier(summary_table_name)
+        backup = quote_mysql_identifier(backup_table_name)
+        cursor.execute(f"DROP TABLE IF EXISTS {summary}")
+        cursor.execute(f"DROP TABLE IF EXISTS {backup}")
+        cursor.execute(
+            f"""
+            CREATE TABLE {summary} (
+                id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+                request_id CHAR(32) CHARACTER SET ascii
+                    COLLATE ascii_bin NOT NULL,
+                company_id VARCHAR(63) NOT NULL,
+                execution_path VARCHAR(32) NOT NULL,
+                result_count INT UNSIGNED NOT NULL DEFAULT 0,
+                total_results INT UNSIGNED NOT NULL DEFAULT 0,
+                status VARCHAR(32) NOT NULL DEFAULT 'success',
+                api_call_count INT UNSIGNED NOT NULL DEFAULT 0,
+                input_tokens BIGINT UNSIGNED NOT NULL DEFAULT 0,
+                output_tokens BIGINT UNSIGNED NOT NULL DEFAULT 0,
+                thought_tokens BIGINT UNSIGNED NOT NULL DEFAULT 0,
+                total_tokens BIGINT UNSIGNED NOT NULL DEFAULT 0,
+                duration_ms DECIMAL(14, 3) NOT NULL DEFAULT 0,
+                attempts_json LONGTEXT NOT NULL,
+                created_at DATETIME(6) NOT NULL,
+                PRIMARY KEY (id),
+                UNIQUE KEY uq_api_usage_request (request_id),
+                KEY idx_usage_company_created (company_id, created_at),
+                KEY idx_usage_execution_created (
+                    execution_path,
+                    created_at
+                )
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            """
         )
         cursor.execute(
             f"""
-            ALTER TABLE {usage}
-            MODIFY COLUMN request_id CHAR(32) CHARACTER SET ascii
-                COLLATE ascii_bin NOT NULL,
-            MODIFY COLUMN company_id VARCHAR(63) NOT NULL,
-            DROP COLUMN search_history_id
+            INSERT INTO {summary} (
+                request_id,
+                company_id,
+                execution_path,
+                result_count,
+                total_results,
+                status,
+                api_call_count,
+                input_tokens,
+                output_tokens,
+                thought_tokens,
+                total_tokens,
+                duration_ms,
+                attempts_json,
+                created_at
+            )
+            SELECT
+                search_history.request_id,
+                COALESCE(MAX(api_usage.company_id), %s),
+                search_history.execution_path,
+                search_history.result_count,
+                search_history.total_results,
+                search_history.status,
+                search_history.api_call_count,
+                search_history.input_tokens,
+                search_history.output_tokens,
+                search_history.thought_tokens,
+                search_history.total_tokens,
+                search_history.duration_ms,
+                CASE
+                    WHEN COUNT(api_usage.id) = 0 THEN JSON_ARRAY()
+                    ELSE JSON_ARRAYAGG(
+                        JSON_OBJECT(
+                            'attempt_number',
+                                api_usage.attempt_number,
+                            'provider', api_usage.provider,
+                            'model', api_usage.model,
+                            'operation', api_usage.operation,
+                            'status', api_usage.status,
+                            'api_calls', api_usage.api_calls,
+                            'input_tokens', api_usage.input_tokens,
+                            'output_tokens', api_usage.output_tokens,
+                            'thought_tokens', api_usage.thought_tokens,
+                            'total_tokens', api_usage.total_tokens,
+                            'duration_ms', api_usage.duration_ms,
+                            'failure_reason',
+                                api_usage.failure_reason
+                        )
+                        ORDER BY api_usage.attempt_number
+                    )
+                END,
+                search_history.created_at
+            FROM {history} AS search_history
+            LEFT JOIN {usage} AS api_usage
+                ON api_usage.request_id = search_history.request_id
+            GROUP BY
+                search_history.id,
+                search_history.request_id,
+                search_history.execution_path,
+                search_history.result_count,
+                search_history.total_results,
+                search_history.status,
+                search_history.api_call_count,
+                search_history.input_tokens,
+                search_history.output_tokens,
+                search_history.thought_tokens,
+                search_history.total_tokens,
+                search_history.duration_ms,
+                search_history.created_at
+            """,
+            ((company_id or "unknown")[:63],),
+        )
+        cursor.execute(
+            f"""
+            SELECT
+                (SELECT COUNT(*) FROM {history}) AS history_count,
+                (SELECT COUNT(*) FROM {summary}) AS summary_count
             """
         )
+        row = cursor.fetchone()
+        history_count = int(
+            row.get("history_count")
+            or row.get("HISTORY_COUNT")
+            or 0
+        )
+        summary_count = int(
+            row.get("summary_count")
+            or row.get("SUMMARY_COUNT")
+            or 0
+        )
+        if summary_count != history_count:
+            raise RuntimeError(
+                "Internal API usage summary count does not match history"
+            )
+        cursor.execute(
+            f"""
+            RENAME TABLE
+                {usage} TO {backup},
+                {summary} TO {usage}
+            """
+        )
+        cursor.execute(f"DROP TABLE {backup}")
 
-    _add_index_if_missing(
-        cursor,
-        table_name=api_usage_table,
-        index_name="uq_api_usage_request_attempt",
-        definition=(
-            "UNIQUE KEY uq_api_usage_request_attempt "
-            "(request_id, attempt_number)"
-        ),
-    )
-    _add_index_if_missing(
-        cursor,
-        table_name=api_usage_table,
-        index_name="idx_usage_company_created",
-        definition=(
-            "KEY idx_usage_company_created (company_id, created_at)"
-        ),
-    )
-
-    tenant_only_columns = {
-        "company_id",
-        "user_id",
-        "query_hash",
-        "route_reason",
-        "page_number",
-        "filters_json",
-        "result_cache_hit",
-        "plan_cache_hit",
-    }
+    # The tenant receives only the query and its timestamp. request_id remains
+    # as the idempotency/correlation key; every other field is internal.
     history_columns = _table_columns(cursor, search_history_table)
-    obsolete_columns = tenant_only_columns.intersection(history_columns)
+    obsolete_columns = history_columns.difference(
+        {"id", "request_id", "query_text", "created_at"}
+    )
     if obsolete_columns:
         _drop_indexes_for_columns(
             cursor,
@@ -405,6 +502,12 @@ def search_analytics_schema_status(
             "id",
             "request_id",
             "query_text",
+            "created_at",
+        },
+        api_usage_table: {
+            "id",
+            "request_id",
+            "company_id",
             "execution_path",
             "result_count",
             "total_results",
@@ -415,24 +518,7 @@ def search_analytics_schema_status(
             "thought_tokens",
             "total_tokens",
             "duration_ms",
-            "created_at",
-        },
-        api_usage_table: {
-            "id",
-            "request_id",
-            "company_id",
-            "attempt_number",
-            "provider",
-            "model",
-            "operation",
-            "status",
-            "api_calls",
-            "input_tokens",
-            "output_tokens",
-            "thought_tokens",
-            "total_tokens",
-            "duration_ms",
-            "failure_reason",
+            "attempts_json",
             "created_at",
         },
     }
@@ -490,6 +576,53 @@ def write_search_analytics_events(
                     INSERT INTO {history} (
                         request_id,
                         query_text,
+                        created_at
+                    )
+                    VALUES (%s, %s, %s)
+                    ON DUPLICATE KEY UPDATE
+                        id = LAST_INSERT_ID(id)
+                    """,
+                    (
+                        event.request_id[:32],
+                        normalized_query[:1000],
+                        created_at,
+                    ),
+                )
+                attempts_json = json.dumps(
+                    [
+                        {
+                            "attempt_number": attempt_number,
+                            "provider": item.provider[:64],
+                            "model": item.model[:191],
+                            "operation": item.operation[:64],
+                            "status": item.status[:32],
+                            "api_calls": max(int(item.api_calls), 0),
+                            "input_tokens": max(int(item.input_tokens), 0),
+                            "output_tokens": max(int(item.output_tokens), 0),
+                            "thought_tokens": max(
+                                int(item.thought_tokens),
+                                0,
+                            ),
+                            "total_tokens": max(int(item.total_tokens), 0),
+                            "duration_ms": max(
+                                float(item.duration_ms),
+                                0.0,
+                            ),
+                            "failure_reason": item.failure_reason[:255],
+                        }
+                        for attempt_number, item in enumerate(
+                            event.api_usage,
+                            start=1,
+                        )
+                    ],
+                    separators=(",", ":"),
+                    ensure_ascii=False,
+                )
+                cursor.execute(
+                    f"""
+                    INSERT INTO {usage} (
+                        request_id,
+                        company_id,
                         execution_path,
                         result_count,
                         total_results,
@@ -500,18 +633,31 @@ def write_search_analytics_events(
                         thought_tokens,
                         total_tokens,
                         duration_ms,
+                        attempts_json,
                         created_at
                     )
                     VALUES (
                         %s, %s, %s, %s, %s, %s, %s,
-                        %s, %s, %s, %s, %s, %s
+                        %s, %s, %s, %s, %s, %s, %s
                     )
                     ON DUPLICATE KEY UPDATE
-                        id = LAST_INSERT_ID(id)
+                        company_id = VALUES(company_id),
+                        execution_path = VALUES(execution_path),
+                        result_count = VALUES(result_count),
+                        total_results = VALUES(total_results),
+                        status = VALUES(status),
+                        api_call_count = VALUES(api_call_count),
+                        input_tokens = VALUES(input_tokens),
+                        output_tokens = VALUES(output_tokens),
+                        thought_tokens = VALUES(thought_tokens),
+                        total_tokens = VALUES(total_tokens),
+                        duration_ms = VALUES(duration_ms),
+                        attempts_json = VALUES(attempts_json),
+                        created_at = VALUES(created_at)
                     """,
                     (
                         event.request_id[:32],
-                        normalized_query[:1000],
+                        event.company_id[:63],
                         event.execution_path[:32],
                         max(int(event.result_count), 0),
                         max(int(event.total_results), 0),
@@ -522,72 +668,10 @@ def write_search_analytics_events(
                         event.thought_tokens,
                         event.total_tokens,
                         max(float(event.duration_ms), 0.0),
+                        attempts_json,
                         created_at,
                     ),
                 )
-                if event.api_usage:
-                    cursor.executemany(
-                        f"""
-                        INSERT INTO {usage} (
-                            request_id,
-                            company_id,
-                            attempt_number,
-                            provider,
-                            model,
-                            operation,
-                            status,
-                            api_calls,
-                            input_tokens,
-                            output_tokens,
-                            thought_tokens,
-                            total_tokens,
-                            duration_ms,
-                            failure_reason,
-                            created_at
-                        )
-                        VALUES (
-                            %s, %s, %s, %s, %s, %s, %s,
-                            %s, %s, %s, %s, %s, %s, %s,
-                            %s
-                        )
-                        ON DUPLICATE KEY UPDATE
-                            provider = VALUES(provider),
-                            model = VALUES(model),
-                            operation = VALUES(operation),
-                            status = VALUES(status),
-                            api_calls = VALUES(api_calls),
-                            input_tokens = VALUES(input_tokens),
-                            output_tokens = VALUES(output_tokens),
-                            thought_tokens = VALUES(thought_tokens),
-                            total_tokens = VALUES(total_tokens),
-                            duration_ms = VALUES(duration_ms),
-                            failure_reason = VALUES(failure_reason),
-                            created_at = VALUES(created_at)
-                        """,
-                        [
-                            (
-                                event.request_id[:32],
-                                event.company_id[:63],
-                                attempt_number,
-                                item.provider[:64],
-                                item.model[:191],
-                                item.operation[:64],
-                                item.status[:32],
-                                max(int(item.api_calls), 0),
-                                max(int(item.input_tokens), 0),
-                                max(int(item.output_tokens), 0),
-                                max(int(item.thought_tokens), 0),
-                                max(int(item.total_tokens), 0),
-                                max(float(item.duration_ms), 0.0),
-                                item.failure_reason[:255],
-                                created_at,
-                            )
-                            for attempt_number, item in enumerate(
-                                event.api_usage,
-                                start=1,
-                            )
-                        ],
-                    )
         connection.commit()
     except Exception:
         connection.rollback()
