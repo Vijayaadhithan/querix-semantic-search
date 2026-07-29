@@ -150,11 +150,11 @@ storage:
     table: gainr_search_vectors
     # Serve the reduced-payload SQL path after production shadow verification.
     query_mode: optimized
-    # Block API readiness until the vector heap and HNSW index have been read
-    # into the reclaimable host filesystem cache. This avoids duplicating the
-    # full working set in PostgreSQL's fixed shared-buffer allocation.
+    # Block API readiness until the vector heap and HNSW index have been loaded
+    # into PostgreSQL's fixed buffer pool. Broad HNSW queries otherwise pay
+    # repeated buffer promotion costs after idle periods.
     prewarm_on_startup: true
-    prewarm_mode: read
+    prewarm_mode: buffer
     hnsw:
       # HNSW is the pgvector ANN index. Higher ef_search improves recall but
       # costs CPU per query.

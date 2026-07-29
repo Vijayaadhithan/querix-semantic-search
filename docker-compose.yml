@@ -46,7 +46,7 @@ services:
     command:
       - postgres
       - -c
-      - shared_buffers=1GB
+      - shared_buffers=2GB
       - -c
       - effective_cache_size=5GB
     env_file:
@@ -65,9 +65,9 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
-    # Keep PostgreSQL's fixed buffer pool bounded. Gainr warms its larger
-    # vector working set through the reclaimable host filesystem cache, which
-    # avoids retaining a second full copy in PostgreSQL shared memory.
+    # Keep the HNSW index and its hottest heap pages in PostgreSQL's fixed
+    # buffer pool. The production host has enough headroom for this allocation
+    # while retaining a larger reclaimable filesystem cache.
     mem_limit: 4g
     logging:
       driver: json-file
