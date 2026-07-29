@@ -1,4 +1,6 @@
 from contextlib import contextmanager
+import threading
+import time
 
 import pytest
 
@@ -632,6 +634,67 @@ def test_ranked_page_query_preserves_order_total_and_relations(
     assert "ORDER BY FIELD(sr.id" in executions[0][0]
     assert executions[0][1] == (456, "1", 2, 1, 2, 1, 20, 0)
     assert executions[1][1] == (2, 1)
+
+
+def test_pooled_relation_hydration_runs_independent_queries_concurrently(
+    tmp_path,
+):
+    active = 0
+    maximum_active = 0
+    lock = threading.Lock()
+
+    class Cursor:
+        rows = []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def execute(self, sql, _params):
+            nonlocal active, maximum_active
+            with lock:
+                active += 1
+                maximum_active = max(maximum_active, active)
+            time.sleep(0.02)
+            with lock:
+                active -= 1
+            if "FROM `ads_attributes`" in sql:
+                self.rows = [
+                    {"ads_id": 2, "attribute_id": 959, "value": "hourly"}
+                ]
+            elif "service_ad_count" in sql:
+                self.rows = [{"user_id": 7, "service_ad_count": 3}]
+            else:
+                self.rows = [{"id": 7, "name": "Renter"}]
+
+        def fetchall(self):
+            return self.rows
+
+    class Connection:
+        def cursor(self):
+            return Cursor()
+
+    class Pool:
+        @contextmanager
+        def connection(self):
+            yield Connection()
+
+    repository = GainrDatabaseRepository(
+        profile(tmp_path),
+        database_pool=Pool(),
+    )
+    rows = [{"id": 2, "user_id": 7}]
+
+    repository._attach_attributes(rows)
+
+    assert maximum_active >= 2
+    assert rows[0]["__ads_attributes"] == [
+        {"ads_id": 2, "attribute_id": 959, "value": "hourly"}
+    ]
+    assert rows[0]["service_ad_count"] == 3
+    assert rows[0]["__user"] == {"id": 7, "name": "Renter"}
 
 
 def test_public_filter_result_matches_gainr_response_envelope(tmp_path):

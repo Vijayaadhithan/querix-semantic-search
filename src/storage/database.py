@@ -38,6 +38,8 @@ DatabaseRuntimeConfig: TypeAlias = MySQLRuntimeConfig | PostgresRuntimeConfig
 class DatabaseConnectionPool:
     """Small bounded synchronous pool shared by one tenant search engine."""
 
+    MYSQL_VALIDATION_INTERVAL_SECONDS = 30.0
+
     def __init__(self, config: DatabaseRuntimeConfig):
         self.config = config
         self.min_size = config.pool_min_size
@@ -47,6 +49,7 @@ class DatabaseConnectionPool:
         self._lock = threading.Lock()
         self._created = 0
         self._closed = False
+        self._last_validated: dict[int, float] = {}
         for _ in range(self.min_size):
             self._idle.put(self._create_reserved())
 
@@ -63,12 +66,24 @@ class DatabaseConnectionPool:
 
     def _new_connection(self):
         if isinstance(self.config, PostgresRuntimeConfig):
-            return postgres_connection(self.config, dict_rows=True)
-        pymysql = require_pymysql()
-        return mysql_connection(
-            cursorclass=pymysql.cursors.DictCursor,
-            config=self.config,
-        )
+            connection = postgres_connection(self.config, dict_rows=True)
+        else:
+            pymysql = require_pymysql()
+            connection = mysql_connection(
+                cursorclass=pymysql.cursors.DictCursor,
+                config=self.config,
+            )
+        self._mark_validated(connection)
+        return connection
+
+    def _mark_validated(self, connection) -> None:
+        with self._lock:
+            self._last_validated[id(connection)] = time.monotonic()
+
+    def _locally_open(self, connection) -> bool:
+        if isinstance(self.config, PostgresRuntimeConfig):
+            return not connection.closed and not connection.broken
+        return bool(connection.open)
 
     def _create_reserved(self):
         if not self._reserve():
@@ -81,10 +96,23 @@ class DatabaseConnectionPool:
 
     def _usable(self, connection) -> bool:
         try:
+            if not self._locally_open(connection):
+                return False
             if isinstance(self.config, PostgresRuntimeConfig):
-                return not connection.closed and not connection.broken
+                return True
+            with self._lock:
+                last_validated = self._last_validated.get(
+                    id(connection),
+                    0.0,
+                )
+            if (
+                time.monotonic() - last_validated
+                < self.MYSQL_VALIDATION_INTERVAL_SECONDS
+            ):
+                return True
             connection.ping(reconnect=False)
-            return bool(connection.open)
+            self._mark_validated(connection)
+            return True
         except Exception:
             return False
 
@@ -92,6 +120,8 @@ class DatabaseConnectionPool:
         try:
             connection.close()
         finally:
+            with self._lock:
+                self._last_validated.pop(id(connection), None)
             self._unreserve()
 
     def _acquire(self):
@@ -130,9 +160,13 @@ class DatabaseConnectionPool:
             self._discard(connection)
             raise
         else:
-            if self._closed or not self._usable(connection):
+            if self._closed or not self._locally_open(connection):
                 self._discard(connection)
             else:
+                # A successful checkout is stronger evidence of a live
+                # connection than another remote ping. Mark it healthy and
+                # validate again only after it has actually been idle.
+                self._mark_validated(connection)
                 self._idle.put(connection)
 
     def close(self) -> None:

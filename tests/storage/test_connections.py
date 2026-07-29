@@ -141,6 +141,42 @@ def test_database_pool_reuses_connections_and_enforces_bound(monkeypatch):
     assert first.open is False
 
 
+def test_mysql_pool_validates_only_after_an_idle_interval(monkeypatch):
+    now = [100.0]
+    ping_calls = []
+
+    class FakeConnection:
+        open = True
+
+        def ping(self, reconnect=False):
+            ping_calls.append(reconnect)
+
+        def close(self):
+            self.open = False
+
+    config = mysql_config(pool_max_size=1)
+    pool = database_store.DatabaseConnectionPool(config)
+    connection = FakeConnection()
+    monkeypatch.setattr(pool, "_new_connection", lambda: connection)
+    monkeypatch.setattr(
+        database_store.time,
+        "monotonic",
+        lambda: now[0],
+    )
+
+    with pool.connection():
+        pass
+    with pool.connection():
+        pass
+    assert ping_calls == []
+
+    now[0] += pool.MYSQL_VALIDATION_INTERVAL_SECONDS + 1
+    with pool.connection():
+        pass
+    assert ping_calls == [False]
+    pool.close()
+
+
 def test_mysql_paged_iterator_closes_connection_before_yield(monkeypatch):
     pages = [
         [{"id": 1, "embedding_content": "one"}, {"id": 2, "embedding_content": "two"}],

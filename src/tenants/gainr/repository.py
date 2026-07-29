@@ -1,4 +1,5 @@
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from typing import Any
 
@@ -306,7 +307,7 @@ class GainrDatabaseRepository:
                     (*params, page_size, offset),
                 )
                 rows = list(cursor.fetchall())
-            self._attach_attributes(rows, connection=connection)
+        self._attach_attributes(rows)
         return rows, total
 
     def hydrate_filtered(
@@ -346,7 +347,7 @@ class GainrDatabaseRepository:
                 for product_id in product_ids
                 if str(product_id) in rows_by_id
             ]
-            self._attach_attributes(ordered, connection=connection)
+        self._attach_attributes(ordered)
         return ordered
 
     def hydrate_ranked_page(
@@ -412,7 +413,7 @@ class GainrDatabaseRepository:
 
             for row in rows:
                 row.pop("__eligible_total", None)
-            self._attach_attributes(rows, connection=connection)
+        self._attach_attributes(rows)
         return rows, total
 
     def filter_product_ids(
@@ -479,72 +480,123 @@ class GainrDatabaseRepository:
                 if row.get("user_id") not in (None, "")
             ]
         )
-        try:
-            with self._connection_scope(connection) as active_connection:
-                with active_connection.cursor() as cursor:
-                    cursor.execute(
-                        f"""
-                        SELECT ads_id, attribute_id, value
-                        FROM {quote_mysql_identifier('ads_attributes')}
-                        WHERE ads_id IN ({placeholders})
-                          AND (deleted_at IS NULL OR TRIM(deleted_at) = '')
-                        ORDER BY id
-                        """,
-                        product_ids,
-                    )
-                    attributes = cursor.fetchall()
-                    if user_ids:
-                        user_placeholders = ", ".join(
-                            "%s" for _ in user_ids
-                        )
-                        cursor.execute(
-                            f"""
-                            SELECT user_id, COUNT(*) AS service_ad_count
-                            FROM {self.result_table}
-                            WHERE user_id IN ({user_placeholders})
-                              AND category_type = 2
-                              AND status = 1
-                              AND (
-                                  deleted_at IS NULL
-                                  OR TRIM(deleted_at) = ''
-                              )
-                            GROUP BY user_id
-                            """,
-                            user_ids,
-                        )
-                        service_counts = cursor.fetchall()
-        except Exception:
-            logger.exception("Gainr ad relation hydration failed")
-        if user_ids and self._users_table_available is not False:
+
+        def fetch_attributes(active_connection) -> list[dict]:
+            with active_connection.cursor() as cursor:
+                cursor.execute(
+                    f"""
+                    SELECT ads_id, attribute_id, value
+                    FROM {quote_mysql_identifier('ads_attributes')}
+                    WHERE ads_id IN ({placeholders})
+                      AND (deleted_at IS NULL OR TRIM(deleted_at) = '')
+                    ORDER BY id
+                    """,
+                    product_ids,
+                )
+                return list(cursor.fetchall())
+
+        def fetch_service_counts(active_connection) -> list[dict]:
+            if not user_ids:
+                return []
+            user_placeholders = ", ".join("%s" for _ in user_ids)
+            with active_connection.cursor() as cursor:
+                cursor.execute(
+                    f"""
+                    SELECT user_id, COUNT(*) AS service_ad_count
+                    FROM {self.result_table}
+                    WHERE user_id IN ({user_placeholders})
+                      AND category_type = 2
+                      AND status = 1
+                      AND (
+                          deleted_at IS NULL
+                          OR TRIM(deleted_at) = ''
+                      )
+                    GROUP BY user_id
+                    """,
+                    user_ids,
+                )
+                return list(cursor.fetchall())
+
+        def fetch_users(active_connection) -> list[dict]:
+            if not user_ids or self._users_table_available is False:
+                return []
             user_placeholders = ", ".join("%s" for _ in user_ids)
             selected_fields = ", ".join(
                 quote_mysql_identifier(field)
                 for field in GAINR_USER_FIELDS
             )
+            with active_connection.cursor() as cursor:
+                cursor.execute(
+                    f"""
+                    SELECT {selected_fields}
+                    FROM {self.users_table}
+                    WHERE id IN ({user_placeholders})
+                    """,
+                    user_ids,
+                )
+                return list(cursor.fetchall())
+
+        def run_with_connection(fetcher) -> list[dict]:
+            with self.connection() as active_connection:
+                return fetcher(active_connection)
+
+        if self.database_pool is not None and connection is None:
+            with ThreadPoolExecutor(
+                max_workers=3,
+                thread_name_prefix="gainr-relations",
+            ) as executor:
+                attributes_future = executor.submit(
+                    run_with_connection,
+                    fetch_attributes,
+                )
+                service_counts_future = (
+                    executor.submit(
+                        run_with_connection,
+                        fetch_service_counts,
+                    )
+                    if user_ids
+                    else None
+                )
+                users_future = (
+                    executor.submit(
+                        run_with_connection,
+                        fetch_users,
+                    )
+                    if user_ids and self._users_table_available is not False
+                    else None
+                )
+                try:
+                    attributes = attributes_future.result()
+                except Exception:
+                    logger.exception("Gainr ad attribute hydration failed")
+                if service_counts_future is not None:
+                    try:
+                        service_counts = service_counts_future.result()
+                    except Exception:
+                        logger.exception(
+                            "Gainr service count hydration failed"
+                        )
+                if users_future is not None:
+                    try:
+                        users = users_future.result()
+                        self._users_table_available = True
+                    except Exception as exc:
+                        self._handle_user_hydration_error(exc)
+        else:
             try:
                 with self._connection_scope(connection) as active_connection:
-                    with active_connection.cursor() as cursor:
-                        cursor.execute(
-                            f"""
-                            SELECT {selected_fields}
-                            FROM {self.users_table}
-                            WHERE id IN ({user_placeholders})
-                            """,
-                            user_ids,
-                        )
-                        users = list(cursor.fetchall())
-                self._users_table_available = True
-            except Exception as exc:
-                if exc.args and exc.args[0] == 1146:
-                    self._users_table_available = False
-                    logger.warning(
-                        "Gainr users table %s is missing; user fields "
-                        "will remain null until it is imported and the "
-                        "API is restarted",
-                        self.profile.compatibility.users_table,
-                    )
-                else:
-                    logger.exception("Gainr user hydration failed")
+                    attributes = fetch_attributes(active_connection)
+                    service_counts = fetch_service_counts(active_connection)
+            except Exception:
+                logger.exception("Gainr ad relation hydration failed")
+            if user_ids and self._users_table_available is not False:
+                try:
+                    with self._connection_scope(connection) as active_connection:
+                        users = fetch_users(active_connection)
+                    self._users_table_available = True
+                except Exception as exc:
+                    self._handle_user_hydration_error(exc)
+
         by_product: dict[str, list[dict]] = {}
         for attribute in attributes:
             by_product.setdefault(
@@ -570,3 +622,15 @@ class GainrDatabaseRepository:
                 0,
             )
             row["__user"] = users_by_id.get(str(row.get("user_id")))
+
+    def _handle_user_hydration_error(self, exc: Exception) -> None:
+        if exc.args and exc.args[0] == 1146:
+            self._users_table_available = False
+            logger.warning(
+                "Gainr users table %s is missing; user fields "
+                "will remain null until it is imported and the "
+                "API is restarted",
+                self.profile.compatibility.users_table,
+            )
+        else:
+            logger.exception("Gainr user hydration failed")
