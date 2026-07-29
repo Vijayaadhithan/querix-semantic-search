@@ -40,6 +40,7 @@ class MySQLRuntimeConfig:
     pool_min_size: int = 0
     pool_max_size: int = 4
     pool_timeout_seconds: float = 5.0
+    pool_validation_interval_seconds: float = 30.0
     tls_mode: str = "disable"
     tls_ca_file: str = ""
     tls_cert_file: str = ""
@@ -65,6 +66,11 @@ class MySQLRuntimeConfig:
             raise ValueError("Invalid MySQL connection pool size")
         if self.pool_timeout_seconds <= 0:
             raise ValueError("MySQL pool_timeout_seconds must be greater than zero")
+        if self.pool_validation_interval_seconds <= 0:
+            raise ValueError(
+                "MySQL pool_validation_interval_seconds must be greater "
+                "than zero"
+            )
         if self.tls_mode not in {
             "disable",
             "prefer",

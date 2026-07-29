@@ -364,6 +364,9 @@ def load_tenant_profile(path: Path) -> TenantProfile:
         pool_min_size=int(pool.get("min_size", 0)),
         pool_max_size=int(pool.get("max_size", 4)),
         pool_timeout_seconds=float(pool.get("timeout_seconds", 5)),
+        pool_validation_interval_seconds=float(
+            pool.get("validation_interval_seconds", 30)
+        ),
         tls_mode=_env_value(
             tls,
             "mode_env",

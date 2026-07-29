@@ -170,7 +170,7 @@ def test_mysql_pool_validates_only_after_an_idle_interval(monkeypatch):
         pass
     assert ping_calls == []
 
-    now[0] += pool.MYSQL_VALIDATION_INTERVAL_SECONDS + 1
+    now[0] += pool.validation_interval_seconds + 1
     with pool.connection():
         pass
     assert ping_calls == [False]

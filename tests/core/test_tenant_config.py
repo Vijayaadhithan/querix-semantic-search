@@ -41,6 +41,7 @@ database:
     min_size: 1
     max_size: 3
     timeout_seconds: 2.5
+    validation_interval_seconds: 120
   tls:
     mode: disable
     mode_env: {prefix}_DB_TLS_MODE
@@ -134,6 +135,10 @@ def test_tenant_profiles_resolve_separate_storage_and_api_keys(
     assert profiles["alpha"].database.pool_min_size == 1
     assert profiles["alpha"].database.pool_max_size == 3
     assert profiles["alpha"].database.pool_timeout_seconds == 2.5
+    assert (
+        profiles["alpha"].database.pool_validation_interval_seconds
+        == 120
+    )
     assert profiles["alpha"].database.index_namespace == "alpha_index"
     assert profiles["alpha"].database.tls_mode == "disable"
     assert profiles["alpha"].retrieval.semantic_related_tail_enabled is True

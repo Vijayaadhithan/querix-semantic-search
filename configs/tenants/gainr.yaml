@@ -124,9 +124,12 @@ database:
     write_seconds: 300
     statement_timeout_ms: 0
   pool:
-    min_size: 0
+    min_size: 4
     max_size: 4
     timeout_seconds: 5
+    # Gainr's remote MySQL wait_timeout is eight hours. Avoid adding a health
+    # ping to the first search after each one-minute Voyage pacing interval.
+    validation_interval_seconds: 300
   # Local testing uses plaintext loopback. Production must use verify-full
   # with a CA path supplied through ca_file_env.
   tls:

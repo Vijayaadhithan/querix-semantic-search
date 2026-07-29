@@ -45,6 +45,13 @@ class DatabaseConnectionPool:
         self.min_size = config.pool_min_size
         self.max_size = config.pool_max_size
         self.timeout_seconds = config.pool_timeout_seconds
+        self.validation_interval_seconds = float(
+            getattr(
+                config,
+                "pool_validation_interval_seconds",
+                self.MYSQL_VALIDATION_INTERVAL_SECONDS,
+            )
+        )
         self._idle: LifoQueue = LifoQueue(maxsize=self.max_size)
         self._lock = threading.Lock()
         self._created = 0
@@ -107,7 +114,7 @@ class DatabaseConnectionPool:
                 )
             if (
                 time.monotonic() - last_validated
-                < self.MYSQL_VALIDATION_INTERVAL_SECONDS
+                < self.validation_interval_seconds
             ):
                 return True
             connection.ping(reconnect=False)
