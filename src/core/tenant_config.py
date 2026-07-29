@@ -146,6 +146,31 @@ class TenantCompatibilityConfig:
 
 
 @dataclass(frozen=True)
+class TenantAnalyticsConfig:
+    enabled: bool = False
+    search_history_table: str = "semantic_search_history"
+    api_usage_table: str = "semantic_search_api_usage"
+    queue_capacity: int = 1000
+
+    def __post_init__(self) -> None:
+        identifier_pattern = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,62}$")
+        for name, value in (
+            ("search_history_table", self.search_history_table),
+            ("api_usage_table", self.api_usage_table),
+        ):
+            if not identifier_pattern.fullmatch(value):
+                raise ValueError(
+                    f"Analytics {name} must be a safe MySQL identifier"
+                )
+        if self.search_history_table == self.api_usage_table:
+            raise ValueError("Analytics table names must be different")
+        if self.queue_capacity <= 0 or self.queue_capacity > 10000:
+            raise ValueError(
+                "Analytics queue_capacity must be between 1 and 10000"
+            )
+
+
+@dataclass(frozen=True)
 class TenantProfile:
     company_id: str
     database: MySQLRuntimeConfig | PostgresRuntimeConfig
@@ -165,6 +190,9 @@ class TenantProfile:
     )
     compatibility: TenantCompatibilityConfig = field(
         default_factory=TenantCompatibilityConfig
+    )
+    analytics: TenantAnalyticsConfig = field(
+        default_factory=TenantAnalyticsConfig
     )
 
 
@@ -670,6 +698,31 @@ def load_tenant_profile(path: Path) -> TenantProfile:
         ),
         image_path=str(compatibility.get("image_path", "")).strip(),
     )
+    analytics = dict(raw.get("analytics", {}))
+    analytics_config = TenantAnalyticsConfig(
+        enabled=bool(analytics.get("enabled", False)),
+        search_history_table=str(
+            analytics.get(
+                "search_history_table",
+                "semantic_search_history",
+            )
+        ).strip(),
+        api_usage_table=str(
+            analytics.get(
+                "api_usage_table",
+                "semantic_search_api_usage",
+            )
+        ).strip(),
+        queue_capacity=int(analytics.get("queue_capacity", 1000)),
+    )
+    if analytics_config.enabled and not isinstance(
+        mysql,
+        MySQLRuntimeConfig,
+    ):
+        raise ValueError(
+            f"Tenant {company_id!r} enables analytics, but durable search "
+            "analytics currently requires a MySQL company database"
+        )
 
     return TenantProfile(
         company_id=company_id,
@@ -692,6 +745,7 @@ def load_tenant_profile(path: Path) -> TenantProfile:
         planner_query_aliases=planner_query_aliases,
         retrieval=retrieval_config,
         compatibility=compatibility_config,
+        analytics=analytics_config,
     )
 
 

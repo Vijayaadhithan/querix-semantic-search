@@ -8,6 +8,7 @@ READINESS_ATTEMPTS="${READINESS_ATTEMPTS:-60}"
 READINESS_INTERVAL_SECONDS="${READINESS_INTERVAL_SECONDS:-3}"
 LOCK_FILE="${LOCK_FILE:-/tmp/semantic-search-production-deploy.lock}"
 RUN_DOCTOR="${RUN_DOCTOR:-true}"
+RUN_ANALYTICS_MIGRATION="${RUN_ANALYTICS_MIGRATION:-true}"
 
 cd "$PROJECT_DIR"
 
@@ -47,6 +48,10 @@ echo "Deploying revision ${revision} for company ${COMPANY_ID}."
 
 docker compose config --quiet
 docker compose build --pull api
+if [[ "$RUN_ANALYTICS_MIGRATION" == "true" ]]; then
+  docker compose run --rm --no-deps api \
+    python scripts/migrate_search_analytics.py --company "$COMPANY_ID"
+fi
 docker compose --profile ollama up -d pgvector redis ollama
 docker compose --profile ollama up -d --no-deps --force-recreate api
 

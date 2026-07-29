@@ -13,6 +13,7 @@ from search.engine import ProductSearchEngine
 from core.settings import API_TENANT_ENGINE_CACHE_SIZE
 from core.tenant_config import TenantProfile, TenantRegistry
 from search.policy_registry import build_search_policy
+from storage.search_analytics import MySQLSearchAnalyticsStore
 from storage.usage import MonthlyUsageStore
 from storage.vector import get_tenant_vector_collection
 
@@ -219,12 +220,26 @@ class TenantServicePool:
                 self.shared_cache,
                 self.shared_reranker,
             )
+        analytics_store = (
+            MySQLSearchAnalyticsStore(
+                profile.database,
+                company_id=profile.company_id,
+                search_history_table=(
+                    profile.analytics.search_history_table
+                ),
+                api_usage_table=profile.analytics.api_usage_table,
+                queue_capacity=profile.analytics.queue_capacity,
+            )
+            if profile.analytics.enabled
+            else None
+        )
         service = ProductSearchService(
             engine,
             company_id=profile.company_id,
             public_fields=profile.payload.public_fields,
             field_mapping=profile.payload.field_mapping,
             usage_store=self.usage_store,
+            analytics_store=analytics_store,
         )
         service.reranker_load_ms = self.reranker_load_ms
         service.embedding_warmup = self.embedding_warmup

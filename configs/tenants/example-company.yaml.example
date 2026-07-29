@@ -108,3 +108,11 @@ payload:
 rate_limit:
   requests_per_minute: 60
   burst: 10
+
+# MySQL tenants can opt into durable per-search analytics. Run
+# scripts/migrate_search_analytics.py before enabling this setting.
+analytics:
+  enabled: false
+  search_history_table: semantic_search_history
+  api_usage_table: semantic_search_api_usage
+  queue_capacity: 1000

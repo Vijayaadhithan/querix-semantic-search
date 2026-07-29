@@ -25,7 +25,13 @@ from core.settings import (
     API_SEARCH_SLOT_TIMEOUT_SECONDS,
     API_TENANT_MAX_CONCURRENT_SEARCHES,
     APP_NAME,
+    EMBED_MODEL,
     RERANK_MODEL,
+)
+from storage.search_analytics import (
+    MySQLSearchAnalyticsStore,
+    SearchAnalyticsEvent,
+    SearchApiUsageEvent,
 )
 from storage.usage import MonthlyUsageStore
 
@@ -42,6 +48,7 @@ class ProductSearchService:
         public_fields: tuple[str, ...] = PUBLIC_PRODUCT_FIELDS,
         field_mapping: dict[str, str] | None = None,
         usage_store: MonthlyUsageStore | None = None,
+        analytics_store: MySQLSearchAnalyticsStore | None = None,
         max_concurrent_searches: int = API_TENANT_MAX_CONCURRENT_SEARCHES,
         search_slot_timeout_seconds: float = API_SEARCH_SLOT_TIMEOUT_SECONDS,
     ):
@@ -58,6 +65,7 @@ class ProductSearchService:
         self.public_fields = tuple(public_fields)
         self.field_mapping = dict(field_mapping or {})
         self.usage_store = usage_store
+        self.analytics_store = analytics_store
         self.search_slot_timeout_seconds = search_slot_timeout_seconds
         self._engine_lock = threading.Lock()
         self._search_slots = threading.BoundedSemaphore(
@@ -689,17 +697,26 @@ class ProductSearchService:
                 "embedding_model_load": embedding_metrics.get("load_ms", 0.0),
             }
         )
+        items = [
+            public_product(
+                product,
+                fields=self.public_fields,
+                field_mapping=self.field_mapping,
+            )
+            for product in result["products"]
+            if product_is_visible(product)
+        ]
+        self.record_search_analytics(
+            query,
+            result,
+            duration_ms=total_ms,
+            result_count=len(items),
+            total_results=len(result.get("product_ids") or items),
+            filters=result.get("resolved_filters") or {},
+        )
         return self.sessions.create(
             query=query,
-            items=[
-                public_product(
-                    product,
-                    fields=self.public_fields,
-                    field_mapping=self.field_mapping,
-                )
-                for product in result["products"]
-                if product_is_visible(product)
-            ],
+            items=items,
             interpreted_query=interpreted_query,
             applied_filters=result["resolved_filters"],
             unresolved_filters=result["unresolved_filters"],
@@ -721,7 +738,15 @@ class ProductSearchService:
                 continue
             events.append(
                 {
-                    "provider": "google",
+                    "provider": (
+                        str(attempt.get("provider"))
+                        if attempt.get("provider")
+                        else (
+                            "groq"
+                            if model.startswith("groq:")
+                            else "google"
+                        )
+                    ),
                     "model": model,
                     "operation": "query_planning",
                     "status": str(attempt.get("status") or "success"),
@@ -793,6 +818,133 @@ class ProductSearchService:
             "breakdown": events,
         }
 
+    @staticmethod
+    def _search_api_usage_events(
+        result: dict[str, Any],
+    ) -> tuple[SearchApiUsageEvent, ...]:
+        events: list[SearchApiUsageEvent] = []
+        query_metrics = result.get("query_model_metrics") or {}
+        query_attempts = query_metrics.get("attempts") or (
+            [query_metrics] if query_metrics.get("model") else []
+        )
+        for attempt in query_attempts:
+            model = str(attempt.get("model") or "")
+            if not model:
+                continue
+            reason = str(attempt.get("reason") or "")
+            provider = str(attempt.get("provider") or "")
+            if not provider:
+                provider = "groq" if model.startswith("groq:") else "google"
+            events.append(
+                SearchApiUsageEvent(
+                    provider=provider,
+                    model=model,
+                    operation="query_planning",
+                    status=str(attempt.get("status") or "success"),
+                    api_calls=0 if reason == "missing_api_key" else 1,
+                    input_tokens=int(
+                        attempt.get("input_tokens", 0) or 0
+                    ),
+                    output_tokens=int(
+                        attempt.get("output_tokens", 0) or 0
+                    ),
+                    thought_tokens=int(
+                        attempt.get("thought_tokens", 0) or 0
+                    ),
+                    total_tokens=int(
+                        attempt.get("total_tokens", 0) or 0
+                    ),
+                    duration_ms=float(
+                        attempt.get("total_ms", 0.0) or 0.0
+                    ),
+                    failure_reason=reason,
+                )
+            )
+
+        embedding = result.get("embedding_model_metrics") or {}
+        if embedding and not result.get("result_cache_hit"):
+            events.append(
+                SearchApiUsageEvent(
+                    provider="ollama",
+                    model=EMBED_MODEL,
+                    operation="embedding",
+                    status="success",
+                    api_calls=1,
+                    duration_ms=float(
+                        embedding.get("total_ms", 0.0) or 0.0
+                    ),
+                )
+            )
+
+        for attempt in result.get("reranker_attempts") or []:
+            reason = str(attempt.get("reason") or "")
+            local_rejection = (
+                "request budget exhausted" in reason
+                or "provider cooldown active" in reason
+            )
+            usage = attempt.get("usage") or {}
+            events.append(
+                SearchApiUsageEvent(
+                    provider=str(attempt.get("provider") or "unknown"),
+                    model=str(attempt.get("model") or ""),
+                    operation="reranking",
+                    status=str(attempt.get("status") or "success"),
+                    api_calls=0 if local_rejection else 1,
+                    input_tokens=int(
+                        usage.get("input_tokens", 0) or 0
+                    ),
+                    output_tokens=int(
+                        usage.get("output_tokens", 0) or 0
+                    ),
+                    thought_tokens=int(
+                        usage.get("thought_tokens", 0) or 0
+                    ),
+                    total_tokens=int(
+                        usage.get("total_tokens", 0) or 0
+                    ),
+                    duration_ms=float(
+                        attempt.get("duration_ms", 0.0) or 0.0
+                    ),
+                    failure_reason=reason,
+                )
+            )
+        return tuple(events)
+
+    def record_search_analytics(
+        self,
+        query: str,
+        result: dict[str, Any],
+        *,
+        duration_ms: float,
+        result_count: int,
+        total_results: int,
+        user_id: str | None = None,
+        page_number: int = 1,
+        filters: dict[str, Any] | None = None,
+    ) -> bool:
+        if self.analytics_store is None:
+            return False
+        query_plan = result.get("query_plan") or {}
+        event = SearchAnalyticsEvent(
+            company_id=self.company_id or "legacy",
+            user_id=user_id,
+            query_text=query,
+            execution_path=str(
+                query_plan.get("execution_path") or "unknown"
+            ),
+            route_reason=str(query_plan.get("route_reason") or ""),
+            page_number=page_number,
+            filters=filters or result.get("resolved_filters") or {},
+            result_count=result_count,
+            total_results=total_results,
+            status="success",
+            result_cache_hit=bool(result.get("result_cache_hit")),
+            plan_cache_hit=bool(result.get("plan_cache_hit")),
+            duration_ms=duration_ms,
+            api_usage=self._search_api_usage_events(result),
+        )
+        return self.analytics_store.submit(event)
+
     def usage_summary(self, month_utc: str | None = None) -> dict[str, Any]:
         if self.usage_store is None:
             raise RuntimeError("Monthly usage tracking is disabled.")
@@ -840,6 +992,8 @@ class ProductSearchService:
         )
 
     def close(self) -> None:
+        if self.analytics_store is not None:
+            self.analytics_store.close()
         close = getattr(self.engine, "close", None)
         if callable(close):
             close()

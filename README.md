@@ -11,6 +11,7 @@ A tenant-isolated semantic search service for product and classified catalogues.
 - Structured category, location, price, duration, and listing-type filters.
 - Tenant-scoped API keys, rate limits, caches, indexes, and database configuration.
 - Cursor-based search pagination and monthly usage reporting.
+- Optional durable MySQL search history and per-provider API/token analytics.
 - Redis result caching plus graceful vector, BM25, and reranker degradation.
 - Docker deployment with persistent pgvector, Redis, Ollama, and application data.
 - Gainr compatibility pagination with a ranked 20-result first page and

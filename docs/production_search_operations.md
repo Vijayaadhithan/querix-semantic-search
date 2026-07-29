@@ -157,6 +157,11 @@ curl -fsS \
   -H "X-Admin-Key: $API_ADMIN_KEY" | jq
 ```
 
+Gainr also persists per-request search history and provider-call/token detail
+to its configured MySQL database. See
+[`search_analytics.md`](search_analytics.md) for the two-table schema,
+migration command, privacy boundary, and reporting queries.
+
 Authenticated administrators can also poll a bounded, sanitized application
 log feed without server access:
 

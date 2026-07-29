@@ -343,6 +343,12 @@ class GainrCompatibilityService:
                 "total_tokens": 0,
                 "breakdown": [],
             }
+            analytics_result = {
+                **planned,
+                "result_cache_hit": False,
+                "embedding_model_metrics": {},
+                "reranker_attempts": [],
+            }
             window_limited = False
         else:
             engine_started = time.perf_counter()
@@ -438,6 +444,15 @@ class GainrCompatibilityService:
             usage_started = time.perf_counter()
             usage = self.product_search_service._record_usage(result)
             usage_ms = (time.perf_counter() - usage_started) * 1000
+            analytics_result = {
+                **result,
+                "query_model_metrics": (
+                    result.get("query_model_metrics")
+                    or planned.get("query_model_metrics")
+                    or {}
+                ),
+                "plan_cache_hit": bool(planned.get("plan_cache_hit")),
+            }
         card_mapping_started = time.perf_counter()
         cards = [self._card(row) for row in rows]
         card_mapping_ms = (
@@ -468,6 +483,19 @@ class GainrCompatibilityService:
             self.remember_search(user_id, request.searchTerm)
         recent_ms = (time.perf_counter() - recent_started) * 1000
         duration_ms = (time.perf_counter() - request_started) * 1000
+        self.product_search_service.record_search_analytics(
+            request.searchTerm,
+            analytics_result,
+            duration_ms=duration_ms,
+            result_count=len(cards),
+            total_results=total,
+            user_id=self._recent_scope(user_id),
+            page_number=request.page,
+            filters={
+                "explicit": request.filter.model_dump(mode="json"),
+                "effective": effective,
+            },
+        )
         PERFORMANCE_LOGGER.info(
             "[search:%s] step=compat_response status=complete route=%s "
             "planning_ms=%.0f engine_ms=%.0f database_ms=%.0f "

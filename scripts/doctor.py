@@ -10,6 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from storage.mysql import mysql_connection, quote_mysql_identifier
+from storage.search_analytics import search_analytics_schema_status
 from storage.postgres import (
     PostgresRuntimeConfig,
     postgres_connection,
@@ -167,6 +168,29 @@ def check_bm25(profile=None) -> bool:
     return report("BM25 index", count > 0, f"{count} indexed products")
 
 
+def check_search_analytics(profile=None) -> bool:
+    if profile is None or not profile.analytics.enabled:
+        return report("Search analytics", True, "disabled")
+    try:
+        status = search_analytics_schema_status(
+            profile.database,
+            search_history_table=profile.analytics.search_history_table,
+            api_usage_table=profile.analytics.api_usage_table,
+        )
+    except Exception as exc:
+        return report("Search analytics", False, type(exc).__name__)
+    missing = [table for table, present in status.items() if not present]
+    return report(
+        "Search analytics",
+        not missing,
+        (
+            "history and API usage tables ready"
+            if not missing
+            else "missing: " + ", ".join(missing)
+        ),
+    )
+
+
 def check_production_security(profile=None) -> list[bool]:
     config = profile.database if profile else None
     cors_ok = bool(API_CORS_ORIGINS) and "*" not in API_CORS_ORIGINS
@@ -288,6 +312,7 @@ def main() -> int:
         check_database(profile),
         check_vectors(profile),
         check_bm25(profile),
+        check_search_analytics(profile),
     ]
     if args.production:
         checks.extend(check_production_security(profile))

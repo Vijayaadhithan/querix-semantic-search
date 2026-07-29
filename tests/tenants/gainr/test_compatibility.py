@@ -217,6 +217,18 @@ def service(tmp_path, execution_path="semantic", **compatibility):
     return adapter, engine, repository
 
 
+class CaptureAnalyticsStore:
+    def __init__(self):
+        self.events = []
+
+    def submit(self, event):
+        self.events.append(event)
+        return True
+
+    def close(self):
+        pass
+
+
 def test_explicit_filters_override_only_matching_auto_filters(tmp_path):
     adapter, engine, repository = service(tmp_path)
     request = adapter.parse_filter_result(
@@ -264,6 +276,30 @@ def test_explicit_filters_override_only_matching_auto_filters(tmp_path):
         "max_rental_fee": 500,
         "target_ad_type": "offer",
     }
+
+
+def test_filter_result_queues_durable_history_with_user_and_filters(tmp_path):
+    adapter, _engine, _repository = service(tmp_path)
+    analytics = CaptureAnalyticsStore()
+    adapter.product_search_service.analytics_store = analytics
+    request = adapter.parse_filter_result(
+        {
+            "searchTerm": "family bike",
+            "filter": {"city_id": 456},
+            "page": 1,
+        }
+    )
+
+    response = adapter.filter_results(request, user_id="user-7")
+
+    assert response["status"] is True
+    event = analytics.events[0]
+    assert event.query_text == "family bike"
+    assert event.user_id == "user-7"
+    assert event.page_number == 1
+    assert event.filters["explicit"]["city_id"] == 456
+    assert event.filters["effective"]["categorical"]["city_id"] == 456
+    assert event.result_count == len(response["data"])
 
 
 def test_unfiltered_semantic_search_reuses_current_engine_rows(tmp_path):

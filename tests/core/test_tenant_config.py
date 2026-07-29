@@ -4,6 +4,7 @@ import pytest
 
 
 from core.tenant_config import (
+    TenantAnalyticsConfig,
     TenantRegistry,
     discover_tenant_profiles,
 )
@@ -169,6 +170,24 @@ def test_tenant_profile_rejects_unknown_pgvector_prewarm_mode(
 
     with pytest.raises(ValueError, match="prewarm_mode"):
         discover_tenant_profiles(tmp_path)
+
+
+def test_analytics_configuration_defaults_disabled_and_validates_tables(
+    tmp_path,
+    monkeypatch,
+):
+    write_profile(tmp_path, "alpha")
+    set_database_environment(monkeypatch, "alpha")
+
+    profile = discover_tenant_profiles(tmp_path)["alpha"]
+
+    assert profile.analytics.enabled is False
+    assert profile.analytics.search_history_table == "semantic_search_history"
+    with pytest.raises(ValueError, match="safe MySQL identifier"):
+        TenantAnalyticsConfig(
+            enabled=True,
+            search_history_table="unsafe;drop",
+        )
 
 
 def test_tenant_profile_rejects_unknown_search_policy(tmp_path, monkeypatch):

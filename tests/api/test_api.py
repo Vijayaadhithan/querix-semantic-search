@@ -30,6 +30,18 @@ from core.tenant_config import (
 from storage.usage import MonthlyUsageStore
 
 
+class CaptureAnalyticsStore:
+    def __init__(self):
+        self.events = []
+
+    def submit(self, event):
+        self.events.append(event)
+        return True
+
+    def close(self):
+        pass
+
+
 class FakeBM25Index:
     def count(self):
         return 12
@@ -964,6 +976,75 @@ def test_company_usage_endpoint_returns_only_that_company_totals(tmp_path):
     assert beta_usage.status_code == 200
     assert beta_usage.json()["total_tokens"] == 0
     assert cross_company.status_code == 403
+
+
+def test_search_analytics_records_route_provider_calls_and_user_context():
+    analytics = CaptureAnalyticsStore()
+    service = ProductSearchService(
+        FakeEngine(),
+        company_id="gainr",
+        analytics_store=analytics,
+    )
+    result = {
+        "query_plan": {
+            "execution_path": "semantic",
+            "route_reason": "llm_required:subjective_language",
+        },
+        "query_model_metrics": {
+            "attempts": [
+                {
+                    "provider": "groq",
+                    "model": "groq:openai/gpt-oss-20b",
+                    "status": "success",
+                    "input_tokens": 100,
+                    "output_tokens": 20,
+                    "total_tokens": 120,
+                    "total_ms": 400,
+                }
+            ]
+        },
+        "embedding_model_metrics": {"total_ms": 90},
+        "reranker_attempts": [
+            {
+                "provider": "voyage-2.5",
+                "model": "rerank-2.5",
+                "status": "success",
+                "duration_ms": 300,
+                "usage": {
+                    "input_tokens": 500,
+                    "total_tokens": 500,
+                },
+            }
+        ],
+        "result_cache_hit": False,
+        "plan_cache_hit": False,
+    }
+
+    submitted = service.record_search_analytics(
+        "family car",
+        result,
+        duration_ms=1500,
+        result_count=20,
+        total_results=80,
+        user_id="user-7",
+        filters={"city_id": 456},
+    )
+
+    assert submitted is True
+    event = analytics.events[0]
+    assert event.company_id == "gainr"
+    assert event.user_id == "user-7"
+    assert event.execution_path == "semantic"
+    assert event.api_call_count == 3
+    assert event.total_tokens == 620
+    assert [
+        (item.provider, item.operation)
+        for item in event.api_usage
+    ] == [
+        ("groq", "query_planning"),
+        ("ollama", "embedding"),
+        ("voyage-2.5", "reranking"),
+    ]
 
 
 def test_gainr_compatibility_routes_are_enabled_only_by_tenant_config(

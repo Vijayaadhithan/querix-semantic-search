@@ -205,6 +205,14 @@ rate_limit:
   requests_per_minute: 120
   burst: 20
 
+# Durable, tenant-scoped search history and per-provider API usage. Writes are
+# queued off the request path and stored in Gainr's configured MySQL database.
+analytics:
+  enabled: true
+  search_history_table: semantic_search_history
+  api_usage_table: semantic_search_api_usage
+  queue_capacity: 1000
+
 # Gainr's current frontend calls these legacy paths under /api/v1/gainr:
 # search-suggestions, filter-data, filter-result, and recent-search.
 # This adapter is deliberately enabled only for Gainr; other tenants keep the

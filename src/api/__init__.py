@@ -691,6 +691,11 @@ def create_app(
             "health": service.health().model_dump(),
             "searches": service.monitor_status(),
             "usage": usage,
+            "analytics": (
+                service.analytics_store.status()
+                if service.analytics_store is not None
+                else None
+            ),
         }
 
     @application.get(
