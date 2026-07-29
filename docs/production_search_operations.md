@@ -131,6 +131,14 @@ warm-up uses an 800-row window so it exercises the same heap depth as the
 broad-filter post-filter path; override it with `WARMUP_CANDIDATES` only after
 latency and relevance testing.
 
+Gainr uses `prewarm_mode: read` with a 1 GB PostgreSQL `shared_buffers`
+allocation. The vector heap and HNSW index are larger than that fixed pool, so
+the reclaimable filesystem cache is the authoritative warm tier. Do not switch
+Gainr to `buffer` mode or enlarge `shared_buffers` without comparing both
+filtered semantic latency and host/cgroup memory: PostgreSQL reads can
+otherwise leave the same relation resident in shared buffers and the
+filesystem cache at once.
+
 `vector_eligible=10001 vector_eligible_capped=True` means the bounded
 eligibility probe found more than the 10,000-row exact-ranking threshold; it
 does not mean the vector query fetched 10,001 payload rows. The broad-filter
