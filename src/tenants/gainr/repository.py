@@ -287,14 +287,18 @@ class GainrDatabaseRepository:
             ),
         }.get(sort_order, "sr.updated_at DESC, sr.id DESC")
         offset = (page - 1) * page_size
-        with self.connection() as connection:
+
+        def fetch_total(connection) -> int:
             with connection.cursor() as cursor:
                 cursor.execute(
                     f"SELECT COUNT(DISTINCT sr.id) AS total "
                     f"{join} WHERE {where_clause}",
                     params,
                 )
-                total = int(cursor.fetchone()["total"])
+                return int(cursor.fetchone()["total"])
+
+        def fetch_rows(connection) -> list[dict]:
+            with connection.cursor() as cursor:
                 cursor.execute(
                     f"""
                     SELECT a.*, sr.city_name AS __city_name,
@@ -306,7 +310,31 @@ class GainrDatabaseRepository:
                     """,
                     (*params, page_size, offset),
                 )
-                rows = list(cursor.fetchall())
+                return list(cursor.fetchall())
+
+        def run_with_connection(fetcher):
+            with self.connection() as connection:
+                return fetcher(connection)
+
+        if self.database_pool is not None:
+            with ThreadPoolExecutor(
+                max_workers=2,
+                thread_name_prefix="gainr-catalog",
+            ) as executor:
+                total_future = executor.submit(
+                    run_with_connection,
+                    fetch_total,
+                )
+                rows_future = executor.submit(
+                    run_with_connection,
+                    fetch_rows,
+                )
+                total = total_future.result()
+                rows = rows_future.result()
+        else:
+            with self.connection() as connection:
+                total = fetch_total(connection)
+                rows = fetch_rows(connection)
         self._attach_attributes(rows)
         return rows, total
 
