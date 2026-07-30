@@ -19,6 +19,7 @@ The service turns natural-language catalogue queries into tenant-isolated, filte
 | Canonical database | Supplies current public product fields and visibility state |
 | Redis | Stores result and plan caches shared by the API process |
 | Usage and event stores | Record tenant-safe request totals and redacted execution diagnostics |
+| Daily analytics service | Reads normalized company SQL datasets, publishes atomic snapshots, and serves company-safe or internal dashboard contracts from a separate image |
 
 ## Code boundaries
 
@@ -26,6 +27,8 @@ Runtime code is grouped by responsibility under `src/`:
 
 - `api` owns HTTP contracts, routes, request services, and tenant-engine
   lifecycle.
+- `analytics_service` owns the separate daily SQL extraction, Search/API/Deep/
+  Market calculations, versioned snapshot store, and analytics-only API.
 - `core` owns process settings, tenant profiles, and admission controls.
 - `search` owns planning, BM25, retrieval, ranking, and the generic policy
   contract.
@@ -38,6 +41,28 @@ Runtime code is grouped by responsibility under `src/`:
 
 The `tests/` tree mirrors these boundaries so ownership and regression coverage
 remain easy to locate.
+
+## Daily analytics lifecycle
+
+The analytics service is not part of the search request lifecycle. At the
+existing 03:00 Asia/Kolkata scheduled run it reads the configured company
+database and API telemetry source, calculates every dashboard module, writes
+versioned individual-query records, and atomically switches the active
+snapshot. HTTP requests only read that completed snapshot.
+
+Company routes expose Search Intelligence, sanitized Individual Queries, Deep
+Analytics, and Market Intelligence. Internal routes expose those modules plus
+API Performance and full provider/model/token diagnostics. The two audiences
+are materialized separately so internal fields cannot leak through response
+filtering mistakes. Company dashboard users receive company-bound, server-side
+login sessions; internal users receive an internal role and must still select
+one company for every analytics request. The tenant API-key path remains
+available only for service-to-service analytics calls. There is no
+cross-company analytics endpoint.
+
+The analytics API is built from `Dockerfile.analytics` and runs as the
+`analytics-api` Compose service on port 8010. The semantic-search API continues
+to use its existing image and port 8000.
 
 ## Request lifecycle
 

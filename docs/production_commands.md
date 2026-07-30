@@ -11,15 +11,16 @@ The Docker services use `restart: unless-stopped`. When started with `docker com
 Use these commands on the production host from the repository root:
 
 ```bash
-# Start or restore API, pgvector, Redis, and Docker-managed Ollama.
+# Start or restore both APIs, pgvector, Redis, and Docker-managed Ollama.
 docker compose --profile ollama up -d
 
 # Restart the current API image only; no rebuild or ingestion.
 docker compose restart api
 
 # Rebuild/recreate after code or tenant-YAML changes.
-docker compose build api
-docker compose --profile ollama up -d --no-deps --force-recreate api
+docker compose build api analytics-api
+docker compose --profile ollama up -d --no-deps --force-recreate \
+  api analytics-api
 
 # Recreate after environment-only changes; a rebuild is unnecessary.
 docker compose --profile ollama up -d --no-deps --force-recreate api
@@ -35,6 +36,19 @@ docker compose logs -f --tail=200 api
 
 # Serving-path readiness.
 curl -fsS http://127.0.0.1:8000/api/v1/ready | jq
+
+# Daily analytics readiness and manual refresh.
+curl -fsS http://127.0.0.1:8010/api/v1/ready | jq
+docker compose run --rm --no-deps analytics-api \
+  python -m analytics_service.refresh --company gainr
+
+# Analytics-only users (interactive hidden password prompts).
+docker compose run --rm analytics-api \
+  python -m analytics_service.users create \
+    --username analytics-admin --role internal_admin
+docker compose run --rm analytics-api \
+  python -m analytics_service.users create \
+    --username gainr-owner --role company_user --company gainr
 ```
 
 For search-stage timings rather than only container output:
@@ -95,9 +109,10 @@ git pull --ff-only origin "$BRANCH" && \
   COMPANY_ID=gainr ./scripts/deploy_production.sh
 ```
 
-The script automatically validates Compose, rebuilds the API image, ensures
-pgvector/Redis/Docker Ollama are running, recreates only the API, waits for real
-readiness, runs the strict production tenant doctor, and shows status and recent logs. Because the
+The script automatically validates Compose, rebuilds both API images, ensures
+pgvector/Redis/Docker Ollama are running, recreates both APIs, waits for real
+readiness, initializes the analytics snapshot only when it is missing, runs the
+strict production tenant doctor, and shows status and recent logs. Because the
 commands use `&&`, deployment does not start if `git pull` fails. It also refuses
 to run over uncommitted production files or concurrently with another deployment.
 

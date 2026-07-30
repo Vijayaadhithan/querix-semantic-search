@@ -12,6 +12,8 @@ A tenant-isolated semantic search service for product and classified catalogues.
 - Tenant-scoped API keys, rate limits, caches, indexes, and database configuration.
 - Cursor-based search pagination and monthly usage reporting.
 - Optional durable MySQL search history and per-provider API/token analytics.
+- A separate daily analytics image serving company-safe and internal
+  dashboards from atomic snapshots.
 - Redis result caching plus graceful vector, BM25, and reranker degradation.
 - Docker deployment with persistent pgvector, Redis, Ollama, and application data.
 - Gainr compatibility pagination with a ranked 20-result first page and
@@ -63,6 +65,7 @@ configs/tenants/      Tenant database, storage, API, and retrieval profiles
 eval/                 Query-planning and retrieval evaluation cases
 scripts/              Diagnostics, key generation, and maintenance utilities
 src/
+  analytics_service/  Daily SQL analytics, snapshots, and analytics API
   api/                FastAPI routes, contracts, services, and tenant lifecycle
   cli/                Chat, ingestion, and evaluation entry points
   core/               Settings, tenant configuration, and rate limiting
@@ -97,6 +100,7 @@ example `PYTHONPATH=src .venv/bin/python -m api` or
 - [Production setup](docs/production_setup.md)
 - [Production commands](docs/production_commands.md)
 - [Search analytics](docs/search_analytics.md)
+- [Daily company analytics service](docs/analytics_service.md)
 - [Retrieval evaluation gates](eval/README.md)
 
 For every ordinary code change, use the copy-paste workflow at the top of
@@ -120,6 +124,14 @@ docker compose restart api
 # Rebuild/recreate the API after code or tenant-config changes.
 docker compose build api
 docker compose --profile ollama up -d --no-deps --force-recreate api
+
+# Rebuild/recreate the separate analytics API.
+docker compose build analytics-api
+docker compose up -d --no-deps --force-recreate analytics-api
+
+# Build the once-daily snapshot manually.
+docker compose run --rm --no-deps analytics-api \
+  python -m analytics_service.refresh --company gainr
 
 # Status, last 500 API log lines, and live logs.
 docker compose ps

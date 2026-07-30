@@ -8,6 +8,7 @@ WARMUP_LOCK_FILE="${WARMUP_LOCK_FILE:-/tmp/semantic-search-warmup-${COMPANY_ID}.
 CONTAINER_NAME="${INGEST_CONTAINER_NAME:-semantic-search-ingest-${COMPANY_ID}}"
 RUN_ANALYTICS_FLUSH="${RUN_ANALYTICS_FLUSH:-true}"
 ANALYTICS_BATCH_SIZE="${ANALYTICS_BATCH_SIZE:-500}"
+RUN_DAILY_ANALYTICS="${RUN_DAILY_ANALYTICS:-true}"
 
 cd "$PROJECT_DIR"
 # Ingestion has priority over the lightweight hourly job. If a warm-up is
@@ -45,6 +46,19 @@ if [[ "$RUN_ANALYTICS_FLUSH" == "true" ]]; then
       --company "$COMPANY_ID" \
       --batch-size "$ANALYTICS_BATCH_SIZE"; then
     echo "Search analytics upload failed; local rows retained for retry." >&2
+  fi
+fi
+
+if [[ "$RUN_DAILY_ANALYTICS" == "true" ]]; then
+  echo "Building the daily analytics snapshot for ${COMPANY_ID}."
+  if ! docker compose run --rm --no-deps analytics-api \
+    python -m analytics_service.refresh --company "$COMPANY_ID"; then
+    echo "Daily analytics refresh failed; the previous snapshot remains active." >&2
+  fi
+  echo "Pruning expired analytics login sessions."
+  if ! docker compose run --rm --no-deps analytics-api \
+    python -m analytics_service.users prune-sessions; then
+    echo "Expired analytics session cleanup failed; continuing ingestion." >&2
   fi
 fi
 

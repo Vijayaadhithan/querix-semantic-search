@@ -113,6 +113,33 @@ rate_limit:
 # usage analytics. Run scripts/migrate_search_analytics.py before enabling it.
 analytics:
   enabled: false
+  endpoint_slug: acme
+  api_key_envs:
+    - ACME_ANALYTICS_API_KEY
+  history_days: 90
   search_history_table: semantic_search_history
   api_usage_table: semantic_search_api_usage
   queue_capacity: 1000
+  tables:
+    search_history: semantic_search_history
+    api_usage: semantic_search_api_usage
+    ads: listings
+    users: users
+    categories: categories
+    sub_categories: sub_categories
+    states: states
+    location: cities
+    attributes: attributes
+    attribute_values: attribute_values
+    ads_attributes: listing_attributes
+  # Map normalized analytics columns when a company uses different names.
+  columns:
+    ads:
+      id: product_id
+      user_id: seller_id
+      category_id: subcategory_id
+      title: product_name
+      rental_fee: price
+      created_at: listed_at
+  telemetry:
+    use_company_database: true

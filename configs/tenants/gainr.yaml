@@ -213,9 +213,34 @@ rate_limit:
 # portable to a separate internal database later.
 analytics:
   enabled: true
+  endpoint_slug: gainr
+  # Separate product credential: the search API continues using GAINR_API_KEY.
+  api_key_envs:
+    - GAINR_ANALYTICS_API_KEY
+  # Individual search and API records exposed by analytics are limited to the
+  # recent operational window. Business catalogue/user trends remain complete.
+  history_days: 90
   search_history_table: semantic_search_history
   api_usage_table: semantic_search_api_usage
   queue_capacity: 1000
+  # The analytics image uses read-only SQL scans once per day. These explicit
+  # names form Gainr's normalized analytics source contract.
+  tables:
+    search_history: semantic_search_history
+    api_usage: semantic_search_api_usage
+    ads: ads
+    users: users
+    categories: categories
+    sub_categories: sub_categories
+    states: states
+    location: location
+    attributes: attributes
+    attribute_values: attribute_values
+    ads_attributes: ads_attributes
+  # API telemetry currently lives in Gainr's database. Set this to false and
+  # provide a database block when the internal telemetry database is split.
+  telemetry:
+    use_company_database: true
 
 # Gainr's current frontend calls these legacy paths under /api/v1/gainr:
 # search-suggestions, filter-data, filter-result, and recent-search.

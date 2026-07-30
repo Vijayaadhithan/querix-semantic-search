@@ -1,0 +1,23 @@
+.git
+.venv
+__pycache__
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.env
+.env.*
+storage
+data/raw_docs
+benchmark-results
+output
+*.pyc
+*.pyo
+*.pyd
+*.sqlite3
+
+# The semantic-search image must not contain the separately deployed analytics
+# application or its tests. Dockerfile.analytics copies that package into the
+# independent analytics image.
+src/analytics_service
+tests/analytics
+Dockerfile.analytics

@@ -270,16 +270,34 @@ docker compose run --rm --no-deps --user root api \
   sh -c 'chown -R app:app /app/storage && chmod -R u+rwX,go-rwx /app/storage'
 ```
 
-Verify the API user can write:
+Verify the application user can write search and analytics snapshots:
 
 ```bash
 docker compose run --rm --no-deps api \
   sh -c 'touch /app/storage/.write-test && rm /app/storage/.write-test && echo "Storage is writable"'
+docker compose run --rm --no-deps analytics-api \
+  sh -c 'mkdir -p /app/storage/analytics && touch /app/storage/analytics/.write-test && rm /app/storage/analytics/.write-test && echo "Analytics storage is writable"'
 ```
 
 This prevents SQLite errors such as `attempt to write a readonly database` when the usage store enables WAL mode.
 
 Run the ownership command again after restoring `storage/` from a backup created under a different user or host.
+
+Create analytics-only login accounts after the analytics image is built. The
+password prompts are hidden, and the credentials are stored as salted hashes
+inside the backed-up analytics SQLite database:
+
+```bash
+docker compose run --rm analytics-api \
+  python -m analytics_service.users create \
+    --username analytics-admin --role internal_admin
+docker compose run --rm analytics-api \
+  python -m analytics_service.users create \
+    --username gainr-owner --role company_user --company gainr
+```
+
+These accounts authenticate only the analytics product. They do not change or
+replace the semantic-search API keys.
 
 ## 8. Start pgvector, Redis, and Ollama
 

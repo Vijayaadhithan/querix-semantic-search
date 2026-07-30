@@ -1,0 +1,135 @@
+import os
+
+DATA_DIR = os.path.dirname(os.path.abspath(__file__))
+OUTPUT_DIR = os.path.join(DATA_DIR, 'dashboard')
+
+# ─────────────────────────────────────────────
+# CATEGORY KEYWORD MAPPINGS FOR SEARCH CLASSIFICATION
+# ─────────────────────────────────────────────
+SEARCH_CATEGORIES = {
+    'Vehicles & Transport': [
+        'car', 'bike', 'truck', 'auto', 'van', 'bus', 'scooter', 'vehicle', 'tata', 'maruti',
+        'mahindra', 'ashok leyland', 'eicher', 'bajaj', 'honda', 'yamaha', 'royal enfield',
+        'hyundai', 'suzuki', 'toyota', 'hero', 'tvs', 'piaggio', 'bolero', 'innova', 'ertiga',
+        'alto', 'swift', 'ace', 'dost', 'winger', 'intra', 'eeco', 'xcent', 'i20', 'qualis',
+        'continental gt', 'r15', 'rx 100', 'hunter', 'unicorn', 'dio', 'civic', 'rc 200',
+        'two wheeler', 'three wheeler', 'four wheeler', 'lcv', 'container', 'pickup', 'mini truck',
+        'open body', 'seater', 'loading', 'rent car', 'car rent', 'bike rent', 'self drive',
+        'self driving', 'driving', 'driver', 'acting driver'
+    ],
+    'Electronics & Gadgets': [
+        'camera', 'phone', 'iphone', 'laptop', 'tablet', 'mobile', 'charger', 'speaker',
+        'keyboard', 'canon', 'sony', 'dji', 'drone', 'fujifilm', 'led', 'display', 'screen',
+        'bluetooth', 'audio', 'video', 'projector', 'playstation', 'gaming', 'console',
+        'microphone', 'mic', 'lens', 'gimbal', 'piano', 'dell', 'samsung', 'motorola',
+        'zebronics', 'pioneer', 'polaroid', 'apple', 'realme'
+    ],
+    'Home & Accommodation': [
+        'house', 'room', 'flat', 'apartment', 'bhk', 'parking', 'pg', 'hostel', 'home stay',
+        'bachelor', 'rent room', 'monthly rent', 'accommodation'
+    ],
+    'Services & Professionals': [
+        'electrician', 'plumber', 'painter', 'carpenter', 'cook', 'chef', 'therapist',
+        'massage', 'photographer', 'trainer', 'tutor', 'tuition', 'teacher', 'nurse',
+        'psychiatrist', 'doctor', 'instructor', 'worker', 'labour', 'helper', 'companion',
+        'cleaner', 'fitter', 'mechanic', 'technician', 'consultant', 'contractor',
+        'service', 'repair', 'master', 'parotta', 'caterer', 'beautician', 'barber',
+        'tailor', 'writer', 'editor', 'designer', 'architect', 'accountant',
+        'delivery partner', 'call centre', 'data entry', 'typing', 'job', 'work from home',
+        'part time', 'freelance', 'hire'
+    ],
+    'Machinery & Equipment': [
+        'machine', 'welding', 'drilling', 'cutting', 'compactor', 'jcb', 'backhoe', 'loader',
+        'concrete', 'breaker', 'chaser', 'wall chasser', 'ladder', 'generator', 'pump',
+        'pressure', 'vacuum', 'heat gun', 'excavator', 'harvester', 'tractor'
+    ],
+    'Events & Furniture': [
+        'tent', 'chair', 'table', 'light', 'decoration', 'wedding', 'stage', 'sound system',
+        'dj', 'welcome board', 'samiyana', 'cooking vessel', 'fan', 'generator', 'stove',
+        'gas stove', 'burner', 'grill', 'barbeque', 'freezer', 'ice cream', 'sink',
+        'drum', 'stand', 'poles', 'cradle', 'carrom', 'food cart'
+    ],
+    'Fashion & Lifestyle': [
+        'blazer', 'coat', 'dress', 'gown', 'costume', 'jewellery', 'suit', 'sherwani',
+        'saree', 'kupya', 'attire', 'idol', 'statue'
+    ],
+    'Medical & Health': [
+        'oxygen', 'cylinder', 'x ray', 'blood sample', 'medical', 'health', 'exercise',
+        'swimming', 'gym', 'fitness', 'weight loss', 'orbitrek', 'walking stick'
+    ],
+    'Education & Books': [
+        'book', 'sample paper', 'maths', 'science', 'bengali', 'student', 'school',
+        'class', 'management accounting', 'artificial intelligence', 'machine learning'
+    ],
+    'Real Estate & Logistics': [
+        'load', 'return load', 'trip', 'transport', 'moving', 'packing', 'shifting',
+        'unloading', 'loading and unloading', 'luggage', 'godown', 'warehouse'
+    ],
+    'Pets & Animals': [
+        'dog', 'labrador', 'doberman', 'shih tzu', 'shit zu', 'pet', 'poultry', 'farm'
+    ]
+}
+
+BRAND_KEYWORDS = {
+    'Tata': ['tata', 'tata ace', 'tata intra', 'tata winger', 'tata led'],
+    'Maruti Suzuki': ['maruti', 'suzuki', 'alto', 'swift', 'eeco', 'ertiga', 'baleno', 'omni'],
+    'Mahindra': ['mahindra', 'bolero', 'treo', 'vero'],
+    'Ashok Leyland': ['ashok leyland', 'dost', 'bada dost'],
+    'Eicher': ['eicher'],
+    'Bajaj': ['bajaj', 'qute', 'maxima', 'bajaj re'],
+    'Honda': ['honda', 'civic', 'dio', 'unicorn'],
+    'Yamaha': ['yamaha', 'rx 100', 'rx 135', 'psr', 'dgx'],
+    'Royal Enfield': ['royal enfield', 'hunter', 'continental gt'],
+    'Toyota': ['toyota', 'qualis', 'innova'],
+    'Hyundai': ['hyundai', 'xcent', 'i20'],
+    'Hero': ['hero', 'hf deluxe', 'splendor'],
+    'TVS': ['tvs', 'scooty', 'pep plus'],
+    'Piaggio': ['piaggio', 'ape', 'ape mini'],
+    'Apple': ['apple', 'iphone', 'ipad'],
+    'Canon': ['canon', 'eos', '200d', '5d'],
+    'Sony': ['sony', 'a7', 'playstation'],
+    'DJI': ['dji', 'mavic', 'mini pro', 'osmo'],
+    'Benelli': ['benelli', 'tnt'],
+    'Kia': ['kia', 'carens'],
+    'Dell': ['dell'],
+    'Bosch': ['bosch'],
+    'Hitachi': ['hitachi'],
+    'LG': ['lg'],
+    'Samsung': ['samsung'],
+    'Motorola': ['motorola', 'edge'],
+    'Fujifilm': ['fujifilm'],
+    'Wipro': ['wipro'],
+    'Bharat Benz': ['bharat benz'],
+    'Force': ['force', 'trax'],
+}
+
+LOCATION_KEYWORDS = [
+    'chennai', 'bangalore', 'bengaluru', 'hyderabad', 'mumbai', 'pune', 'coimbatore',
+    'madurai', 'trichy', 'thanjavur', 'nagapattinam', 'tirupur', 'hosur', 'salem',
+    'karur', 'erode', 'theni', 'kodaikanal', 'velachery', 'tambaram', 'porur',
+    'chromepet', 'avadi', 'omr', 'saligramam', 'vadapalani', 'kelambakkam',
+    'ayanavaram', 'perungudi', 'madhavaram', 'srikakulam', 'virudhunagar',
+    'mayiladuthurai', 'chengalpattu', 'guntur', 'rajahmundry', 'krishnagiri',
+    'dilsukhnagar', 'nallakunta', 'btm', 'ejipura', 'mira road', 'mumbra',
+    'andheri', 'ville parle', 'ooty', 'port blair', 'agra', 'jammu', 'delhi',
+    'surat', 'calicut', 'kancheepuram', 'pattukkottai', 'puducherry', 'west bengal',
+    'maharashtra', 'tamil nadu', 'karnataka', 'telangana', 'andhra pradesh'
+]
+
+TYPO_INDICATORS = [
+    ('blootooth', 'bluetooth'), ('draining school', 'driving school'),
+    ('mahinra', 'mahindra'), ('two weeler', 'two wheeler'),
+    ('alting driver', 'acting driver'), ('bero painter', 'hero painter'),
+    ('home shilding laber', 'home building labour'), ('ac for renr', 'ac for rent'),
+    ('cyclwhite', 'cycle'), ('ac frige', 'ac fridge'), ('tya ace', 'tata ace'),
+    ('ffemale', 'female'), ('fazer', 'freezer'), ('reng', 'rent'),
+    ('leesh', 'lease'), ('krisnagiri', 'krishnagiri'), ('i phone', 'iphone'),
+    ('campanion', 'companion'), ('puncher', 'puncture'), ('tution', 'tuition'),
+    ('prizm', 'price'), ('fazed', 'fazed'), ('laber', 'labour')
+]
+
+GIBBERISH_PATTERNS = [
+    r'^[a-z\s\.]{1,5}$',  # very short random chars
+    r'(.)\1{4,}',  # repeated characters
+    r'^[^a-zA-Z0-9\s]{3,}',  # special chars only
+]

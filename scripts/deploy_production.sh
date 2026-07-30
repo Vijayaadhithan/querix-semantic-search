@@ -9,6 +9,8 @@ READINESS_INTERVAL_SECONDS="${READINESS_INTERVAL_SECONDS:-3}"
 LOCK_FILE="${LOCK_FILE:-/tmp/semantic-search-production-deploy.lock}"
 RUN_DOCTOR="${RUN_DOCTOR:-true}"
 RUN_ANALYTICS_MIGRATION="${RUN_ANALYTICS_MIGRATION:-true}"
+RUN_ANALYTICS_INITIAL_REFRESH="${RUN_ANALYTICS_INITIAL_REFRESH:-true}"
+ANALYTICS_READY_URL="${ANALYTICS_READY_URL:-http://127.0.0.1:8010/api/v1/ready}"
 
 cd "$PROJECT_DIR"
 
@@ -47,13 +49,20 @@ revision="$(git rev-parse --short HEAD)"
 echo "Deploying revision ${revision} for company ${COMPANY_ID}."
 
 docker compose config --quiet
-docker compose build --pull api
+docker compose build --pull api analytics-api
 if [[ "$RUN_ANALYTICS_MIGRATION" == "true" ]]; then
   docker compose run --rm --no-deps api \
     python scripts/migrate_search_analytics.py --company "$COMPANY_ID"
 fi
+if [[ "$RUN_ANALYTICS_INITIAL_REFRESH" == "true" ]]; then
+  docker compose run --rm --no-deps analytics-api \
+    python -m analytics_service.refresh \
+      --company "$COMPANY_ID" \
+      --if-missing
+fi
 docker compose --profile ollama up -d pgvector redis ollama
-docker compose --profile ollama up -d --no-deps --force-recreate api
+docker compose --profile ollama up -d --no-deps --force-recreate \
+  api analytics-api
 
 ready=false
 for ((attempt = 1; attempt <= READINESS_ATTEMPTS; attempt++)); do
@@ -69,6 +78,12 @@ if [[ "$ready" != "true" ]]; then
   echo "API did not become ready at ${READY_URL}." >&2
   docker compose ps >&2 || true
   docker compose logs --tail=200 api >&2 || true
+  exit 1
+fi
+
+if ! curl -fsS --max-time 5 "$ANALYTICS_READY_URL" >/dev/null; then
+  echo "Analytics API is not ready at ${ANALYTICS_READY_URL}." >&2
+  docker compose logs --tail=200 analytics-api >&2 || true
   exit 1
 fi
 
@@ -92,5 +107,5 @@ docker compose exec -T api python scripts/warm_search_paths.py \
   --candidates 800
 
 docker compose ps
-docker compose logs --tail=100 api
+docker compose logs --tail=100 api analytics-api
 echo "Deployment complete: revision ${revision} is ready."
