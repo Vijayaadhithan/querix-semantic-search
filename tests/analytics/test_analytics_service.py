@@ -309,6 +309,18 @@ analytics:
   endpoint_slug: testco-analytics
   api_key_envs: [TESTCO_ANALYTICS_API_KEY]
   history_days: 120
+  metrics:
+    company:
+      search_intelligence:
+        - q1_category_distribution
+        - q10_language
+      market_intelligence: []
+    internal:
+      search_intelligence:
+        - q7_zero_results
+      api_performance:
+        - q21_success_rate
+        - q23_latency_stats
   tables:
     ads: listings
   columns:
@@ -331,6 +343,20 @@ analytics:
     assert config.datasets["ads"].table == "listings"
     assert config.datasets["ads"].columns["id"] == "listing_id"
     assert config.history_days == 120
+    assert config.company_metric_profile == {
+        "search_intelligence": (
+            "q1_category_distribution",
+            "q10_language",
+        ),
+        "market_intelligence": (),
+    }
+    assert config.internal_metric_profile == {
+        "search_intelligence": ("q7_zero_results",),
+        "api_performance": (
+            "q21_success_rate",
+            "q23_latency_stats",
+        ),
+    }
     sql = SqlAnalyticsDataSource._select_sql(
         config.database,
         config.datasets["ads"],
@@ -411,6 +437,93 @@ def test_daily_refresh_publishes_both_audiences_and_queries(tmp_path):
     )
     assert "api" in internal_queries["items"][0]
     assert "attempts" in internal_queries["items"][0]
+
+
+def test_refresh_applies_separate_company_and_internal_metric_profiles(
+    tmp_path,
+):
+    base = analytics_company(tmp_path)
+    company = CompanyAnalyticsConfig(
+        company_id=base.company_id,
+        endpoint_slug=base.endpoint_slug,
+        api_key_envs=base.api_key_envs,
+        database=base.database,
+        telemetry_database=base.telemetry_database,
+        datasets=base.datasets,
+        config_path=base.config_path,
+        company_metric_profile={
+            "search_intelligence": (
+                "q1_category_distribution",
+                "q10_language",
+            ),
+            "market_intelligence": (),
+        },
+        internal_metric_profile={
+            "search_intelligence": ("q7_zero_results",),
+            "api_performance": (
+                "q21_success_rate",
+                "q23_latency_stats",
+            ),
+        },
+    )
+    store = AnalyticsSnapshotStore(tmp_path / "snapshots.sqlite3")
+    AnalyticsRefreshService(
+        FakeSource(analytics_data()),
+        store,
+    ).refresh(company)
+
+    external = store.dashboard("gainr", internal=False)
+    internal = store.dashboard("gainr", internal=True)
+    assert tuple(external["search_intelligence"]) == (
+        "q1_category_distribution",
+        "q10_language",
+    )
+    assert "market_intelligence" not in external
+    assert "market_intelligence" not in external["metadata"]["modules"]
+    assert external["metadata"]["metric_counts"][
+        "market_intelligence"
+    ] == 0
+    assert tuple(internal["search_intelligence"]) == (
+        "q7_zero_results",
+    )
+    assert tuple(internal["api_performance"]) == (
+        "q21_success_rate",
+        "q23_latency_stats",
+    )
+    assert "api_performance" not in external
+
+
+def test_tenant_metric_profile_rejects_internal_data_for_company(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv("TEST_DB_HOST", "db.internal")
+    monkeypatch.setenv("TEST_DB_NAME", "company")
+    monkeypatch.setenv("TEST_DB_USER", "reader")
+    monkeypatch.setenv("TEST_DB_PASSWORD", "secret")
+    path = tmp_path / "unsafe-profile.yaml"
+    path.write_text(
+        """
+company:
+  id: testco
+database:
+  backend: mysql
+  host_env: TEST_DB_HOST
+  database_env: TEST_DB_NAME
+  user_env: TEST_DB_USER
+  password_env: TEST_DB_PASSWORD
+analytics:
+  enabled: true
+  metrics:
+    company:
+      api_performance:
+        - q21_success_rate
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="unsupported module"):
+        load_company_analytics_config(path)
 
 
 def test_failed_refresh_keeps_last_completed_snapshot(tmp_path):

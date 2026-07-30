@@ -53,6 +53,35 @@ validation, but only the curated catalogue in `metrics.py` is persisted or
 returned. Misleading estimates, duplicated reports, provider-specific reports,
 and niche Gainr-only questions are excluded.
 
+Each tenant can override the curated defaults without changing code. Company
+and internal profiles are separate. Internal business modules inherit that
+company's external selection unless explicitly overridden, while
+`api_performance` is rejected in a company profile. An empty list hides a
+module for that audience:
+
+```yaml
+analytics:
+  metrics:
+    company:
+      search_intelligence:
+        - q1_category_distribution
+        - q3_trending_terms
+        - q7_zero_results
+      market_intelligence: []
+    internal:
+      search_intelligence:
+        - q7_zero_results
+        - q11_typos
+      api_performance:
+        - q21_success_rate
+        - q23_latency_stats
+        - q33_failure_reasons
+```
+
+Metric names and modules are validated when the service loads the tenant
+configuration. A typo or attempt to expose an internal-only module fails
+configuration rather than silently weakening the audience boundary.
+
 Company query records include query classification and search outcome. They do
 not include provider names, model names, execution paths, tokens, attempts,
 failure reasons, or internal latency diagnostics. Internal query records retain

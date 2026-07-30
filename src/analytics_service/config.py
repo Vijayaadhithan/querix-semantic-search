@@ -11,6 +11,8 @@ from typing import Any
 import yaml
 from dotenv import load_dotenv
 
+from .metrics import validate_metric_profile
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,62}$")
@@ -218,6 +220,12 @@ class CompanyAnalyticsConfig:
     datasets: dict[str, DatasetMapping]
     config_path: Path
     history_days: int = 90
+    company_metric_profile: dict[str, tuple[str, ...]] = field(
+        default_factory=dict
+    )
+    internal_metric_profile: dict[str, tuple[str, ...]] = field(
+        default_factory=dict
+    )
 
     def __post_init__(self) -> None:
         if not TENANT_ID_RE.fullmatch(self.company_id):
@@ -341,6 +349,25 @@ def load_company_analytics_config(path: Path) -> CompanyAnalyticsConfig | None:
             prefix=f"{company_id.upper()}_ANALYTICS",
         )
     )
+    raw_metric_profiles = analytics.get("metrics", {})
+    if raw_metric_profiles is None:
+        raw_metric_profiles = {}
+    if not isinstance(raw_metric_profiles, dict):
+        raise ValueError("Analytics metrics configuration must be an object")
+    unsupported_audiences = set(raw_metric_profiles) - {"company", "internal"}
+    if unsupported_audiences:
+        raise ValueError(
+            "Analytics metrics configuration has unsupported audiences: "
+            + ", ".join(sorted(str(name) for name in unsupported_audiences))
+        )
+    company_metric_profile = validate_metric_profile(
+        raw_metric_profiles.get("company"),
+        audience="company",
+    )
+    internal_metric_profile = validate_metric_profile(
+        raw_metric_profiles.get("internal"),
+        audience="internal",
+    )
 
     raw_tables = dict(analytics.get("tables", {}))
     raw_columns = dict(analytics.get("columns", {}))
@@ -381,6 +408,8 @@ def load_company_analytics_config(path: Path) -> CompanyAnalyticsConfig | None:
         datasets=datasets,
         config_path=path,
         history_days=int(analytics.get("history_days", 90)),
+        company_metric_profile=company_metric_profile,
+        internal_metric_profile=internal_metric_profile,
     )
 
 

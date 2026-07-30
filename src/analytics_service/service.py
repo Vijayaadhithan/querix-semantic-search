@@ -15,11 +15,8 @@ from .domain import (
 )
 from .domain.search.records import build_query_records
 from .metrics import (
-    COMPANY_DEEP_METRICS,
-    COMPANY_MARKET_METRICS,
-    COMPANY_SEARCH_METRICS,
-    INTERNAL_API_METRICS,
     metric_counts,
+    resolve_metric_profiles,
     select_metrics,
 )
 from .source import AnalyticsDataSource
@@ -71,6 +68,26 @@ def _company_query_record(record: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _dashboard_sections(
+    reports: dict[str, dict[str, Any]],
+    profile: dict[str, tuple[str, ...]],
+) -> dict[str, dict[str, Any]]:
+    return {
+        module: select_metrics(reports[module], metric_names)
+        for module, metric_names in profile.items()
+        if metric_names
+    }
+
+
+def _dashboard_modules(
+    sections: dict[str, dict[str, Any]],
+) -> list[str]:
+    modules = list(sections)
+    insert_at = 1 if modules and modules[0] == "search_intelligence" else 0
+    modules.insert(insert_at, "individual_queries")
+    return modules
+
+
 class AnalyticsRefreshService:
     def __init__(
         self,
@@ -112,21 +129,23 @@ class AnalyticsRefreshService:
             market_intelligence = process_part_d(_copy_data(data))
             query_payload = build_query_records(_copy_data(data))
 
-            search_intelligence = select_metrics(
-                search_intelligence,
-                COMPANY_SEARCH_METRICS,
+            reports = {
+                "search_intelligence": search_intelligence,
+                "api_performance": api_performance,
+                "deep_analytics": deep_analytics,
+                "market_intelligence": market_intelligence,
+            }
+            company_profile, internal_profile = resolve_metric_profiles(
+                company.company_metric_profile,
+                company.internal_metric_profile,
             )
-            api_performance = select_metrics(
-                api_performance,
-                INTERNAL_API_METRICS,
+            company_sections = _dashboard_sections(
+                reports,
+                company_profile,
             )
-            deep_analytics = select_metrics(
-                deep_analytics,
-                COMPANY_DEEP_METRICS,
-            )
-            market_intelligence = select_metrics(
-                market_intelligence,
-                COMPANY_MARKET_METRICS,
+            internal_sections = _dashboard_sections(
+                reports,
+                internal_profile,
             )
 
             query_pairs = []
@@ -143,41 +162,26 @@ class AnalyticsRefreshService:
                 "generated_at": generated_at,
                 "refresh_schedule": "daily at 03:00 Asia/Kolkata",
                 "source_rows": source_rows,
-                "metric_counts": metric_counts(),
             }
             company_dashboard = {
                 "metadata": {
                     **metadata,
                     "audience": "company",
-                    "modules": [
-                        "search_intelligence",
-                        "individual_queries",
-                        "deep_analytics",
-                        "market_intelligence",
-                    ],
+                    "modules": _dashboard_modules(company_sections),
+                    "metric_counts": metric_counts(company_profile),
                     "individual_query_count": len(query_pairs),
                 },
-                "search_intelligence": search_intelligence,
-                "deep_analytics": deep_analytics,
-                "market_intelligence": market_intelligence,
+                **company_sections,
             }
             internal_dashboard = {
                 "metadata": {
                     **metadata,
                     "audience": "internal",
-                    "modules": [
-                        "search_intelligence",
-                        "individual_queries",
-                        "deep_analytics",
-                        "market_intelligence",
-                        "api_performance",
-                    ],
+                    "modules": _dashboard_modules(internal_sections),
+                    "metric_counts": metric_counts(internal_profile),
                     "individual_query_count": len(query_pairs),
                 },
-                "search_intelligence": search_intelligence,
-                "api_performance": api_performance,
-                "deep_analytics": deep_analytics,
-                "market_intelligence": market_intelligence,
+                **internal_sections,
             }
             watermarks = []
             for name in ("search_history", "api_usage", "ads", "users"):

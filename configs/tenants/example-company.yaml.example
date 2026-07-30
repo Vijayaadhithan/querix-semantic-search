@@ -117,6 +117,34 @@ analytics:
   api_key_envs:
     - ACME_ANALYTICS_API_KEY
   history_days: 90
+  # Optional per-company dashboard profiles. Omitted modules use the curated
+  # defaults. An empty list hides that module. Internal business modules inherit
+  # the company selection unless explicitly overridden; api_performance can
+  # only be selected for internal users.
+  metrics:
+    company:
+      search_intelligence:
+        - q1_category_distribution
+        - q3_trending_terms
+        - q7_zero_results
+        - q15_search_volume
+      deep_analytics:
+        - q47_supply_by_category
+        - q50_low_supply_categories
+      market_intelligence:
+        - q75_marketplace_overview
+        - q78_pricing_benchmark
+    internal:
+      search_intelligence:
+        - q1_category_distribution
+        - q7_zero_results
+        - q11_typos
+        - q15_search_volume
+      api_performance:
+        - q21_success_rate
+        - q23_latency_stats
+        - q29_provider_reliability
+        - q33_failure_reasons
   search_history_table: semantic_search_history
   api_usage_table: semantic_search_api_usage
   queue_capacity: 1000
