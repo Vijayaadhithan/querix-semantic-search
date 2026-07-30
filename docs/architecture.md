@@ -122,8 +122,12 @@ re-keys transferred vectors to the authoritative company's identity while
 preserving their embedding values.
 
 Production runs the guarded incremental job around 03:00 IST. It prevents
-overlap, reconciles deletions after a full scan, and restarts the API only after
-a successful run. An unchanged scan does not advance the BM25 revision.
+overlap, uploads the durable analytics-spool snapshot, reconciles deletions
+after a full source scan, and restarts the API only after successful ingestion.
+An analytics upload failure retains the local rows for retry without blocking
+ingestion. After readiness passes, the job warms the configured pgvector HNSW
+paths and the persistent BM25 index. An unchanged scan does not advance the
+BM25 revision.
 
 Deletion reconciliation is an explicit full-scan operation. A limited scan cannot reconcile deletions because unseen source rows may still be valid. A full replacement clears only the selected tenant's vector source and BM25 index.
 

@@ -20,9 +20,11 @@ payloads. Query text can contain personal information, so database access and
 backups should follow the company's data retention and access policy.
 
 Both tables currently use Gainr's configured MySQL database. The
-operator-facing table uses `(request_id, attempt_number)` instead of a foreign
-key to the tenant table, so it can move to a separately configured internal
-database later without changing the event format or losing correlation.
+operator-facing table uses `request_id` as its unique idempotency and
+correlation key, without a foreign key to the tenant table. Provider attempts
+remain ordered inside `attempts_json`. This lets the operator table move to a
+separately configured internal database later without changing the event
+format or losing correlation.
 
 Create or verify the tables with:
 

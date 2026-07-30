@@ -96,6 +96,7 @@ example `PYTHONPATH=src .venv/bin/python -m api` or
 - [Production operations](docs/production_search_operations.md)
 - [Production setup](docs/production_setup.md)
 - [Production commands](docs/production_commands.md)
+- [Search analytics](docs/search_analytics.md)
 - [Retrieval evaluation gates](eval/README.md)
 
 For every ordinary code change, use the copy-paste workflow at the top of
