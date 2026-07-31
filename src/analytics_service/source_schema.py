@@ -11,6 +11,7 @@ class DatasetSpec:
     required_columns: tuple[str, ...]
     usecols: tuple[str, ...] | None = None
     dtypes: dict[str, str] | None = None
+    numeric_columns: tuple[str, ...] = ()
 
 
 ADS_COLUMNS = (
@@ -63,6 +64,7 @@ DATASET_SPECS: dict[str, DatasetSpec] = {
         "semantic_search_history.csv",
         ("id", "request_id", "query_text", "created_at"),
         usecols=("id", "request_id", "query_text", "created_at"),
+        numeric_columns=("id",),
     ),
     "api_usage": DatasetSpec(
         "semantic_search_api_usage.csv",
@@ -94,52 +96,95 @@ DATASET_SPECS: dict[str, DatasetSpec] = {
             "attempts_json",
             "created_at",
         ),
+        numeric_columns=(
+            "id",
+            "result_count",
+            "total_results",
+            "api_call_count",
+            "input_tokens",
+            "output_tokens",
+            "thought_tokens",
+            "total_tokens",
+            "duration_ms",
+        ),
     ),
     "categories": DatasetSpec(
         "categories.csv",
         ("id", "name", "cat_group"),
         usecols=("id", "name", "cat_group"),
+        numeric_columns=("id", "cat_group"),
     ),
     "sub_categories": DatasetSpec(
         "sub_categories.csv",
         ("id", "categoryId", "name"),
         usecols=("id", "categoryId", "name"),
+        numeric_columns=("id", "categoryId"),
     ),
     "states": DatasetSpec(
         "states.csv",
         ("id", "name"),
         usecols=("id", "name"),
+        numeric_columns=("id",),
     ),
     "location": DatasetSpec(
         "location.csv",
         ("id", "city", "state_id", "price"),
         usecols=("id", "city", "state_id", "price"),
+        numeric_columns=("id", "state_id", "price"),
     ),
     "attributes": DatasetSpec(
         "attributes.csv",
         ("id", "name"),
         usecols=("id", "name"),
+        numeric_columns=("id",),
     ),
     "attribute_values": DatasetSpec(
         "attribute_values.csv",
         ("id", "attributeId", "value"),
         usecols=("id", "attributeId", "value"),
+        numeric_columns=("id", "attributeId"),
     ),
     "ads_attributes": DatasetSpec(
         "ads_attributes.csv",
         ("ads_id", "attribute_id", "value"),
         usecols=("ads_id", "attribute_id", "value"),
+        numeric_columns=("ads_id", "attribute_id"),
     ),
     "ads": DatasetSpec(
         "ads.csv",
         ("id", "user_id", "category_id", "title", "created_at"),
         usecols=ADS_COLUMNS,
-        dtypes={"rental_fee": "float64", "status": "str"},
+        dtypes={"status": "str"},
+        numeric_columns=(
+            "id",
+            "user_id",
+            "category_type",
+            "parent_id",
+            "category_id",
+            "rental_fee",
+            "is_rent_negotiable",
+            "city_id",
+            "locality_id",
+            "total_favorite",
+            "total_like",
+            "user_contact_view_count",
+            "user_viewed_count",
+            "actual_view_count",
+        ),
     ),
     "users": DatasetSpec(
         "users.csv",
         ("id", "state_id", "city_id", "created_at"),
         usecols=USER_COLUMNS,
+        numeric_columns=(
+            "id",
+            "state_id",
+            "city_id",
+            "gender",
+            "platform",
+            "is_verified",
+            "user_type",
+        ),
     ),
 }
 

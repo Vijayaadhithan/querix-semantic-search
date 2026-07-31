@@ -392,8 +392,10 @@ def _migrate_search_analytics_schema(
                 search_history.duration_ms,
                 CASE
                     WHEN COUNT(api_usage.id) = 0 THEN JSON_ARRAY()
-                    ELSE JSON_ARRAYAGG(
-                        JSON_OBJECT(
+                    ELSE CONCAT(
+                        '[',
+                        GROUP_CONCAT(
+                            JSON_OBJECT(
                             'attempt_number',
                                 api_usage.attempt_number,
                             'provider', api_usage.provider,
@@ -408,8 +410,11 @@ def _migrate_search_analytics_schema(
                             'duration_ms', api_usage.duration_ms,
                             'failure_reason',
                                 api_usage.failure_reason
-                        )
-                        ORDER BY api_usage.attempt_number
+                            )
+                            ORDER BY api_usage.attempt_number
+                            SEPARATOR ','
+                        ),
+                        ']'
                     )
                 END,
                 search_history.created_at

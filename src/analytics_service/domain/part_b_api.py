@@ -7,6 +7,10 @@ from .utils import parse_attempts_json
 LOGGER = logging.getLogger(__name__)
 
 
+def _rounded_stat(value, digits=1):
+    return 0 if pd.isna(value) else round(float(value), digits)
+
+
 def process_part_b(data):
     LOGGER.info("Processing Part B: API Performance Analytics")
     api = data['api_usage'].copy()
@@ -44,13 +48,13 @@ def process_part_b(data):
     # Q23: Latency stats
     latencies = api['duration_ms'].dropna()
     results['q23_latency_stats'] = {
-        'avg': round(float(latencies.mean()), 1),
-        'median': round(float(latencies.median()), 1),
-        'p95': round(float(latencies.quantile(0.95)), 1),
-        'p99': round(float(latencies.quantile(0.99)), 1),
-        'min': round(float(latencies.min()), 1),
-        'max': round(float(latencies.max()), 1),
-        'std': round(float(latencies.std()), 1),
+        'avg': _rounded_stat(latencies.mean()),
+        'median': _rounded_stat(latencies.median()),
+        'p95': _rounded_stat(latencies.quantile(0.95)),
+        'p99': _rounded_stat(latencies.quantile(0.99)),
+        'min': _rounded_stat(latencies.min()),
+        'max': _rounded_stat(latencies.max()),
+        'std': _rounded_stat(latencies.std()),
         'title': 'Latency Statistics (ms)',
         'chart_type': 'stats_card'
     }
@@ -123,10 +127,10 @@ def process_part_b(data):
 
     # Q26: Token consumption breakdown
     results['q26_token_consumption'] = {
-        'input_tokens': {'total': int(api['input_tokens'].sum()), 'avg': round(float(api['input_tokens'].mean()), 1)},
-        'output_tokens': {'total': int(api['output_tokens'].sum()), 'avg': round(float(api['output_tokens'].mean()), 1)},
-        'thought_tokens': {'total': int(api['thought_tokens'].sum()), 'avg': round(float(api['thought_tokens'].mean()), 1)},
-        'total_tokens': {'total': int(api['total_tokens'].sum()), 'avg': round(float(api['total_tokens'].mean()), 1)},
+        'input_tokens': {'total': int(api['input_tokens'].sum()), 'avg': _rounded_stat(api['input_tokens'].mean())},
+        'output_tokens': {'total': int(api['output_tokens'].sum()), 'avg': _rounded_stat(api['output_tokens'].mean())},
+        'thought_tokens': {'total': int(api['thought_tokens'].sum()), 'avg': _rounded_stat(api['thought_tokens'].mean())},
+        'total_tokens': {'total': int(api['total_tokens'].sum()), 'avg': _rounded_stat(api['total_tokens'].mean())},
         'labels': ['Input Tokens', 'Output Tokens', 'Thought Tokens'],
         'values': [int(api['input_tokens'].sum()), int(api['output_tokens'].sum()), int(api['thought_tokens'].sum())],
         'title': 'Token Consumption Breakdown',
@@ -319,8 +323,8 @@ def process_part_b(data):
     results['q35_result_distribution'] = {
         'labels': ['0 results', '1-5', '6-10', '11-20', '20+'],
         'values': [rc_dist.get(k, 0) for k in ['0 results', '1-5', '6-10', '11-20', '20+']],
-        'avg_result_count': round(float(api['result_count'].mean()), 1),
-        'avg_total_results': round(float(api['total_results'].mean()), 1),
+        'avg_result_count': _rounded_stat(api['result_count'].mean()),
+        'avg_total_results': _rounded_stat(api['total_results'].mean()),
         'title': 'Result Count Distribution',
         'chart_type': 'bar'
     }
@@ -330,7 +334,10 @@ def process_part_b(data):
     results['q36_zero_result_rate'] = {
         'zero_count': zero_results,
         'total': total_requests,
-        'percentage': round(zero_results / total_requests * 100, 1),
+        'percentage': (
+            round(zero_results / total_requests * 100, 1)
+            if total_requests else 0
+        ),
         'title': 'Zero-Result Rate',
         'chart_type': 'stat'
     }
@@ -369,7 +376,7 @@ def process_part_b(data):
 
     # Q40: Average API calls per request
     results['q40_avg_api_calls'] = {
-        'avg': round(float(api['api_call_count'].mean()), 2),
+        'avg': _rounded_stat(api['api_call_count'].mean(), 2),
         'distribution': api['api_call_count'].value_counts().sort_index().to_dict(),
         'labels': [str(k) for k in sorted(api['api_call_count'].value_counts().index)],
         'values': [int(api['api_call_count'].value_counts().sort_index()[k]) for k in sorted(api['api_call_count'].value_counts().index)],
@@ -381,7 +388,10 @@ def process_part_b(data):
     multi_attempt = sum(1 for attempts in api['parsed_attempts'] if len(attempts) > 3)
     results['q41_multi_attempt'] = {
         'count': multi_attempt,
-        'percentage': round(multi_attempt / total_requests * 100, 1),
+        'percentage': (
+            round(multi_attempt / total_requests * 100, 1)
+            if total_requests else 0
+        ),
         'title': 'Requests with >3 Attempts (Fallbacks)',
         'chart_type': 'stat'
     }

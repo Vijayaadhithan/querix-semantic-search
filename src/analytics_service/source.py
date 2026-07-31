@@ -30,6 +30,10 @@ def _validate_frame(
         raise DatasetContractError(
             f"{name} is missing required columns: {', '.join(missing)}"
         )
+    for column in spec.numeric_columns:
+        if column not in frame:
+            continue
+        frame[column] = pd.to_numeric(frame[column], errors="coerce")
     return frame
 
 

@@ -29,7 +29,7 @@ from analytics_service.metrics import (
     COMPANY_SEARCH_METRICS,
     INTERNAL_API_METRICS,
 )
-from analytics_service.source import SqlAnalyticsDataSource
+from analytics_service.source import SqlAnalyticsDataSource, _validate_frame
 from analytics_service.source_schema import DATASET_SPECS
 from analytics_service.store import AnalyticsSnapshotStore
 
@@ -377,6 +377,31 @@ analytics:
     )
 
 
+def test_source_normalizes_configured_numeric_columns():
+    frame = pd.DataFrame(
+        {
+            "id": [1, 2, 3],
+            "user_id": [1, 1, 1],
+            "category_id": [1, 1, 1],
+            "title": ["A", "B", "C"],
+            "created_at": ["2026-01-01"] * 3,
+            "rental_fee": ["1000.50", "", "not-a-number"],
+            "actual_view_count": ["10", "2", None],
+        }
+    )
+
+    normalized = _validate_frame(
+        "ads",
+        frame,
+        DATASET_SPECS["ads"],
+    )
+
+    assert normalized["rental_fee"].iloc[0] == 1000.5
+    assert pd.isna(normalized["rental_fee"].iloc[1])
+    assert pd.isna(normalized["rental_fee"].iloc[2])
+    assert normalized["actual_view_count"].iloc[0] == 10
+
+
 def test_daily_refresh_publishes_both_audiences_and_queries(tmp_path):
     company = analytics_company(tmp_path)
     store = AnalyticsSnapshotStore(tmp_path / "snapshots.sqlite3")
@@ -437,6 +462,38 @@ def test_daily_refresh_publishes_both_audiences_and_queries(tmp_path):
     )
     assert "api" in internal_queries["items"][0]
     assert "attempts" in internal_queries["items"][0]
+
+
+def test_daily_refresh_supports_empty_search_telemetry(tmp_path):
+    company = analytics_company(tmp_path)
+    data = analytics_data()
+    data["search_history"] = data["search_history"].iloc[0:0].copy()
+    data["api_usage"] = data["api_usage"].iloc[0:0].copy()
+    store = AnalyticsSnapshotStore(tmp_path / "snapshots.sqlite3")
+
+    result = AnalyticsRefreshService(
+        FakeSource(data),
+        store,
+    ).refresh(company)
+
+    assert result["status"] == "complete"
+    assert result["query_records"] == 0
+    company_dashboard = store.dashboard("gainr", internal=False)
+    internal_dashboard = store.dashboard("gainr", internal=True)
+    assert company_dashboard["search_intelligence"][
+        "q7_zero_results"
+    ]["percentage"] == 0
+    assert internal_dashboard["api_performance"][
+        "q23_latency_stats"
+    ]["avg"] == 0
+    assert internal_dashboard["api_performance"][
+        "q40_avg_api_calls"
+    ]["avg"] == 0
+    assert store.query_records(
+        "gainr",
+        internal=False,
+        limit=10,
+    )["items"] == []
 
 
 def test_refresh_applies_separate_company_and_internal_metric_profiles(

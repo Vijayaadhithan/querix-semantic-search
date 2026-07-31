@@ -21,6 +21,10 @@ from .utils import (
 LOGGER = logging.getLogger(__name__)
 
 
+def _percentage(count, total):
+    return round(count / total * 100, 1) if total else 0
+
+
 def process_part_a(data):
     LOGGER.info("Processing Part A: Search Demand Intelligence")
     sh = data['search_history'].copy()
@@ -136,7 +140,7 @@ def process_part_a(data):
         'queries': zero_queries[:50],
         'total_zero': len(zero_queries),
         'total_searches': total_q,
-        'percentage': round(len(zero_queries) / total_q * 100, 1),
+        'percentage': _percentage(len(zero_queries), total_q),
         'title': 'Searches with Zero Results (Unmet Demand)',
         'chart_type': 'stat'
     }
@@ -146,7 +150,7 @@ def process_part_a(data):
     results['q8_route_searches'] = {
         'queries': route_queries,
         'count': len(route_queries),
-        'percentage': round(len(route_queries) / total_q * 100, 1),
+        'percentage': _percentage(len(route_queries), total_q),
         'title': 'Route/Trip-Based Searches',
         'chart_type': 'list'
     }
@@ -199,7 +203,7 @@ def process_part_a(data):
     typo_queries = [(q, True) for q in queries if has_typo(q)]
     results['q11_typos'] = {
         'count': len(typo_queries),
-        'percentage': round(len(typo_queries) / total_q * 100, 1),
+        'percentage': _percentage(len(typo_queries), total_q),
         'examples': [t[0] for t in typo_queries[:20]],
         'known_typos': [{'typo': t, 'correction': c} for t, c in TYPO_INDICATORS],
         'title': 'Searches with Spelling Errors',
@@ -226,10 +230,16 @@ def process_part_a(data):
     results['q12_query_length'] = {
         'labels': ['1 word', '2 words', '3 words', '4-5 words', '6-8 words', '9+ words'],
         'values': [len_dist.get(k, 0) for k in ['1 word', '2 words', '3 words', '4-5 words', '6-8 words', '9+ words']],
-        'avg_words': round(sum(query_lengths) / len(query_lengths), 1),
-        'avg_chars': round(sum(char_lengths) / len(char_lengths), 1),
-        'max_words': max(query_lengths),
-        'min_words': min(query_lengths),
+        'avg_words': (
+            round(sum(query_lengths) / len(query_lengths), 1)
+            if query_lengths else 0
+        ),
+        'avg_chars': (
+            round(sum(char_lengths) / len(char_lengths), 1)
+            if char_lengths else 0
+        ),
+        'max_words': max(query_lengths, default=0),
+        'min_words': min(query_lengths, default=0),
         'title': 'Query Length Distribution',
         'chart_type': 'bar'
     }
@@ -238,7 +248,7 @@ def process_part_a(data):
     gibberish = [q for q in queries if is_gibberish(q)]
     results['q13_gibberish'] = {
         'count': len(gibberish),
-        'percentage': round(len(gibberish) / total_q * 100, 1),
+        'percentage': _percentage(len(gibberish), total_q),
         'examples': gibberish[:15],
         'title': 'Gibberish/Accidental Queries',
         'chart_type': 'stat'
@@ -248,7 +258,7 @@ def process_part_a(data):
     loc_specific = [q for q in queries if extract_locations(q)]
     results['q14_location_specificity'] = {
         'count': len(loc_specific),
-        'percentage': round(len(loc_specific) / total_q * 100, 1),
+        'percentage': _percentage(len(loc_specific), total_q),
         'title': 'Searches with Location Specificity',
         'chart_type': 'stat'
     }
@@ -311,7 +321,7 @@ def process_part_a(data):
         'labels': list(vehicle_types.keys()),
         'values': list(vehicle_types.values()),
         'total': len(vehicle_queries),
-        'percentage': round(len(vehicle_queries) / total_q * 100, 1),
+        'percentage': _percentage(len(vehicle_queries), total_q),
         'sample_queries': vehicle_queries[:20],
         'title': 'Vehicle Rental Searches Breakdown',
         'chart_type': 'doughnut'
@@ -328,7 +338,7 @@ def process_part_a(data):
     results['q19_food_searches'] = {
         'queries': food_queries,
         'count': len(food_queries),
-        'percentage': round(len(food_queries) / total_q * 100, 1),
+        'percentage': _percentage(len(food_queries), total_q),
         'title': 'Food Industry Searches',
         'chart_type': 'list'
     }
@@ -338,7 +348,7 @@ def process_part_a(data):
     results['q20_b2b_demand'] = {
         'queries': b2b_queries,
         'count': len(b2b_queries),
-        'percentage': round(len(b2b_queries) / total_q * 100, 1),
+        'percentage': _percentage(len(b2b_queries), total_q),
         'title': 'B2B Demand Indicators',
         'chart_type': 'list'
     }
