@@ -56,7 +56,9 @@ API Performance and full provider/model/token diagnostics. The two audiences
 are materialized separately so internal fields cannot leak through response
 filtering mistakes. Company dashboard users receive company-bound, server-side
 login sessions; internal users receive an internal role and must still select
-one company for every analytics request. The tenant API-key path remains
+one company for every analytics request. Independent host-only company and
+internal cookies allow both roles to remain signed in concurrently, while each
+route reads only the cookie for its audience. The tenant API-key path remains
 available only for service-to-service analytics calls. There is no
 cross-company analytics endpoint.
 

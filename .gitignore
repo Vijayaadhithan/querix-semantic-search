@@ -3,6 +3,9 @@
 .env.*
 !.env.example
 !.env.keys.example
+!.env.analytics.credentials.example
+# Generated analytics login files remain local/root-only and untracked.
+.env.analytics.*.credentials
 
 # Python
 .venv/

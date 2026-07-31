@@ -136,6 +136,17 @@ API_SEARCH_SLOT_TIMEOUT_SECONDS=5
 OLLAMA_QUERY_TIMEOUT_SECONDS=10
 API_CORS_ORIGINS=https://<customer-domain>
 
+ANALYTICS_API_HOST=127.0.0.1
+ANALYTICS_API_PORT=8010
+ANALYTICS_CORS_ORIGINS=https://querix.co
+ANALYTICS_SESSION_COOKIE_SECURE=true
+ANALYTICS_COMPANY_SESSION_COOKIE_NAME=__Host-querix_company_analytics
+ANALYTICS_INTERNAL_SESSION_COOKIE_NAME=__Host-querix_internal_analytics
+ANALYTICS_COMPANY_SESSION_IDLE_SECONDS=86400
+ANALYTICS_COMPANY_SESSION_ABSOLUTE_SECONDS=604800
+ANALYTICS_INTERNAL_SESSION_IDLE_SECONDS=28800
+ANALYTICS_INTERNAL_SESSION_ABSOLUTE_SECONDS=43200
+
 USAGE_TRACKING_ENABLED=true
 USAGE_DB_PATH=storage/usage.sqlite3
 
@@ -298,6 +309,12 @@ docker compose run --rm analytics-api \
 
 These accounts authenticate only the analytics product. They do not change or
 replace the semantic-search API keys.
+
+For recoverable operator-managed login passwords, follow the protected
+`.env.analytics.*.credentials` generation and one-shot sync workflow in
+[Daily company analytics service](analytics_service.md). Never add those files
+to Compose `env_file`; long-running containers need only the salted SQLite
+hashes. Keep every credential file root-owned and mode `0600` on the server.
 
 ## 8. Start pgvector, Redis, and Ollama
 

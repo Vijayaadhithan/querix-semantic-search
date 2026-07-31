@@ -4,19 +4,24 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import math
 import secrets
 import sqlite3
 import threading
 import uuid
+from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Iterator
+from typing import Iterator, Literal
 
 INTERNAL_ADMIN = "internal_admin"
 COMPANY_USER = "company_user"
 VALID_ROLES = {INTERNAL_ADMIN, COMPANY_USER}
+COMPANY_PORTAL = "company"
+INTERNAL_PORTAL = "internal"
+PortalType = Literal["company", "internal"]
 SCRYPT_N = 2**15
 SCRYPT_R = 8
 SCRYPT_P = 3
@@ -99,7 +104,9 @@ class AnalyticsPrincipal:
     username: str
     role: str
     company_id: str | None
+    portal_type: PortalType
     session_expires_at: str
+    session_max_age_seconds: int
 
     @property
     def internal(self) -> bool:
@@ -120,16 +127,58 @@ class AnalyticsAuthStore:
         path: str | Path,
         *,
         session_ttl_seconds: int = 28_800,
+        company_session_idle_seconds: int | None = None,
+        company_session_absolute_seconds: int | None = None,
+        internal_session_idle_seconds: int | None = None,
+        internal_session_absolute_seconds: int | None = None,
         max_login_attempts: int = 5,
         lock_seconds: int = 900,
         password_min_length: int = 15,
+        clock: Callable[[], datetime] = _utc_now,
     ):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.session_ttl_seconds = session_ttl_seconds
+        self.company_session_idle_seconds = (
+            session_ttl_seconds
+            if company_session_idle_seconds is None
+            else company_session_idle_seconds
+        )
+        self.company_session_absolute_seconds = (
+            session_ttl_seconds
+            if company_session_absolute_seconds is None
+            else company_session_absolute_seconds
+        )
+        self.internal_session_idle_seconds = (
+            session_ttl_seconds
+            if internal_session_idle_seconds is None
+            else internal_session_idle_seconds
+        )
+        self.internal_session_absolute_seconds = (
+            session_ttl_seconds
+            if internal_session_absolute_seconds is None
+            else internal_session_absolute_seconds
+        )
         self.max_login_attempts = max_login_attempts
         self.lock_seconds = lock_seconds
         self.password_min_length = password_min_length
+        self._clock = clock
+        for label, idle_seconds, absolute_seconds in (
+            (
+                "company",
+                self.company_session_idle_seconds,
+                self.company_session_absolute_seconds,
+            ),
+            (
+                "internal",
+                self.internal_session_idle_seconds,
+                self.internal_session_absolute_seconds,
+            ),
+        ):
+            if idle_seconds <= 0 or absolute_seconds < idle_seconds:
+                raise ValueError(
+                    f"Invalid {label} analytics session expiration policy"
+                )
         self._lock = threading.Lock()
         # A real scrypt verification is performed even for an unknown account,
         # reducing the usefulness of username timing probes.
@@ -185,9 +234,18 @@ class AnalyticsAuthStore:
                 CREATE TABLE IF NOT EXISTS analytics_sessions (
                     session_hash TEXT PRIMARY KEY,
                     user_id TEXT NOT NULL,
+                    portal_type TEXT NOT NULL CHECK (
+                        portal_type IN ('company', 'internal')
+                    ),
+                    role TEXT NOT NULL CHECK (
+                        role IN ('internal_admin', 'company_user')
+                    ),
+                    company_id TEXT,
                     created_at TEXT NOT NULL,
                     expires_at TEXT NOT NULL,
                     last_seen_at TEXT NOT NULL,
+                    idle_expires_at TEXT NOT NULL,
+                    absolute_expires_at TEXT NOT NULL,
                     revoked_at TEXT,
                     FOREIGN KEY (user_id)
                         REFERENCES analytics_users(user_id)
@@ -214,6 +272,102 @@ class AnalyticsAuthStore:
                 );
                 """
             )
+            self._migrate_sessions(connection)
+
+    @staticmethod
+    def _migrate_sessions(connection: sqlite3.Connection) -> None:
+        """Add portal and sliding-expiry claims to pre-rollout databases."""
+
+        columns = {
+            row["name"]
+            for row in connection.execute(
+                "PRAGMA table_info(analytics_sessions)"
+            ).fetchall()
+        }
+        additions = {
+            "portal_type": "TEXT",
+            "role": "TEXT",
+            "company_id": "TEXT",
+            "idle_expires_at": "TEXT",
+            "absolute_expires_at": "TEXT",
+        }
+        for name, sql_type in additions.items():
+            if name not in columns:
+                connection.execute(
+                    f"ALTER TABLE analytics_sessions ADD COLUMN {name} "
+                    f"{sql_type}"
+                )
+        connection.execute(
+            """
+            UPDATE analytics_sessions
+            SET portal_type = COALESCE(
+                    portal_type,
+                    CASE (
+                        SELECT role
+                        FROM analytics_users
+                        WHERE analytics_users.user_id = analytics_sessions.user_id
+                    )
+                        WHEN 'company_user' THEN 'company'
+                        ELSE 'internal'
+                    END
+                ),
+                role = COALESCE(
+                    role,
+                    (
+                        SELECT role
+                        FROM analytics_users
+                        WHERE analytics_users.user_id = analytics_sessions.user_id
+                    )
+                ),
+                company_id = COALESCE(
+                    company_id,
+                    (
+                        SELECT company_id
+                        FROM analytics_users
+                        WHERE analytics_users.user_id = analytics_sessions.user_id
+                    )
+                ),
+                idle_expires_at = COALESCE(idle_expires_at, expires_at),
+                absolute_expires_at = COALESCE(
+                    absolute_expires_at,
+                    expires_at
+                )
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_analytics_sessions_expiration
+            ON analytics_sessions (
+                portal_type,
+                idle_expires_at,
+                absolute_expires_at
+            )
+            """
+        )
+
+    def _now(self) -> datetime:
+        value = self._clock()
+        if value.tzinfo is None:
+            return value.replace(tzinfo=UTC)
+        return value.astimezone(UTC)
+
+    def _session_policy(
+        self,
+        role: str,
+    ) -> tuple[PortalType, int, int]:
+        if role == COMPANY_USER:
+            return (
+                COMPANY_PORTAL,
+                self.company_session_idle_seconds,
+                self.company_session_absolute_seconds,
+            )
+        if role == INTERNAL_ADMIN:
+            return (
+                INTERNAL_PORTAL,
+                self.internal_session_idle_seconds,
+                self.internal_session_absolute_seconds,
+            )
+        raise ValueError("Unsupported analytics session role")
 
     def _validate_password(self, password: str) -> None:
         if len(password) < self.password_min_length:
@@ -249,7 +403,7 @@ class AnalyticsAuthStore:
         display_username = username.strip()
         normalized_company = self._validate_binding(role, company_id)
         self._validate_password(password)
-        now = _iso(_utc_now())
+        now = _iso(self._now())
         user_id = uuid.uuid4().hex
         password_hash = _password_hash(password)
         try:
@@ -294,7 +448,7 @@ class AnalyticsAuthStore:
     def set_password(self, username: str, password: str) -> None:
         normalized = _normalize_username(username)
         self._validate_password(password)
-        now = _iso(_utc_now())
+        now = _iso(self._now())
         password_hash = _password_hash(password)
         with self._lock, self._connection() as connection:
             connection.execute("BEGIN IMMEDIATE")
@@ -330,7 +484,7 @@ class AnalyticsAuthStore:
 
     def set_active(self, username: str, *, active: bool) -> None:
         normalized = _normalize_username(username)
-        now = _iso(_utc_now())
+        now = _iso(self._now())
         with self._lock, self._connection() as connection:
             connection.execute("BEGIN IMMEDIATE")
             cursor = connection.execute(
@@ -389,8 +543,8 @@ class AnalyticsAuthStore:
             for row in rows
         ]
 
-    @staticmethod
     def _event(
+        self,
         connection: sqlite3.Connection,
         *,
         row: sqlite3.Row | None,
@@ -416,7 +570,7 @@ class AnalyticsAuthStore:
                 row["company_id"] if row is not None else None,
                 event_type,
                 (remote_address or "")[:191],
-                _iso(_utc_now()),
+                _iso(self._now()),
             ),
         )
 
@@ -425,13 +579,16 @@ class AnalyticsAuthStore:
         *,
         username: str,
         password: str,
+        required_role: str | None = None,
         remote_address: str | None = None,
     ) -> AuthenticatedSession | None:
+        if required_role is not None and required_role not in VALID_ROLES:
+            raise ValueError("Unsupported required analytics role")
         try:
             normalized = _normalize_username(username)
         except ValueError:
             normalized = ""
-        now = _utc_now()
+        now = self._now()
         with self._lock, self._connection() as connection:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
@@ -448,6 +605,13 @@ class AnalyticsAuthStore:
                 else self._dummy_password_hash
             )
             verified = _verify_password(candidate_hash, password)
+            role_allowed = (
+                row is not None
+                and (
+                    required_role is None
+                    or row["role"] == required_role
+                )
+            )
 
             locked = False
             if row is not None and row["locked_until"]:
@@ -463,9 +627,15 @@ class AnalyticsAuthStore:
                 or not bool(row["active"])
                 or locked
                 or not verified
+                or not role_allowed
             ):
                 event = "login_rejected"
-                if row is not None and not locked and bool(row["active"]):
+                if (
+                    row is not None
+                    and not locked
+                    and bool(row["active"])
+                    and not verified
+                ):
                     failed_attempts = int(row["failed_attempts"]) + 1
                     locked_until = None
                     if failed_attempts >= self.max_login_attempts:
@@ -512,8 +682,15 @@ class AnalyticsAuthStore:
                     ),
                 )
 
+            portal_type, idle_seconds, absolute_seconds = (
+                self._session_policy(row["role"])
+            )
             token = secrets.token_urlsafe(48)
-            expires_at = now + timedelta(seconds=self.session_ttl_seconds)
+            idle_expires_at = now + timedelta(seconds=idle_seconds)
+            absolute_expires_at = now + timedelta(
+                seconds=absolute_seconds
+            )
+            expires_at = min(idle_expires_at, absolute_expires_at)
             connection.execute(
                 """
                 UPDATE analytics_users
@@ -530,18 +707,28 @@ class AnalyticsAuthStore:
                 INSERT INTO analytics_sessions (
                     session_hash,
                     user_id,
+                    portal_type,
+                    role,
+                    company_id,
                     created_at,
                     expires_at,
-                    last_seen_at
+                    last_seen_at,
+                    idle_expires_at,
+                    absolute_expires_at
                 )
-                VALUES (?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     _session_digest(token),
                     row["user_id"],
+                    portal_type,
+                    row["role"],
+                    row["company_id"],
                     _iso(now),
                     _iso(expires_at),
                     _iso(now),
+                    _iso(idle_expires_at),
+                    _iso(absolute_expires_at),
                 ),
             )
             self._event(
@@ -558,15 +745,27 @@ class AnalyticsAuthStore:
             username=row["username"],
             role=row["role"],
             company_id=row["company_id"],
+            portal_type=portal_type,
             session_expires_at=_iso(expires_at),
+            session_max_age_seconds=max(
+                0,
+                math.ceil((expires_at - now).total_seconds()),
+            ),
         )
         return AuthenticatedSession(token=token, principal=principal)
 
-    def resolve_session(self, token: str | None) -> AnalyticsPrincipal | None:
+    def resolve_session(
+        self,
+        token: str | None,
+        *,
+        portal_type: PortalType | None = None,
+    ) -> AnalyticsPrincipal | None:
         if not token:
             return None
-        now = _utc_now()
-        with self._connection() as connection:
+        now = self._now()
+        digest = _session_digest(token)
+        with self._lock, self._connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
                 """
                 SELECT
@@ -575,60 +774,13 @@ class AnalyticsAuthStore:
                     users.role,
                     users.company_id,
                     users.active,
+                    sessions.portal_type,
+                    sessions.role AS session_role,
+                    sessions.company_id AS session_company_id,
                     sessions.expires_at,
+                    sessions.idle_expires_at,
+                    sessions.absolute_expires_at,
                     sessions.revoked_at
-                FROM analytics_sessions AS sessions
-                INNER JOIN analytics_users AS users
-                    ON users.user_id = sessions.user_id
-                WHERE sessions.session_hash = ?
-                """,
-                (_session_digest(token),),
-            ).fetchone()
-            if (
-                row is None
-                or not bool(row["active"])
-                or row["revoked_at"] is not None
-            ):
-                return None
-            try:
-                expires_at = datetime.fromisoformat(row["expires_at"])
-            except ValueError:
-                return None
-            if expires_at <= now:
-                return None
-            connection.execute(
-                """
-                UPDATE analytics_sessions
-                SET last_seen_at = ?
-                WHERE session_hash = ?
-                """,
-                (_iso(now), _session_digest(token)),
-            )
-        return AnalyticsPrincipal(
-            user_id=row["user_id"],
-            username=row["username"],
-            role=row["role"],
-            company_id=row["company_id"],
-            session_expires_at=row["expires_at"],
-        )
-
-    def revoke_session(
-        self,
-        token: str | None,
-        *,
-        remote_address: str | None = None,
-    ) -> None:
-        if not token:
-            return
-        digest = _session_digest(token)
-        now = _iso(_utc_now())
-        with self._connection() as connection:
-            row = connection.execute(
-                """
-                SELECT
-                    users.user_id,
-                    users.username_normalized,
-                    users.company_id
                 FROM analytics_sessions AS sessions
                 INNER JOIN analytics_users AS users
                     ON users.user_id = sessions.user_id
@@ -636,6 +788,108 @@ class AnalyticsAuthStore:
                 """,
                 (digest,),
             ).fetchone()
+            if (
+                row is None
+                or not bool(row["active"])
+                or row["revoked_at"] is not None
+                or row["session_role"] != row["role"]
+                or row["session_company_id"] != row["company_id"]
+            ):
+                connection.rollback()
+                return None
+            try:
+                idle_expires_at = datetime.fromisoformat(
+                    row["idle_expires_at"]
+                )
+                absolute_expires_at = datetime.fromisoformat(
+                    row["absolute_expires_at"]
+                )
+            except ValueError:
+                connection.rollback()
+                return None
+            expected_portal, idle_seconds, _ = self._session_policy(
+                row["role"]
+            )
+            if (
+                row["portal_type"] != expected_portal
+                or (
+                    portal_type is not None
+                    and row["portal_type"] != portal_type
+                )
+                or idle_expires_at <= now
+                or absolute_expires_at <= now
+            ):
+                connection.rollback()
+                return None
+            refreshed_idle_expires_at = min(
+                now + timedelta(seconds=idle_seconds),
+                absolute_expires_at,
+            )
+            expires_at = min(
+                refreshed_idle_expires_at,
+                absolute_expires_at,
+            )
+            connection.execute(
+                """
+                UPDATE analytics_sessions
+                SET last_seen_at = ?,
+                    idle_expires_at = ?,
+                    expires_at = ?
+                WHERE session_hash = ?
+                """,
+                (
+                    _iso(now),
+                    _iso(refreshed_idle_expires_at),
+                    _iso(expires_at),
+                    digest,
+                ),
+            )
+            connection.commit()
+        return AnalyticsPrincipal(
+            user_id=row["user_id"],
+            username=row["username"],
+            role=row["role"],
+            company_id=row["company_id"],
+            portal_type=row["portal_type"],
+            session_expires_at=_iso(expires_at),
+            session_max_age_seconds=max(
+                0,
+                math.ceil((expires_at - now).total_seconds()),
+            ),
+        )
+
+    def revoke_session(
+        self,
+        token: str | None,
+        *,
+        portal_type: PortalType | None = None,
+        remote_address: str | None = None,
+    ) -> None:
+        if not token:
+            return
+        digest = _session_digest(token)
+        now = _iso(self._now())
+        with self._connection() as connection:
+            row = connection.execute(
+                """
+                SELECT
+                    users.user_id,
+                    users.username_normalized,
+                    users.company_id,
+                    sessions.portal_type
+                FROM analytics_sessions AS sessions
+                INNER JOIN analytics_users AS users
+                    ON users.user_id = sessions.user_id
+                WHERE sessions.session_hash = ?
+                """,
+                (digest,),
+            ).fetchone()
+            if (
+                row is not None
+                and portal_type is not None
+                and row["portal_type"] != portal_type
+            ):
+                return
             connection.execute(
                 """
                 UPDATE analytics_sessions
@@ -654,13 +908,15 @@ class AnalyticsAuthStore:
                 )
 
     def prune_expired_sessions(self) -> int:
-        now = _iso(_utc_now())
+        now = _iso(self._now())
         with self._connection() as connection:
             cursor = connection.execute(
                 """
                 DELETE FROM analytics_sessions
-                WHERE expires_at <= ? OR revoked_at IS NOT NULL
+                WHERE idle_expires_at <= ?
+                   OR absolute_expires_at <= ?
+                   OR revoked_at IS NOT NULL
                 """,
-                (now,),
+                (now, now),
             )
         return cursor.rowcount

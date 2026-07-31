@@ -52,6 +52,16 @@ class AnalyticsSettings:
     query_max_page_size: int
     session_cookie_name: str = "querix_analytics_session"
     session_ttl_seconds: int = 28_800
+    company_session_cookie_name: str = (
+        "__Host-querix_company_analytics"
+    )
+    internal_session_cookie_name: str = (
+        "__Host-querix_internal_analytics"
+    )
+    company_session_idle_seconds: int = 86_400
+    company_session_absolute_seconds: int = 604_800
+    internal_session_idle_seconds: int = 28_800
+    internal_session_absolute_seconds: int = 43_200
     session_cookie_secure: bool = True
     login_max_attempts: int = 5
     login_lock_seconds: int = 900
@@ -98,14 +108,54 @@ class AnalyticsSettings:
                 "ANALYTICS_CORS_ORIGINS cannot contain '*' when "
                 "credentialed sessions are enabled"
             )
-        cookie_name = os.getenv(
-            "ANALYTICS_SESSION_COOKIE_NAME",
-            "querix_analytics_session",
-        ).strip()
-        if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", cookie_name):
-            raise ValueError("ANALYTICS_SESSION_COOKIE_NAME is invalid")
+        cookie_names = {
+            "session_cookie_name": os.getenv(
+                "ANALYTICS_SESSION_COOKIE_NAME",
+                "querix_analytics_session",
+            ).strip(),
+            "company_session_cookie_name": os.getenv(
+                "ANALYTICS_COMPANY_SESSION_COOKIE_NAME",
+                "__Host-querix_company_analytics",
+            ).strip(),
+            "internal_session_cookie_name": os.getenv(
+                "ANALYTICS_INTERNAL_SESSION_COOKIE_NAME",
+                "__Host-querix_internal_analytics",
+            ).strip(),
+        }
+        for field_name, cookie_name in cookie_names.items():
+            if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", cookie_name):
+                raise ValueError(f"{field_name} is invalid")
+        if len(set(cookie_names.values())) != len(cookie_names):
+            raise ValueError(
+                "Analytics legacy, company, and internal cookie names "
+                "must be distinct"
+            )
         session_ttl = int(
             os.getenv("ANALYTICS_SESSION_TTL_SECONDS", "28800")
+        )
+        company_idle = int(
+            os.getenv(
+                "ANALYTICS_COMPANY_SESSION_IDLE_SECONDS",
+                "86400",
+            )
+        )
+        company_absolute = int(
+            os.getenv(
+                "ANALYTICS_COMPANY_SESSION_ABSOLUTE_SECONDS",
+                "604800",
+            )
+        )
+        internal_idle = int(
+            os.getenv(
+                "ANALYTICS_INTERNAL_SESSION_IDLE_SECONDS",
+                "28800",
+            )
+        )
+        internal_absolute = int(
+            os.getenv(
+                "ANALYTICS_INTERNAL_SESSION_ABSOLUTE_SECONDS",
+                "43200",
+            )
         )
         login_max_attempts = int(
             os.getenv("ANALYTICS_LOGIN_MAX_ATTEMPTS", "5")
@@ -120,6 +170,18 @@ class AnalyticsSettings:
             raise ValueError(
                 "ANALYTICS_SESSION_TTL_SECONDS must be between 300 and 86400"
             )
+        for portal, idle_seconds, absolute_seconds in (
+            ("company", company_idle, company_absolute),
+            ("internal", internal_idle, internal_absolute),
+        ):
+            if not 300 <= idle_seconds <= 2_592_000:
+                raise ValueError(
+                    f"Invalid {portal} analytics idle expiration"
+                )
+            if not idle_seconds <= absolute_seconds <= 31_536_000:
+                raise ValueError(
+                    f"Invalid {portal} analytics absolute expiration"
+                )
         if not 3 <= login_max_attempts <= 20:
             raise ValueError(
                 "ANALYTICS_LOGIN_MAX_ATTEMPTS must be between 3 and 20"
@@ -140,8 +202,18 @@ class AnalyticsSettings:
             cors_origins=cors_origins,
             query_page_size=page_size,
             query_max_page_size=max_page_size,
-            session_cookie_name=cookie_name,
+            session_cookie_name=cookie_names["session_cookie_name"],
             session_ttl_seconds=session_ttl,
+            company_session_cookie_name=cookie_names[
+                "company_session_cookie_name"
+            ],
+            internal_session_cookie_name=cookie_names[
+                "internal_session_cookie_name"
+            ],
+            company_session_idle_seconds=company_idle,
+            company_session_absolute_seconds=company_absolute,
+            internal_session_idle_seconds=internal_idle,
+            internal_session_absolute_seconds=internal_absolute,
             session_cookie_secure=_env_bool(
                 "ANALYTICS_SESSION_COOKIE_SECURE",
                 True,

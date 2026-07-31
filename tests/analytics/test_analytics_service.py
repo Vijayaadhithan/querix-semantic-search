@@ -736,7 +736,8 @@ def test_api_enforces_company_and_internal_field_boundaries(
     assert "SameSite=strict" in login.headers["set-cookie"]
     assert session_company.status_code == 200
     assert forbidden_other_company.status_code == 403
-    assert forbidden_internal.status_code == 403
+    # Admin routes intentionally ignore the company cookie.
+    assert forbidden_internal.status_code == 401
     assert me.json()["user"]["role"] == COMPANY_USER
     assert logout.status_code == 200
     assert after_logout.status_code == 401

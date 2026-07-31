@@ -15,7 +15,16 @@ from fastapi import (
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, SecretStr
 
-from .auth import AnalyticsAuthStore, AnalyticsPrincipal
+from .auth import (
+    COMPANY_PORTAL,
+    COMPANY_USER,
+    INTERNAL_ADMIN,
+    INTERNAL_PORTAL,
+    AnalyticsAuthStore,
+    AnalyticsPrincipal,
+    AuthenticatedSession,
+    PortalType,
+)
 from .config import (
     AnalyticsRegistry,
     AnalyticsSettings,
@@ -47,6 +56,18 @@ def create_app(
     active_auth_store = auth_store or AnalyticsAuthStore(
         active_settings.snapshot_db_path,
         session_ttl_seconds=active_settings.session_ttl_seconds,
+        company_session_idle_seconds=(
+            active_settings.company_session_idle_seconds
+        ),
+        company_session_absolute_seconds=(
+            active_settings.company_session_absolute_seconds
+        ),
+        internal_session_idle_seconds=(
+            active_settings.internal_session_idle_seconds
+        ),
+        internal_session_absolute_seconds=(
+            active_settings.internal_session_absolute_seconds
+        ),
         max_login_attempts=active_settings.login_max_attempts,
         lock_seconds=active_settings.login_lock_seconds,
         password_min_length=active_settings.password_min_length,
@@ -69,7 +90,7 @@ def create_app(
             allow_origins=list(active_settings.cors_origins),
             allow_credentials=True,
             allow_methods=["GET", "POST"],
-            allow_headers=["Content-Type", "X-API-Key"],
+            allow_headers=["Content-Type"],
         )
 
     @application.middleware("http")
@@ -81,15 +102,130 @@ def create_app(
             response.headers["X-Content-Type-Options"] = "nosniff"
         return response
 
+    def remote_address(request: Request) -> str | None:
+        return request.client.host if request.client is not None else None
+
+    def validate_browser_origin(request: Request) -> None:
+        origin = request.headers.get("Origin")
+        if origin is not None and origin not in active_settings.cors_origins:
+            raise HTTPException(
+                status_code=403,
+                detail="Request origin is not allowed.",
+            )
+
+    def portal_cookie_name(portal_type: PortalType) -> str:
+        if portal_type == COMPANY_PORTAL:
+            return active_settings.company_session_cookie_name
+        return active_settings.internal_session_cookie_name
+
+    def set_portal_cookie(
+        response: Response,
+        *,
+        token: str,
+        principal: AnalyticsPrincipal,
+    ) -> None:
+        response.set_cookie(
+            key=portal_cookie_name(principal.portal_type),
+            value=token,
+            max_age=principal.session_max_age_seconds,
+            expires=datetime.fromisoformat(principal.session_expires_at),
+            httponly=True,
+            secure=active_settings.session_cookie_secure,
+            samesite="lax",
+            path="/",
+        )
+
+    def delete_portal_cookie(
+        response: Response,
+        portal_type: PortalType,
+    ) -> None:
+        response.delete_cookie(
+            key=portal_cookie_name(portal_type),
+            path="/",
+            secure=active_settings.session_cookie_secure,
+            httponly=True,
+            samesite="lax",
+        )
+
+    def set_legacy_cookie(
+        response: Response,
+        *,
+        token: str,
+        principal: AnalyticsPrincipal,
+    ) -> None:
+        response.set_cookie(
+            key=active_settings.session_cookie_name,
+            value=token,
+            max_age=principal.session_max_age_seconds,
+            expires=datetime.fromisoformat(principal.session_expires_at),
+            httponly=True,
+            secure=active_settings.session_cookie_secure,
+            samesite="strict",
+            path="/api/v1",
+        )
+
+    def authenticate(
+        credentials: LoginRequest,
+        request: Request,
+        *,
+        required_role: str | None,
+    ) -> AuthenticatedSession | None:
+        try:
+            return active_auth_store.authenticate(
+                username=credentials.username,
+                password=credentials.password.get_secret_value(),
+                required_role=required_role,
+                remote_address=remote_address(request),
+            )
+        except Exception as exc:
+            raise HTTPException(
+                status_code=503,
+                detail="Authentication service is unavailable.",
+            ) from exc
+
     def session_principal(
         session_token: str | None,
+        *,
+        portal_type: PortalType | None = None,
     ) -> AnalyticsPrincipal | None:
-        return active_auth_store.resolve_session(session_token)
+        try:
+            return active_auth_store.resolve_session(
+                session_token,
+                portal_type=portal_type,
+            )
+        except Exception as exc:
+            raise HTTPException(
+                status_code=503,
+                detail="Authentication service is unavailable.",
+            ) from exc
+
+    def revoke_session(
+        session_token: str | None,
+        request: Request,
+        *,
+        portal_type: PortalType | None = None,
+    ) -> None:
+        try:
+            active_auth_store.revoke_session(
+                session_token,
+                portal_type=portal_type,
+                remote_address=remote_address(request),
+            )
+        except Exception as exc:
+            raise HTTPException(
+                status_code=503,
+                detail="Authentication service is unavailable.",
+            ) from exc
 
     def require_user(
         session_token: str | None,
+        *,
+        portal_type: PortalType | None = None,
     ) -> AnalyticsPrincipal:
-        principal = session_principal(session_token)
+        principal = session_principal(
+            session_token,
+            portal_type=portal_type,
+        )
         if principal is None:
             raise HTTPException(
                 status_code=401,
@@ -99,19 +235,29 @@ def create_app(
 
     def require_admin(
         session_token: str | None,
+        response: Response,
     ) -> AnalyticsPrincipal:
-        principal = require_user(session_token)
+        principal = require_user(
+            session_token,
+            portal_type=INTERNAL_PORTAL,
+        )
         if not principal.internal:
             raise HTTPException(
                 status_code=403,
                 detail="Internal analytics access is required.",
             )
+        set_portal_cookie(
+            response,
+            token=session_token or "",
+            principal=principal,
+        )
         return principal
 
     def require_company(
         company_endpoint: str,
         api_key: str | None,
         session_token: str | None,
+        response: Response,
     ) -> CompanyAnalyticsConfig:
         company = active_registry.resolve_endpoint(company_endpoint)
         if company is None:
@@ -119,7 +265,10 @@ def create_app(
                 status_code=404,
                 detail="Unknown company analytics endpoint.",
             )
-        principal = session_principal(session_token)
+        principal = session_principal(
+            session_token,
+            portal_type=COMPANY_PORTAL,
+        )
         if principal is not None:
             if (
                 principal.internal
@@ -129,6 +278,11 @@ def create_app(
                     status_code=403,
                     detail="Session is not authorized for this company.",
                 )
+            set_portal_cookie(
+                response,
+                token=session_token or "",
+                principal=principal,
+            )
             return company
         if api_key:
             authenticated = active_registry.authenticate(
@@ -151,8 +305,9 @@ def create_app(
     def require_admin_company(
         company_endpoint: str,
         session_token: str | None,
+        response: Response,
     ) -> CompanyAnalyticsConfig:
-        require_admin(session_token)
+        require_admin(session_token, response)
         company = active_registry.resolve_endpoint(company_endpoint)
         if company is None:
             raise HTTPException(
@@ -243,34 +398,7 @@ def create_app(
             "refresh_schedule": "daily at 03:00 Asia/Kolkata",
         }
 
-    @application.post("/api/v1/analytics/auth/login", tags=["authentication"])
-    def login(
-        credentials: LoginRequest,
-        request: Request,
-        response: Response,
-    ) -> dict[str, Any]:
-        authenticated = active_auth_store.authenticate(
-            username=credentials.username,
-            password=credentials.password.get_secret_value(),
-            remote_address=(
-                request.client.host if request.client is not None else None
-            ),
-        )
-        if authenticated is None:
-            raise HTTPException(
-                status_code=401,
-                detail="Invalid username or password.",
-            )
-        response.set_cookie(
-            key=active_settings.session_cookie_name,
-            value=authenticated.token,
-            max_age=active_settings.session_ttl_seconds,
-            httponly=True,
-            secure=active_settings.session_cookie_secure,
-            samesite="strict",
-            path="/api/v1",
-        )
-        principal = authenticated.principal
+    def session_payload(principal: AnalyticsPrincipal) -> dict[str, Any]:
         return {
             "user": {
                 "username": principal.username,
@@ -280,22 +408,200 @@ def create_app(
             "expires_at": principal.session_expires_at,
         }
 
+    def role_login(
+        credentials: LoginRequest,
+        request: Request,
+        response: Response,
+        *,
+        required_role: str,
+    ) -> dict[str, Any]:
+        validate_browser_origin(request)
+        authenticated = authenticate(
+            credentials,
+            request,
+            required_role=required_role,
+        )
+        if authenticated is None:
+            raise HTTPException(
+                status_code=401,
+                detail="Invalid username or password.",
+            )
+        set_portal_cookie(
+            response,
+            token=authenticated.token,
+            principal=authenticated.principal,
+        )
+        return session_payload(authenticated.principal)
+
+    @application.post(
+        "/api/v1/analytics/company/auth/login",
+        tags=["authentication"],
+    )
+    def company_login(
+        credentials: LoginRequest,
+        request: Request,
+        response: Response,
+    ) -> dict[str, Any]:
+        return role_login(
+            credentials,
+            request,
+            response,
+            required_role=COMPANY_USER,
+        )
+
+    @application.get(
+        "/api/v1/analytics/company/auth/me",
+        tags=["authentication"],
+    )
+    def company_current_user(
+        response: Response,
+        analytics_session: str | None = Cookie(
+            default=None,
+            alias=active_settings.company_session_cookie_name,
+        ),
+    ) -> dict[str, Any]:
+        principal = require_user(
+            analytics_session,
+            portal_type=COMPANY_PORTAL,
+        )
+        set_portal_cookie(
+            response,
+            token=analytics_session or "",
+            principal=principal,
+        )
+        return session_payload(principal)
+
+    @application.post(
+        "/api/v1/analytics/company/auth/logout",
+        tags=["authentication"],
+    )
+    def company_logout(
+        request: Request,
+        response: Response,
+        analytics_session: str | None = Cookie(
+            default=None,
+            alias=active_settings.company_session_cookie_name,
+        ),
+    ) -> dict[str, bool]:
+        validate_browser_origin(request)
+        revoke_session(
+            analytics_session,
+            request,
+            portal_type=COMPANY_PORTAL,
+        )
+        delete_portal_cookie(response, COMPANY_PORTAL)
+        return {"logged_out": True}
+
+    @application.post(
+        "/api/v1/analytics/internal/auth/login",
+        tags=["authentication"],
+    )
+    def internal_login(
+        credentials: LoginRequest,
+        request: Request,
+        response: Response,
+    ) -> dict[str, Any]:
+        return role_login(
+            credentials,
+            request,
+            response,
+            required_role=INTERNAL_ADMIN,
+        )
+
+    @application.get(
+        "/api/v1/analytics/internal/auth/me",
+        tags=["authentication"],
+    )
+    def internal_current_user(
+        response: Response,
+        analytics_session: str | None = Cookie(
+            default=None,
+            alias=active_settings.internal_session_cookie_name,
+        ),
+    ) -> dict[str, Any]:
+        principal = require_user(
+            analytics_session,
+            portal_type=INTERNAL_PORTAL,
+        )
+        set_portal_cookie(
+            response,
+            token=analytics_session or "",
+            principal=principal,
+        )
+        return session_payload(principal)
+
+    @application.post(
+        "/api/v1/analytics/internal/auth/logout",
+        tags=["authentication"],
+    )
+    def internal_logout(
+        request: Request,
+        response: Response,
+        analytics_session: str | None = Cookie(
+            default=None,
+            alias=active_settings.internal_session_cookie_name,
+        ),
+    ) -> dict[str, bool]:
+        validate_browser_origin(request)
+        revoke_session(
+            analytics_session,
+            request,
+            portal_type=INTERNAL_PORTAL,
+        )
+        delete_portal_cookie(response, INTERNAL_PORTAL)
+        return {"logged_out": True}
+
+    # Deprecated compatibility endpoints. Remove only after both frontend
+    # portals have rolled out the role-specific authentication endpoints.
+    @application.post("/api/v1/analytics/auth/login", tags=["authentication"])
+    def login(
+        credentials: LoginRequest,
+        request: Request,
+        response: Response,
+    ) -> dict[str, Any]:
+        validate_browser_origin(request)
+        authenticated = authenticate(
+            credentials,
+            request,
+            required_role=None,
+        )
+        if authenticated is None:
+            raise HTTPException(
+                status_code=401,
+                detail="Invalid username or password.",
+            )
+        set_legacy_cookie(
+            response,
+            token=authenticated.token,
+            principal=authenticated.principal,
+        )
+        set_portal_cookie(
+            response,
+            token=authenticated.token,
+            principal=authenticated.principal,
+        )
+        return session_payload(authenticated.principal)
+
     @application.get("/api/v1/analytics/auth/me", tags=["authentication"])
     def current_user(
+        response: Response,
         analytics_session: str | None = Cookie(
             default=None,
             alias=active_settings.session_cookie_name,
         ),
     ) -> dict[str, Any]:
         principal = require_user(analytics_session)
-        return {
-            "user": {
-                "username": principal.username,
-                "role": principal.role,
-                "company_id": principal.company_id,
-            },
-            "expires_at": principal.session_expires_at,
-        }
+        set_legacy_cookie(
+            response,
+            token=analytics_session or "",
+            principal=principal,
+        )
+        set_portal_cookie(
+            response,
+            token=analytics_session or "",
+            principal=principal,
+        )
+        return session_payload(principal)
 
     @application.post("/api/v1/analytics/auth/logout", tags=["authentication"])
     def logout(
@@ -306,12 +612,9 @@ def create_app(
             alias=active_settings.session_cookie_name,
         ),
     ) -> dict[str, bool]:
-        active_auth_store.revoke_session(
-            analytics_session,
-            remote_address=(
-                request.client.host if request.client is not None else None
-            ),
-        )
+        validate_browser_origin(request)
+        principal = session_principal(analytics_session)
+        revoke_session(analytics_session, request)
         response.delete_cookie(
             key=active_settings.session_cookie_name,
             path="/api/v1",
@@ -319,6 +622,8 @@ def create_app(
             httponly=True,
             samesite="strict",
         )
+        if principal is not None:
+            delete_portal_cookie(response, principal.portal_type)
         return {"logged_out": True}
 
     @application.get(
@@ -326,12 +631,13 @@ def create_app(
         tags=["internal-analytics"],
     )
     def admin_companies(
+        response: Response,
         analytics_session: str | None = Cookie(
             default=None,
-            alias=active_settings.session_cookie_name,
+            alias=active_settings.internal_session_cookie_name,
         ),
     ) -> dict[str, Any]:
-        require_admin(analytics_session)
+        require_admin(analytics_session, response)
         return {
             "companies": [
                 {
@@ -350,14 +656,16 @@ def create_app(
     )
     def admin_dashboard(
         company_endpoint: str,
+        response: Response,
         analytics_session: str | None = Cookie(
             default=None,
-            alias=active_settings.session_cookie_name,
+            alias=active_settings.internal_session_cookie_name,
         ),
     ) -> dict[str, Any]:
         company = require_admin_company(
             company_endpoint,
             analytics_session,
+            response,
         )
         return get_dashboard(company, internal=True)
 
@@ -367,6 +675,7 @@ def create_app(
     )
     def admin_queries(
         company_endpoint: str,
+        response: Response,
         limit: int = Query(
             default=active_settings.query_page_size,
             ge=1,
@@ -384,12 +693,13 @@ def create_app(
         created_to: datetime | None = Query(default=None, alias="to"),
         analytics_session: str | None = Cookie(
             default=None,
-            alias=active_settings.session_cookie_name,
+            alias=active_settings.internal_session_cookie_name,
         ),
     ) -> dict[str, Any]:
         company = require_admin_company(
             company_endpoint,
             analytics_session,
+            response,
         )
         return get_queries(
             company,
@@ -410,16 +720,18 @@ def create_app(
     )
     def company_dashboard(
         company_endpoint: str,
+        response: Response,
         x_api_key: str | None = Header(default=None, alias="X-API-Key"),
         analytics_session: str | None = Cookie(
             default=None,
-            alias=active_settings.session_cookie_name,
+            alias=active_settings.company_session_cookie_name,
         ),
     ) -> dict[str, Any]:
         company = require_company(
             company_endpoint,
             x_api_key,
             analytics_session,
+            response,
         )
         return get_dashboard(company, internal=False)
 
@@ -429,6 +741,7 @@ def create_app(
     )
     def company_queries(
         company_endpoint: str,
+        response: Response,
         limit: int = Query(
             default=active_settings.query_page_size,
             ge=1,
@@ -447,13 +760,14 @@ def create_app(
         x_api_key: str | None = Header(default=None, alias="X-API-Key"),
         analytics_session: str | None = Cookie(
             default=None,
-            alias=active_settings.session_cookie_name,
+            alias=active_settings.company_session_cookie_name,
         ),
     ) -> dict[str, Any]:
         company = require_company(
             company_endpoint,
             x_api_key,
             analytics_session,
+            response,
         )
         return get_queries(
             company,
@@ -474,16 +788,18 @@ def create_app(
     )
     def company_status(
         company_endpoint: str,
+        response: Response,
         x_api_key: str | None = Header(default=None, alias="X-API-Key"),
         analytics_session: str | None = Cookie(
             default=None,
-            alias=active_settings.session_cookie_name,
+            alias=active_settings.company_session_cookie_name,
         ),
     ) -> dict[str, Any]:
         company = require_company(
             company_endpoint,
             x_api_key,
             analytics_session,
+            response,
         )
         status = active_store.company_status(company.company_id)
         return {

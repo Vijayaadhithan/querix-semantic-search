@@ -124,7 +124,20 @@ GET /api/v1/{company}/analytics/queries
 GET /api/v1/{company}/analytics/status
 ```
 
-Authentication endpoints:
+Role-specific browser authentication endpoints:
+
+```text
+POST /api/v1/analytics/company/auth/login
+GET  /api/v1/analytics/company/auth/me
+POST /api/v1/analytics/company/auth/logout
+
+POST /api/v1/analytics/internal/auth/login
+GET  /api/v1/analytics/internal/auth/me
+POST /api/v1/analytics/internal/auth/logout
+```
+
+The following shared endpoints are deprecated but remain available during the
+frontend rollout:
 
 ```text
 POST /api/v1/analytics/auth/login
@@ -191,12 +204,95 @@ line. `--password-stdin` is available for secret-manager automation. User
 management also supports `list`, `set-password`, `set-active`, and
 `prune-sessions`.
 
-For local HTTP only, set `ANALYTICS_SESSION_COOKIE_SECURE=false`. Production
-must use `true` behind HTTPS. Login returns an opaque server-side session in an
-`HttpOnly`, `SameSite=Strict` cookie. Passwords use salted scrypt hashes;
-sessions are stored only as SHA-256 token digests. Five failed logins lock the
-account for 15 minutes by default. Password changes and account disablement
-revoke active sessions.
+Change an analytics password through the hidden interactive prompt:
+
+```console
+docker compose run --rm analytics-api \
+  python -m analytics_service.users set-password \
+    --username <analytics-username>
+```
+
+The plaintext password is never stored in `.env` or `.env.keys`. Changing it
+updates the salted hash in `storage/analytics/snapshots.sqlite3` and revokes
+every active session for that account.
+
+For operator-managed recoverability, use a dedicated credential file per
+portal/account. These files match `.env.analytics.*.credentials`, are ignored
+by Git, excluded from Docker build context, and must remain mode `0600`. They
+are not loaded by either long-running API container.
+
+Generate a strong company credential file without printing its password:
+
+```console
+docker compose run --rm --no-deps --user root \
+  -v "$PWD:/credentials" analytics-api \
+  python -m analytics_service.users generate-credentials \
+    --file /credentials/.env.analytics.gainr.credentials \
+    --username gainr-owner \
+    --role company_user \
+    --company gainr
+```
+
+Generate the internal file similarly:
+
+```console
+docker compose run --rm --no-deps --user root \
+  -v "$PWD:/credentials" analytics-api \
+  python -m analytics_service.users generate-credentials \
+    --file /credentials/.env.analytics.internal.credentials \
+    --username analytics-admin \
+    --role internal_admin
+```
+
+Apply either file to SQLite through an ephemeral container:
+
+```console
+docker compose run --rm --no-deps \
+  --env-from-file .env.analytics.gainr.credentials \
+  analytics-api \
+  python -m analytics_service.users sync-credentials
+```
+
+Sync creates the account if absent. For an existing account it verifies the
+stored role/company binding, hashes the new password, and revokes all prior
+sessions. It refuses to change an existing account's role or tenant. Changing
+the file alone does not change the live password; run sync explicitly. Move
+the password into the approved password manager without printing or sending it
+through chat. To rotate again, rerun `generate-credentials` with the same
+arguments plus `--replace`, then run `sync-credentials`.
+
+Production uses two independent, host-only browser cookies:
+
+- `__Host-querix_company_analytics` for `company_user` accounts;
+- `__Host-querix_internal_analytics` for `internal_admin` accounts.
+
+Both cookies are `Secure`, `HttpOnly`, `SameSite=Lax`, and `Path=/`, with no
+`Domain` attribute. Company routes read only the company cookie. Admin routes
+read only the internal cookie. Logout revokes and deletes only the selected
+portal session, so both portals can remain signed in in one browser profile.
+
+For local plain HTTP, set `ANALYTICS_SESSION_COOKIE_SECURE=false` and override
+both role-specific cookie names with distinct names that do not use the
+`__Host-` prefix. Browsers require every `__Host-` cookie to be Secure.
+
+Login returns a cryptographically random opaque identifier. SQLite stores only
+its SHA-256 digest together with portal type, role, company binding, creation,
+last activity, idle expiration, absolute expiration, and revocation state.
+Passwords use salted scrypt hashes. Five failed logins lock the account for 15
+minutes by default. Password changes and account disablement revoke active
+sessions. The search Redis adapter is deliberately not used for authentication:
+it is a fail-open cache, while analytics authentication must fail closed.
+
+Default session policies are configurable and enforced server-side:
+
+| Portal | Idle timeout | Absolute timeout |
+|---|---:|---:|
+| Company | 24 hours | 7 days |
+| Internal | 8 hours | 12 hours |
+
+Authenticated activity slides the idle expiration and refreshes the matching
+cookie, but never moves the effective expiration beyond the absolute limit.
+Login and `/me` return that effective expiration.
 
 Browser login example:
 
@@ -204,19 +300,38 @@ Browser login example:
 curl -c /tmp/querix-analytics-cookies \
   -H "Content-Type: application/json" \
   -d '{"username":"gainr-owner","password":"your password"}' \
-  http://127.0.0.1:8010/api/v1/analytics/auth/login
+  http://127.0.0.1:8010/api/v1/analytics/company/auth/login
 
 curl -b /tmp/querix-analytics-cookies \
   http://127.0.0.1:8010/api/v1/gainr/analytics/dashboard
 ```
 
-Internal users log in through the same endpoint, then call one company-scoped
-internal route:
+Internal users use the independent internal login endpoint, then call one
+company-scoped internal route:
 
 ```console
-curl -b /tmp/querix-analytics-cookies \
+curl -c /tmp/querix-internal-analytics-cookies \
+  -H "Content-Type: application/json" \
+  -d '{"username":"analytics-admin","password":"your password"}' \
+  http://127.0.0.1:8010/api/v1/analytics/internal/auth/login
+
+curl -b /tmp/querix-internal-analytics-cookies \
   http://127.0.0.1:8010/api/v1/admin/analytics/gainr/dashboard
 ```
+
+## Authentication rollout order
+
+1. Deploy the additive backend endpoints and role-specific cookies.
+2. Verify the deprecated shared endpoints still support the deployed frontend.
+3. Update the frontend company portal to use `/company/auth/*` and the internal
+   portal to use `/internal/auth/*`.
+4. Test both sessions concurrently in one browser profile, including isolated
+   logout and cross-tenant denial.
+5. After the frontend rollout is stable, deprecate operational use of the
+   shared cookie and remove the legacy endpoints only in a separate approved
+   change.
+
+Do not remove the shared endpoints as part of the additive backend rollout.
 
 ## Tenant SQL configuration
 
