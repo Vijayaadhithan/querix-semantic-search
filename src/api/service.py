@@ -7,9 +7,9 @@ from datetime import datetime, timezone
 from typing import Any
 
 from api.contracts import (
+    PUBLIC_PRODUCT_FIELDS,
     HealthResponse,
     InvalidCursorError,
-    PUBLIC_PRODUCT_FIELDS,
     PaginationResponse,
     SearchCapacityError,
     SearchRequest,
@@ -19,7 +19,6 @@ from api.contracts import (
     decode_cursor,
     encode_cursor,
 )
-from search.engine import ProductSearchEngine
 from core.settings import (
     API_MAX_RESULTS,
     API_SEARCH_SLOT_TIMEOUT_SECONDS,
@@ -28,6 +27,7 @@ from core.settings import (
     EMBED_MODEL,
     RERANK_MODEL,
 )
+from search.engine import ProductSearchEngine
 from storage.search_analytics import (
     SearchAnalyticsEvent,
     SearchAnalyticsStore,

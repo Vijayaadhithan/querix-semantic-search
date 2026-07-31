@@ -2,6 +2,7 @@ import logging
 from collections import Counter, defaultdict
 
 import pandas as pd
+
 from .utils import parse_attempts_json
 
 LOGGER = logging.getLogger(__name__)
@@ -161,7 +162,6 @@ def process_part_b(data):
     operation_stats = defaultdict(lambda: {'count': 0, 'total_latency': 0})
     model_stats = defaultdict(lambda: {'count': 0, 'total_latency': 0, 'success': 0, 'failure': 0})
     failure_reasons = Counter()
-    fallback_count = 0
     total_attempts_count = 0
     requests_with_fallback = 0
 
@@ -368,7 +368,10 @@ def process_part_b(data):
     merged['query_length'] = merged['query_text'].fillna('').apply(lambda x: len(x.split()))
     length_results = merged.groupby('query_length')['total_results'].mean()
     results['q39_length_vs_results'] = {
-        'labels': [str(int(l)) for l in length_results.index[:15]],
+        'labels': [
+            str(int(query_length))
+            for query_length in length_results.index[:15]
+        ],
         'values': [round(float(v), 1) for v in length_results.values[:15]],
         'title': 'Query Length vs Average Results',
         'chart_type': 'line'

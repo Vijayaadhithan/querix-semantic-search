@@ -9,6 +9,7 @@ from typing import Any
 
 import pandas as pd
 
+from ..utils import parse_attempts_json
 from .classification import (
     classify_search_query,
     detect_language,
@@ -21,7 +22,6 @@ from .classification import (
     is_route_query,
     normalize_query,
 )
-from ..utils import parse_attempts_json
 
 LOGGER = logging.getLogger(__name__)
 

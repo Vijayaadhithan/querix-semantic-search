@@ -3,6 +3,7 @@ import re
 from copy import copy
 from difflib import SequenceMatcher, get_close_matches
 
+from core.settings import QUERY_FUZZY_MATCHING
 from search.bm25 import PersistentBM25Index
 from search.planner_rules import (
     CATEGORY_ATTRIBUTE_PREFIXES,
@@ -17,7 +18,7 @@ from search.planner_rules import (
     QUERY_FILTER_KEYS,
     TRANSLITERATED_QUERY_REWRITES,
 )
-from core.settings import QUERY_FUZZY_MATCHING
+
 
 class CatalogValueMap(dict):
     """Catalogue values with stable ordering and regexes built once."""

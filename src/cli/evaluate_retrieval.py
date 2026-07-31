@@ -6,7 +6,11 @@ from copy import deepcopy
 from pathlib import Path
 from statistics import mean, median
 
+from core.settings import PROJECT_ROOT
+from core.tenant_config import discover_tenant_profiles
 from search.bm25 import PersistentBM25Index
+from search.engine import ProductSearchEngine
+from search.retrieval import extract_product_ids
 from storage.mysql import mysql_connection, quote_mysql_identifier
 from storage.postgres import (
     PostgresRuntimeConfig,
@@ -14,10 +18,6 @@ from storage.postgres import (
     qualified_table,
     quote_postgres_identifier,
 )
-from search.retrieval import extract_product_ids
-from search.engine import ProductSearchEngine
-from core.settings import PROJECT_ROOT
-from core.tenant_config import discover_tenant_profiles
 from storage.vector import get_tenant_vector_collection
 
 DEFAULT_CASES_PATH = PROJECT_ROOT / "eval" / "retrieval_cases.json"

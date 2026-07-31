@@ -14,7 +14,6 @@ from storage.postgres import (
     quote_postgres_identifier,
 )
 
-
 # These are the categorical fields accepted by the shared planner and current
 # compatibility adapters. B-tree expression indexes preserve the existing
 # text-comparison semantics for both string and numeric JSON values.

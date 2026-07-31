@@ -4,7 +4,6 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-
 import api
 from api import (
     ExpiredCursorError,
@@ -15,9 +14,6 @@ from api import (
     TenantServicePool,
     create_app,
 )
-from tenants.gainr.compatibility import GainrFilterResultRequest
-from storage.mysql import MySQLRuntimeConfig
-from storage.postgres import PostgresRuntimeConfig
 from core.rate_limit import TenantRateLimiter
 from core.tenant_config import (
     TenantCompatibilityConfig,
@@ -27,7 +23,10 @@ from core.tenant_config import (
     TenantRegistry,
     TenantStorageConfig,
 )
+from storage.mysql import MySQLRuntimeConfig
+from storage.postgres import PostgresRuntimeConfig
 from storage.usage import MonthlyUsageStore
+from tenants.gainr.compatibility import GainrFilterResultRequest
 
 
 class CaptureAnalyticsStore:

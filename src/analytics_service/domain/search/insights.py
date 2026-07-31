@@ -7,9 +7,9 @@ from typing import Any
 
 import pandas as pd
 
+from ..utils import parse_attempts_json
 from .classification import classify_search_query, normalize_query
 from .records import merge_search_api
-from ..utils import parse_attempts_json
 
 
 def _number(value: Any, default: float = 0.0) -> float:

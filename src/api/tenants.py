@@ -6,21 +6,21 @@ from collections import OrderedDict
 from typing import Any
 
 from api.service import ProductSearchService
-from search.bm25 import PersistentBM25Index
-from tenants.gainr.compatibility import GainrCompatibilityService
-from search.reranker import SharedReranker
-from search.engine import ProductSearchEngine
 from core.settings import (
     API_TENANT_ENGINE_CACHE_SIZE,
     SEARCH_ANALYTICS_DELIVERY_MODE,
     SEARCH_ANALYTICS_SPOOL_PATH,
 )
 from core.tenant_config import TenantProfile, TenantRegistry
+from search.bm25 import PersistentBM25Index
+from search.engine import ProductSearchEngine
 from search.policy_registry import build_search_policy
+from search.reranker import SharedReranker
 from storage.search_analytics import MySQLSearchAnalyticsStore
 from storage.search_analytics_spool import SQLiteSearchAnalyticsSpoolStore
 from storage.usage import MonthlyUsageStore
 from storage.vector import get_tenant_vector_collection
+from tenants.gainr.compatibility import GainrCompatibilityService
 
 LOGGER = logging.getLogger("uvicorn.error")
 

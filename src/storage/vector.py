@@ -1,7 +1,7 @@
-from storage.pgvector import PgVectorCollection
-from storage.database import database_backend, database_source_name
-from ingestion.documents import mysql_document_id
 from core.tenant_config import TenantProfile
+from ingestion.documents import mysql_document_id
+from storage.database import database_backend, database_source_name
+from storage.pgvector import PgVectorCollection
 
 
 def get_tenant_vector_collection(

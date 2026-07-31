@@ -1,11 +1,9 @@
 
 import pytest
 
-
-from tenants.gainr.policy import GainrSearchPolicy
 from search.policy import DefaultSearchPolicy
 from search.policy_registry import build_search_policy
-
+from tenants.gainr.policy import GainrSearchPolicy
 
 QUERY_PLAN = {
     "semantic_query": "vehicle for long distance with comfort and safety",

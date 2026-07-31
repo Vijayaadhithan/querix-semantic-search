@@ -17,7 +17,6 @@ from storage.mysql import (
     require_pymysql,
 )
 
-
 LOGGER = logging.getLogger("uvicorn.error")
 _STOP = object()
 

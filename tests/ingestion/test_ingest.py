@@ -3,7 +3,7 @@ from decimal import Decimal
 
 import pytest
 
-
+from core.settings import EMBED_MODEL
 from ingestion.documents import (
     content_hash,
     metadata_value,
@@ -11,14 +11,13 @@ from ingestion.documents import (
     prepare_content_document,
     prepare_mysql_row,
 )
-from search.bm25 import PersistentBM25Index
 from ingestion.service import (
     database_current_ids,
     ingest_mysql_source,
     reconcile_deleted_documents,
 )
+from search.bm25 import PersistentBM25Index
 from storage.mysql import MySQLRuntimeConfig, quote_mysql_identifier
-from core.settings import EMBED_MODEL
 
 
 def test_quote_mysql_identifier_escapes_backticks():

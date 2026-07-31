@@ -8,14 +8,12 @@ import sys
 import time
 from pathlib import Path
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from providers.ollama import embed_texts  # noqa: E402
-from core.tenant_config import load_tenant_registry  # noqa: E402
-from storage.vector import get_tenant_vector_collection  # noqa: E402
-
+from core.tenant_config import load_tenant_registry
+from providers.ollama import embed_texts
+from storage.vector import get_tenant_vector_collection
 
 DEFAULT_QUERIES = (
     "comfortable vehicle for long distance travel",

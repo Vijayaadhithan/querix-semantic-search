@@ -1,8 +1,5 @@
-from pathlib import Path
 
 import pytest
-
-
 
 from storage import database as database_store
 from storage import mysql as mysql_store

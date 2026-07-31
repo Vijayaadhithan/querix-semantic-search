@@ -2,22 +2,21 @@
 from __future__ import annotations
 
 import argparse
-from collections import Counter
-from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import os
-from pathlib import Path
 import statistics
 import sys
 import time
+from collections import Counter
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
-
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from core.tenant_config import discover_tenant_profiles  # noqa: E402
+from core.tenant_config import discover_tenant_profiles
 
 
 def percentile(values: list[float], fraction: float) -> float:

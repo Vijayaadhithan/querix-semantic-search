@@ -3,19 +3,19 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from typing import Any
 
-from tenants.gainr.models import (
-    DURATION_ORDER,
-    GAINR_USER_FIELDS,
-    GainrSearchFilter,
-    _unique,
-)
+from core.tenant_config import TenantProfile
 from storage.mysql import (
     MySQLRuntimeConfig,
     mysql_connection,
     quote_mysql_identifier,
     require_pymysql,
 )
-from core.tenant_config import TenantProfile
+from tenants.gainr.models import (
+    DURATION_ORDER,
+    GAINR_USER_FIELDS,
+    GainrSearchFilter,
+    _unique,
+)
 
 logger = logging.getLogger(__name__)
 

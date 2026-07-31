@@ -9,17 +9,19 @@ import threading
 import time
 from typing import Any
 
+from core.tenant_config import TenantProfile
 from tenants.gainr.models import (
     GAINR_CARD_INTEGER_FIELDS,
     GAINR_USER_FIELDS,
     GAINR_USER_INTEGER_FIELDS,
     GainrFilterDataRequest,
     GainrFilterResultRequest,
-    GainrSearchFilter as GainrSearchFilter,
     GainrSuggestionRequest,
 )
+from tenants.gainr.models import (
+    GainrSearchFilter as GainrSearchFilter,
+)
 from tenants.gainr.repository import GainrDatabaseRepository
-from core.tenant_config import TenantProfile
 
 PERFORMANCE_LOGGER = logging.getLogger("uvicorn.error")
 

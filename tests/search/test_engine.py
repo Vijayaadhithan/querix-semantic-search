@@ -2,12 +2,10 @@ import json
 import threading
 from concurrent.futures import Future
 
-
 from search import engine as search_engine
-from search import planner as query_planner
 from search import planner_catalog as query_planner_catalog
 from search.bm25 import PersistentBM25Index
-from tenants.gainr.policy import GainrSearchPolicy, contains_phrase
+from search.engine import ProductSearchEngine
 from search.planner import (
     QueryFilterCatalog,
     deterministic_filter_query_plan,
@@ -17,7 +15,7 @@ from search.planner import (
     normalize_transliterated_query,
     query_filter_value_index,
 )
-from search.engine import ProductSearchEngine
+from tenants.gainr.policy import GainrSearchPolicy, contains_phrase
 
 
 class FakeCollection:

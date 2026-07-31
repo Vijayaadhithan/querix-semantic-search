@@ -2,6 +2,8 @@ import argparse
 import json
 from pathlib import Path
 
+from core.settings import PROJECT_ROOT
+from core.tenant_config import discover_tenant_profiles
 from search.bm25 import PersistentBM25Index
 from search.planner import (
     build_query_filter_catalog,
@@ -9,8 +11,6 @@ from search.planner import (
     extract_query_plan,
     query_filter_value_index,
 )
-from core.settings import PROJECT_ROOT
-from core.tenant_config import discover_tenant_profiles
 
 DEFAULT_CASES_PATH = PROJECT_ROOT / "eval" / "query_cases.json"
 

@@ -3,7 +3,7 @@ import threading
 import pytest
 import requests
 
-
+from core.settings import QUERY_EXTRACT_MODELS
 from providers import gemini as gemini_client
 from providers.gemini import (
     GeminiModelUnavailableError,
@@ -11,7 +11,6 @@ from providers.gemini import (
     GroqProvider,
     strip_json_fence,
 )
-from core.settings import QUERY_EXTRACT_MODELS
 
 
 class FakeResponse:

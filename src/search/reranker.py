@@ -1,8 +1,8 @@
+import logging
 import threading
 import time
-from contextlib import contextmanager
-import logging
 from collections import deque
+from contextlib import contextmanager
 
 import requests
 

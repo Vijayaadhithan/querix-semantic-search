@@ -37,6 +37,12 @@ jobs:
       - name: Install locked dependencies
         run: uv sync --frozen --group analytics
 
+      - name: Lint Python
+        run: uv run --frozen --group analytics ruff check src scripts tests
+
+      - name: Validate Markdown
+        run: uv run --frozen --group analytics python scripts/check_markdown.py
+
       - name: Check imports
         run: uv run --frozen --group analytics python -m compileall -q src scripts tests
 

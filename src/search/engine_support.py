@@ -5,19 +5,6 @@ import sys
 import time
 from copy import deepcopy
 
-from storage.database import fetch_product_types_by_ids, fetch_products_by_ids
-from providers.gemini import last_gemini_metrics
-from providers.ollama import embed_text, last_ollama_embedding_metrics
-from search.planner import (
-    default_query_plan,
-    deterministic_filter_query_plan,
-    direct_semantic_query_plan,
-    enrich_query_plan,
-    extract_query_plan,
-    query_analysis,
-    resolve_query_filters,
-)
-from search.helpers import active_filter_names
 from core.settings import (
     HYBRID_CANDIDATE_K,
     PRIMARY_RANKED_K,
@@ -34,6 +21,19 @@ from core.settings import (
     VOYAGE_RERANK_LITE_MODEL,
     VOYAGE_RERANK_MODEL,
 )
+from providers.gemini import last_gemini_metrics
+from providers.ollama import embed_text, last_ollama_embedding_metrics
+from search.helpers import active_filter_names
+from search.planner import (
+    default_query_plan,
+    deterministic_filter_query_plan,
+    direct_semantic_query_plan,
+    enrich_query_plan,
+    extract_query_plan,
+    query_analysis,
+    resolve_query_filters,
+)
+from storage.database import fetch_product_types_by_ids, fetch_products_by_ids
 
 LOGGER = logging.getLogger("uvicorn.error")
 RESULT_CACHE_SCHEMA_VERSION = "v23"

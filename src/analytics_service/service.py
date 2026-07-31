@@ -22,7 +22,6 @@ from .metrics import (
 from .source import AnalyticsDataSource
 from .store import AnalyticsSnapshotStore
 
-
 LOGGER = logging.getLogger(__name__)
 
 

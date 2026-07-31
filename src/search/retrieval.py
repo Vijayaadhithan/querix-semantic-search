@@ -1,20 +1,20 @@
 import time
 
-from providers.ollama import embed_text
-from storage.mysql import fetch_product_types_by_ids
-from search.planner import OFFER_AD_TYPE, WANTED_AD_TYPE
 from core.settings import (
     BM25_WEIGHT,
-    UNPRICED_RENTAL_FEE_CEILING,
     MYSQL_SEARCH_ID_COLUMN,
     MYSQL_TABLE,
     RRF_CONSTANT,
     SOFT_CATEGORY_BOOST,
+    UNPRICED_RENTAL_FEE_CEILING,
     VECTOR_EXACT_FILTER_MAX_ROWS,
     VECTOR_POST_FILTER_MAX_CANDIDATES,
     VECTOR_POST_FILTER_OVERFETCH_FACTOR,
     VECTOR_WEIGHT,
 )
+from providers.ollama import embed_text
+from search.planner import OFFER_AD_TYPE, WANTED_AD_TYPE
+from storage.mysql import fetch_product_types_by_ids
 
 
 def metadata_matches_filters(

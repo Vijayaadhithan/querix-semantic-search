@@ -94,6 +94,7 @@ example `PYTHONPATH=src .venv/bin/python -m api` or
 ## Documentation
 
 - [Architecture](docs/architecture.md)
+- [Code quality and repository structure](docs/code_quality.md)
 - [API integration](docs/company_api_integration.md)
 - [Local pgvector workflow](docs/local_pgvector_workflow.md)
 - [Production operations](docs/production_search_operations.md)
@@ -101,6 +102,7 @@ example `PYTHONPATH=src .venv/bin/python -m api` or
 - [Production commands](docs/production_commands.md)
 - [Search analytics](docs/search_analytics.md)
 - [Daily company analytics service](docs/analytics_service.md)
+- [Analytics frontend/API handoff](docs/Querix_Analytics_API_Handoff.md)
 - [Retrieval evaluation gates](eval/README.md)
 
 For every ordinary code change, use the copy-paste workflow at the top of
@@ -173,9 +175,13 @@ run the same gate as CI:
 
 ```bash
 uv lock --check
-uv sync --frozen
-uv run --frozen python -m compileall -q src scripts tests
-uv run --frozen pytest -q
+uv sync --frozen --group analytics
+uv run --frozen --group analytics ruff check src scripts tests
+uv run --frozen --group analytics python scripts/check_markdown.py
+uv run --frozen --group analytics python -m compileall -q src scripts tests
+uv run --frozen --group analytics pytest -q
+docker compose config --quiet
+git diff --check
 ```
 
 GitHub Actions runs this gate for every pull request and every push to `main`.

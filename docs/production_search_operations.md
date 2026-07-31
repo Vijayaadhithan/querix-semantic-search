@@ -191,7 +191,8 @@ their disk use remains bounded to roughly 30 MB per container.
 
 - Authentication and rate limiting are enabled.
 - Customer and admin keys are distinct.
-- CORS contains only approved origins.
+- CORS contains only approved, exact HTTPS origins. Production and testing
+  frontends are listed separately; wildcard origins are not used.
 - Source and vector databases use least-privilege credentials.
 - Remote database TLS uses certificate verification.
 - Redis and pgvector are not publicly reachable.

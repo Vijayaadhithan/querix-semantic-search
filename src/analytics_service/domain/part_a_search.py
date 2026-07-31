@@ -4,8 +4,8 @@ from collections import Counter
 
 import pandas as pd
 
-from .search.insights import build_additional_search_insights
 from .config import TYPO_INDICATORS
+from .search.insights import build_additional_search_insights
 from .utils import (
     classify_search_query,
     detect_language,
@@ -110,12 +110,12 @@ def process_part_a(data):
     loc_counts = Counter()
     for q in queries:
         locs = extract_locations(q)
-        for l in locs:
-            loc_counts[l] += 1
+        for location in locs:
+            loc_counts[location] += 1
     top_locs = loc_counts.most_common(20)
     results['q5_location_mentions'] = {
-        'labels': [l[0] for l in top_locs],
-        'values': [l[1] for l in top_locs],
+        'labels': [location[0] for location in top_locs],
+        'values': [location[1] for location in top_locs],
         'title': 'Most Mentioned Locations in Searches',
         'chart_type': 'bar'
     }
@@ -214,16 +214,16 @@ def process_part_a(data):
     query_lengths = [len(q.split()) for q in queries]
     char_lengths = [len(q) for q in queries]
     len_dist = Counter()
-    for l in query_lengths:
-        if l <= 1:
+    for query_length in query_lengths:
+        if query_length <= 1:
             len_dist['1 word'] += 1
-        elif l <= 2:
+        elif query_length <= 2:
             len_dist['2 words'] += 1
-        elif l <= 3:
+        elif query_length <= 3:
             len_dist['3 words'] += 1
-        elif l <= 5:
+        elif query_length <= 5:
             len_dist['4-5 words'] += 1
-        elif l <= 8:
+        elif query_length <= 8:
             len_dist['6-8 words'] += 1
         else:
             len_dist['9+ words'] += 1
@@ -359,12 +359,12 @@ def process_part_a(data):
     zero_loc_counts = Counter()
     for q in zero_queries:
         locs = extract_locations(q)
-        for l in locs:
-            zero_loc_counts[l] += 1
+        for location in locs:
+            zero_loc_counts[location] += 1
     top_zero_locs = zero_loc_counts.most_common(15)
     results['q85_zero_results_cities'] = {
-        'labels': [l[0] for l in top_zero_locs],
-        'values': [l[1] for l in top_zero_locs],
+        'labels': [location[0] for location in top_zero_locs],
+        'values': [location[1] for location in top_zero_locs],
         'title': 'Unmet Demand Locations (Zero Results)',
         'chart_type': 'bar'
     }

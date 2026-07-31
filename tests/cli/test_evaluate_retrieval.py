@@ -3,7 +3,6 @@ from types import SimpleNamespace
 
 import pytest
 
-
 from cli import evaluate_retrieval
 from cli.evaluate_retrieval import (
     RerankerPacer,

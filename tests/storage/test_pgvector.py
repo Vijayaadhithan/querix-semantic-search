@@ -1,9 +1,7 @@
 import json
 import threading
-from pathlib import Path
 
 import pytest
-
 
 from storage import pgvector as pgvector_store
 from storage.pgvector import PgVectorCollection

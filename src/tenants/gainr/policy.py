@@ -2,7 +2,6 @@ import re
 
 from search.planner_catalog import normalize_filter_value
 
-
 _VEHICLE_INTENT_TERMS = {
     "automobile",
     "automobiles",

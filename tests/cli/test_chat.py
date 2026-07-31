@@ -2,10 +2,13 @@ import json
 
 import pytest
 
-
+from core.settings import (
+    MYSQL_RESULT_ID_COLUMN,
+    MYSQL_RESULT_TABLE,
+    MYSQL_SEARCH_ID_COLUMN,
+    MYSQL_TABLE,
+)
 from search.bm25 import PersistentBM25Index
-from tenants.gainr.policy import GainrSearchPolicy
-from storage.mysql import fetch_products_by_ids
 from search.planner import (
     enrich_query_plan,
     extract_duration_filter,
@@ -25,12 +28,8 @@ from search.retrieval import (
     vector_search,
     vector_where_filter,
 )
-from core.settings import (
-    MYSQL_RESULT_ID_COLUMN,
-    MYSQL_RESULT_TABLE,
-    MYSQL_SEARCH_ID_COLUMN,
-    MYSQL_TABLE,
-)
+from storage.mysql import fetch_products_by_ids
+from tenants.gainr.policy import GainrSearchPolicy
 
 
 class FakeCursor:

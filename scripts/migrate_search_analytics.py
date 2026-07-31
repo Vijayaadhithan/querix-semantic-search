@@ -7,13 +7,12 @@ import argparse
 import sys
 from pathlib import Path
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from core.tenant_config import load_tenant_registry  # noqa: E402
-from storage.mysql import MySQLRuntimeConfig  # noqa: E402
-from storage.search_analytics import (  # noqa: E402
+from core.tenant_config import load_tenant_registry
+from storage.mysql import MySQLRuntimeConfig
+from storage.search_analytics import (
     create_search_analytics_schema,
     search_analytics_schema_status,
 )

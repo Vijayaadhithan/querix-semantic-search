@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from pathlib import Path
 import sqlite3
+from pathlib import Path
 
 import pandas as pd
 import pytest
@@ -14,21 +14,21 @@ from analytics_service.auth import (
     AnalyticsAuthStore,
 )
 from analytics_service.config import (
+    DEFAULT_TABLES,
     AnalyticsRegistry,
     AnalyticsSettings,
     CompanyAnalyticsConfig,
     DatabaseTarget,
     DatasetMapping,
-    DEFAULT_TABLES,
     load_company_analytics_config,
 )
-from analytics_service.service import AnalyticsRefreshService
 from analytics_service.metrics import (
     COMPANY_DEEP_METRICS,
     COMPANY_MARKET_METRICS,
     COMPANY_SEARCH_METRICS,
     INTERNAL_API_METRICS,
 )
+from analytics_service.service import AnalyticsRefreshService
 from analytics_service.source import SqlAnalyticsDataSource, _validate_frame
 from analytics_service.source_schema import DATASET_SPECS
 from analytics_service.store import AnalyticsSnapshotStore

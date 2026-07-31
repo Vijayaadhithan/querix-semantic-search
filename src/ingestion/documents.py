@@ -5,12 +5,17 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 
+from core.settings import (
+    EMBED_MODEL,
+    MYSQL_DATABASE,
+    MYSQL_SEARCH_ID_COLUMN,
+    MYSQL_TABLE,
+)
 from storage.database import (
     DatabaseRuntimeConfig,
     database_backend,
     database_source_name,
 )
-from core.settings import EMBED_MODEL, MYSQL_DATABASE, MYSQL_SEARCH_ID_COLUMN, MYSQL_TABLE
 
 MYSQL_METADATA_MAX_CHARS = 1000
 MYSQL_JSON_METADATA_MAX_FIELDS = 64

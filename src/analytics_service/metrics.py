@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-
 # These are deliberately small, stable API contracts. The domain modules still
 # contain the original exploratory reports so that a metric can be promoted
 # after validation without recovering old code, but only this catalogue is

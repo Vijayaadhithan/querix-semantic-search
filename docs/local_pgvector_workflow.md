@@ -4,7 +4,8 @@ This workflow validates a tenant profile, builds local indexes, and runs a searc
 
 ## Prerequisites
 
-- Python 3.12.13 with locked dependencies installed by `uv sync`
+- Python 3.12.13 with locked dependencies installed by
+  `uv sync --frozen --group analytics`
 - PostgreSQL with the `vector` extension
 - Redis
 - Ollama with the configured embedding model
@@ -21,7 +22,7 @@ Create the project environment from the committed lock before running direct
 Python commands:
 
 ```bash
-uv sync --frozen
+uv sync --frozen --group analytics
 ```
 
 ## Start dependencies
@@ -154,6 +155,8 @@ remain valid.
 
 ```bash
 PYTHONPATH=src .venv/bin/python -m cli.ingest --company "$COMPANY_ID" --list
+.venv/bin/ruff check src scripts tests
+.venv/bin/python scripts/check_markdown.py
 .venv/bin/python scripts/doctor.py --company "$COMPANY_ID" --strict
 .venv/bin/pytest -q
 ```

@@ -13,13 +13,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 
-from observability.admin_logs import AdminLogBuffer, LOG_LEVELS
 from api.contracts import (
+    PROCESS_STARTED_MONOTONIC,
+    PUBLIC_PRODUCT_FIELDS,
     ExpiredCursorError,
     HealthResponse,
     InvalidCursorError,
-    PROCESS_STARTED_MONOTONIC,
-    PUBLIC_PRODUCT_FIELDS,
     PaginationResponse,
     SearchCapacityError,
     SearchRequest,
@@ -36,11 +35,7 @@ from api.service import (
     public_product,
 )
 from api.tenants import TenantServicePool
-from tenants.gainr.compatibility import GainrFilterDataRequest, GainrSuggestionRequest
-from providers.ollama import preload_ollama_embedding
 from core.rate_limit import TenantRateLimiter
-from storage.redis import create_redis_cache
-from search.engine import ProductSearchEngine
 from core.settings import (
     API_ADMIN_KEY,
     API_ADMIN_LOG_BUFFER_SIZE,
@@ -63,8 +58,13 @@ from core.settings import (
     USAGE_TRACKING_ENABLED,
 )
 from core.tenant_config import TenantProfile, TenantRegistry, load_tenant_registry
+from observability.admin_logs import LOG_LEVELS, AdminLogBuffer
+from providers.ollama import preload_ollama_embedding
+from search.engine import ProductSearchEngine
+from storage.redis import create_redis_cache
 from storage.usage import MonthlyUsageStore
 from storage.vector import get_tenant_vector_collection
+from tenants.gainr.compatibility import GainrFilterDataRequest, GainrSuggestionRequest
 
 LOGGER = logging.getLogger("uvicorn.error")
 
@@ -87,6 +87,7 @@ __all__ = (
     "create_app",
     "decode_cursor",
     "encode_cursor",
+    "get_tenant_vector_collection",
     "process_monitor_status",
     "product_is_visible",
     "public_product",

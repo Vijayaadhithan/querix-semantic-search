@@ -13,7 +13,6 @@ from analytics_service.auth import (
     COMPANY_PORTAL,
     COMPANY_USER,
     INTERNAL_ADMIN,
-    INTERNAL_PORTAL,
     AnalyticsAuthStore,
 )
 from analytics_service.config import (
@@ -22,7 +21,6 @@ from analytics_service.config import (
     CompanyAnalyticsConfig,
     DatabaseTarget,
 )
-
 
 COMPANY_COOKIE = "__Host-querix_company_analytics"
 INTERNAL_COOKIE = "__Host-querix_internal_analytics"

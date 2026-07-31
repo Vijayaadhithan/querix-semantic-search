@@ -2,10 +2,10 @@ import argparse
 import json
 
 from api import product_is_visible, public_product
-from search.bm25 import PersistentBM25Index
-from search.engine import ProductSearchEngine
 from core.settings import APP_NAME
 from core.tenant_config import discover_tenant_profiles
+from search.bm25 import PersistentBM25Index
+from search.engine import ProductSearchEngine
 from storage.vector import get_tenant_vector_collection
 
 

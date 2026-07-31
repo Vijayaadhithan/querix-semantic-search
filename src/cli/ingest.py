@@ -1,5 +1,6 @@
 import argparse
 
+from core.tenant_config import discover_tenant_profiles
 from ingestion.service import (
     EMBED_BATCH_SIZE,
     MYSQL_BATCH_SIZE,
@@ -7,7 +8,6 @@ from ingestion.service import (
     ingest_mysql_source,
     rebuild_mysql_bm25_index,
 )
-from core.tenant_config import discover_tenant_profiles
 from storage.vector import (
     clear_tenant_vectors,
     delete_tenant_source,

@@ -134,7 +134,8 @@ API_TENANT_ENGINE_CACHE_SIZE=1
 API_TENANT_MAX_CONCURRENT_SEARCHES=1
 API_SEARCH_SLOT_TIMEOUT_SECONDS=5
 OLLAMA_QUERY_TIMEOUT_SECONDS=10
-API_CORS_ORIGINS=https://<customer-domain>
+# Comma-separated exact origins; include each approved production/test UI.
+API_CORS_ORIGINS=https://<customer-domain>,https://<customer-test-domain>
 
 ANALYTICS_API_HOST=127.0.0.1
 ANALYTICS_API_PORT=8010

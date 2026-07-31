@@ -2,15 +2,13 @@ from pathlib import Path
 
 import pytest
 
-
 from core.tenant_config import (
     TenantAnalyticsConfig,
     TenantRegistry,
     discover_tenant_profiles,
 )
-from storage.postgres import PostgresRuntimeConfig
 from storage import vector as vector_store
-
+from storage.postgres import PostgresRuntimeConfig
 
 PROFILE = """
 company:

@@ -13,7 +13,6 @@ from dotenv import load_dotenv
 
 from .metrics import validate_metric_profile
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,62}$")
 TENANT_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,62}$")

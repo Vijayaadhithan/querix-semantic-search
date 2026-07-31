@@ -1,7 +1,5 @@
-from pathlib import Path
 
 import redis
-
 
 from storage import redis as redis_cache
 from storage.redis import RedisJsonCache

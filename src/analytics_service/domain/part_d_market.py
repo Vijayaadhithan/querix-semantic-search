@@ -55,7 +55,7 @@ def process_part_d(data):
     state_supply = {}
     for sid, count in ads_by_state.items():
         try:
-            name = state_names.get(int(sid), f'Unknown')
+            name = state_names.get(int(sid), 'Unknown')
         except (TypeError, ValueError, OverflowError):
             name = 'Unknown'
         state_supply[name] = int(count)

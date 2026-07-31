@@ -16,7 +16,6 @@ from pathlib import Path
 from .auth import COMPANY_USER, INTERNAL_ADMIN, AnalyticsAuthStore
 from .config import AnalyticsSettings, load_analytics_registry
 
-
 CREDENTIAL_USERNAME_ENV = "ANALYTICS_CREDENTIAL_USERNAME"
 CREDENTIAL_PASSWORD_ENV = "ANALYTICS_CREDENTIAL_PASSWORD"
 CREDENTIAL_ROLE_ENV = "ANALYTICS_CREDENTIAL_ROLE"

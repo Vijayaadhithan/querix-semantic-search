@@ -22,6 +22,7 @@ analytics = [
 dev = [
     "httpx==0.28.1",
     "pytest==9.1.1",
+    "ruff==0.16.1",
 ]
 
 [tool.uv]
@@ -29,3 +30,12 @@ package = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I", "RUF100"]
+
+[tool.ruff.lint.per-file-ignores]
+"scripts/*.py" = ["E402"]

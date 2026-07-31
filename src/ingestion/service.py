@@ -1,5 +1,15 @@
 import time
 
+from core.settings import (
+    EMBED_MODEL,
+    MYSQL_BM25_COLUMN,
+    MYSQL_CONTENT_COLUMN,
+    MYSQL_DATABASE,
+    MYSQL_TABLE,
+)
+from core.tenant_config import TenantProfile
+from ingestion.documents import prepare_bm25_index_row, prepare_mysql_row
+from providers.ollama import embed_texts
 from search.bm25 import PersistentBM25Index
 from storage.database import (
     count_database_rows,
@@ -9,16 +19,6 @@ from storage.database import (
     fetch_database_columns,
     iter_database_rows,
 )
-from ingestion.documents import prepare_bm25_index_row, prepare_mysql_row
-from providers.ollama import embed_texts
-from core.settings import (
-    EMBED_MODEL,
-    MYSQL_BM25_COLUMN,
-    MYSQL_CONTENT_COLUMN,
-    MYSQL_DATABASE,
-    MYSQL_TABLE,
-)
-from core.tenant_config import TenantProfile
 from storage.vector import get_tenant_vector_collection
 
 EMBED_BATCH_SIZE = 32

@@ -1,6 +1,5 @@
-from tenants.gainr.policy import GainrSearchPolicy
 from search.policy import DEFAULT_SEARCH_POLICY, SearchPolicy
-
+from tenants.gainr.policy import GainrSearchPolicy
 
 _POLICY_FACTORIES = {
     "default": lambda: DEFAULT_SEARCH_POLICY,

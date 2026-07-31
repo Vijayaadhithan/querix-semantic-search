@@ -1,24 +1,23 @@
-from contextlib import contextmanager
 import threading
 import time
+from contextlib import contextmanager
 
 import pytest
 
-
 from api import ProductSearchService
-from tenants.gainr.compatibility import (
-    GainrCompatibilityService,
-    GainrDatabaseRepository,
-    GainrFilterResultRequest,
-    GainrSearchFilter,
-)
-from storage.mysql import MySQLRuntimeConfig
 from core.tenant_config import (
     TenantCompatibilityConfig,
     TenantPayloadConfig,
     TenantProfile,
     TenantRateLimit,
     TenantStorageConfig,
+)
+from storage.mysql import MySQLRuntimeConfig
+from tenants.gainr.compatibility import (
+    GainrCompatibilityService,
+    GainrDatabaseRepository,
+    GainrFilterResultRequest,
+    GainrSearchFilter,
 )
 
 

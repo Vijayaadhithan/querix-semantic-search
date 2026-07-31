@@ -8,17 +8,32 @@ from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 
-from search.bm25 import PersistentBM25Index
-from storage.database import (
-    create_database_pool,
-    DatabaseRuntimeConfig,
-    database_backend,
-    database_source_name,
-    fetch_product_types_by_ids,
-    fetch_products_by_ids,
+from core.settings import (
+    BM25_TOP_K,
+    EMBED_MODEL,
+    HYBRID_CANDIDATE_K,
+    MYSQL_RESULT_ID_COLUMN,
+    MYSQL_SEARCH_ID_COLUMN,
+    MYSQL_TABLE,
+    PRIMARY_RANKED_K,
+    QUERY_DIRECT_SEMANTIC_FAST_PATH,
+    QUERY_EXTRACT_MODELS,
+    RELATED_TAIL_ENABLED,
+    RERANK_CANDIDATE_K,
+    RERANK_TOP_K,
+    RETRIEVAL_OVERFETCH_FACTOR,
+    UNPRICED_RENTAL_FEE_CEILING,
+    VECTOR_CANDIDATE_K,
+    VECTOR_TOP_K,
 )
 from providers.gemini import last_gemini_metrics
 from providers.ollama import embed_text, last_ollama_embedding_metrics
+from search.bm25 import PersistentBM25Index
+from search.engine_support import (
+    QUERY_PLAN_CACHE_SCHEMA_VERSION,
+    SearchEngineSupportMixin,
+)
+from search.helpers import active_filter_names
 from search.planner import (
     WANTED_AD_TYPE,
     build_query_filter_catalog,
@@ -31,6 +46,8 @@ from search.planner import (
     query_filter_value_index,
     resolve_query_filters,
 )
+from search.policy import DEFAULT_SEARCH_POLICY, SearchPolicy
+from search.ranking import SearchRankingMixin
 from search.retrieval import (
     bm25_search,
     extract_product_ids,
@@ -39,43 +56,34 @@ from search.retrieval import (
     related_tail_product_ids,
     vector_search,
 )
-from search.engine_support import (
-    QUERY_PLAN_CACHE_SCHEMA_VERSION,
-    RESULT_CACHE_SCHEMA_VERSION,
-    SearchEngineSupportMixin,
-)
-from search.helpers import active_filter_names
-from search.policy import DEFAULT_SEARCH_POLICY, SearchPolicy
-from search.ranking import SearchRankingMixin
-from core.settings import (
-    BM25_TOP_K,
-    EMBED_MODEL,
-    HYBRID_CANDIDATE_K,
-    UNPRICED_RENTAL_FEE_CEILING,
-    MYSQL_RESULT_ID_COLUMN,
-    MYSQL_SEARCH_ID_COLUMN,
-    MYSQL_TABLE,
-    PRIMARY_RANKED_K,
-    QUERY_DETERMINISTIC_FAST_PATH,
-    QUERY_DIRECT_SEMANTIC_FAST_PATH,
-    QUERY_EXTRACT_MODELS,
-    QUERY_PLAN_CACHE_SIZE,
-    QUERY_PLAN_CACHE_TTL_SECONDS,
-    RELATED_TAIL_ENABLED,
-    RESULT_CACHE_ENABLED,
-    RESULT_CACHE_TTL_SECONDS,
-    RERANK_CANDIDATE_K,
-    RERANK_MAX_DOCUMENT_CHARS,
-    RETRIEVAL_OVERFETCH_FACTOR,
-    RERANK_PROVIDER_ORDER,
-    RERANK_TOP_K,
-    VECTOR_CANDIDATE_K,
-    VECTOR_TOP_K,
-    VOYAGE_RERANK_LITE_MODEL,
-    VOYAGE_RERANK_MODEL,
+from storage.database import (
+    DatabaseRuntimeConfig,
+    create_database_pool,
+    database_backend,
+    database_source_name,
+    fetch_product_types_by_ids,
+    fetch_products_by_ids,
 )
 
 LOGGER = logging.getLogger("uvicorn.error")
+
+# ``SearchEngineSupportMixin`` resolves these names through this module so
+# tests and tenant integrations can replace individual I/O/model boundaries
+# without patching private implementation modules.
+__all__ = (
+    "ProductSearchEngine",
+    "default_query_plan",
+    "deterministic_filter_query_plan",
+    "direct_semantic_query_plan",
+    "embed_text",
+    "enrich_query_plan",
+    "extract_query_plan",
+    "fetch_product_types_by_ids",
+    "fetch_products_by_ids",
+    "last_gemini_metrics",
+    "query_analysis",
+    "resolve_query_filters",
+)
 
 
 class ProductSearchEngine(SearchEngineSupportMixin, SearchRankingMixin):

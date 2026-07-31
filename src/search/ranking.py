@@ -1,8 +1,8 @@
 import logging
 import time
 
-from search.reranker import load_reranker, rerank
 from core.settings import RERANK_MODEL, RERANK_TOP_K
+from search.reranker import load_reranker, rerank
 
 LOGGER = logging.getLogger("uvicorn.error")
 

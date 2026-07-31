@@ -9,14 +9,6 @@ import requests
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from storage.mysql import mysql_connection, quote_mysql_identifier
-from storage.search_analytics import search_analytics_schema_status
-from storage.search_analytics_spool import search_analytics_spool_status
-from storage.postgres import (
-    PostgresRuntimeConfig,
-    postgres_connection,
-    qualified_table,
-)
 from core.settings import (
     API_ADMIN_KEY,
     API_AUTH_ENABLED,
@@ -29,14 +21,22 @@ from core.settings import (
     MYSQL_TABLE,
     OLLAMA_BASE_URL,
     OPENROUTER_API_KEY,
-    RERANK_PROVIDER_ORDER,
     REDIS_ENABLED,
     REDIS_URL,
+    RERANK_PROVIDER_ORDER,
     SEARCH_ANALYTICS_DELIVERY_MODE,
     SEARCH_ANALYTICS_SPOOL_PATH,
     VOYAGE_API_KEY,
 )
 from core.tenant_config import discover_tenant_profiles
+from storage.mysql import mysql_connection, quote_mysql_identifier
+from storage.postgres import (
+    PostgresRuntimeConfig,
+    postgres_connection,
+    qualified_table,
+)
+from storage.search_analytics import search_analytics_schema_status
+from storage.search_analytics_spool import search_analytics_spool_status
 from storage.vector import get_tenant_vector_collection
 
 

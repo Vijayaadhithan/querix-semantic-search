@@ -80,7 +80,7 @@ def process_part_c(data):
     users['created_at_parsed'] = pd.to_datetime(users['created_at'], errors='coerce')
     users['reg_month'] = users['created_at_parsed'].dt.to_period('M')
     monthly_users = users.groupby('reg_month').size()
-    # Take last 24 months for readability
+    # Take the last 36 months for readability.
     monthly_users = monthly_users.tail(36)
     results['q51_user_growth'] = {
         'labels': [str(m) for m in monthly_users.index],
@@ -96,7 +96,7 @@ def process_part_c(data):
     users_by_state = users.groupby('state_id').size()
     state_dist = {}
     for sid, count in users_by_state.items():
-        name = state_names.get(int(sid) if not pd.isna(sid) else -1, f'Unknown')
+        name = state_names.get(int(sid) if not pd.isna(sid) else -1, 'Unknown')
         state_dist[name] = int(count)
     state_dist = dict(sorted(state_dist.items(), key=lambda x: x[1], reverse=True))
     results['q52_users_by_state'] = {

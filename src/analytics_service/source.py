@@ -11,7 +11,6 @@ import pandas as pd
 from .config import CompanyAnalyticsConfig, DatabaseTarget, DatasetMapping
 from .source_schema import DATASET_SPECS, DatasetContractError, DatasetSpec
 
-
 LOGGER = logging.getLogger(__name__)
 
 

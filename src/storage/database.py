@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from contextlib import contextmanager
-from queue import Empty, LifoQueue
 import threading
 import time
+from contextlib import contextmanager
+from queue import Empty, LifoQueue
 from typing import TypeAlias
 
 from storage.mysql import (
@@ -12,12 +12,16 @@ from storage.mysql import (
     count_mysql_rows,
     detect_mysql_primary_key,
     fetch_mysql_columns,
-    fetch_product_types_by_ids as fetch_mysql_product_types_by_ids,
-    fetch_products_by_ids as fetch_mysql_products_by_ids,
     iter_mysql_rows,
     mysql_connection,
     mysql_source_name,
     require_pymysql,
+)
+from storage.mysql import (
+    fetch_product_types_by_ids as fetch_mysql_product_types_by_ids,
+)
+from storage.mysql import (
+    fetch_products_by_ids as fetch_mysql_products_by_ids,
 )
 from storage.postgres import (
     PostgresRuntimeConfig,
@@ -30,7 +34,6 @@ from storage.postgres import (
     postgres_connection,
     postgres_source_name,
 )
-
 
 DatabaseRuntimeConfig: TypeAlias = MySQLRuntimeConfig | PostgresRuntimeConfig
 

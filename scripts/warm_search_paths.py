@@ -9,15 +9,15 @@ import sys
 import time
 from pathlib import Path
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 sys.path.insert(0, str(SCRIPT_DIR))
 
-from search.bm25 import tokenize_query  # noqa: E402
-from core.tenant_config import load_tenant_registry  # noqa: E402
-from warm_hnsw import DEFAULT_QUERIES, warm_hnsw  # noqa: E402
+from warm_hnsw import DEFAULT_QUERIES, warm_hnsw
+
+from core.tenant_config import load_tenant_registry
+from search.bm25 import tokenize_query
 
 
 def prewarm_file(path: Path, chunk_size: int = 8 * 1024 * 1024) -> dict[str, float]:

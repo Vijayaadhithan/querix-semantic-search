@@ -82,15 +82,18 @@ ingestion. Never use `docker compose down -v` during routine operations.
 
 ## Routine code change: use this every time
 
-For an ordinary code/configuration change, push from development and recreate
-only the production API. Existing pgvector embeddings, BM25, Redis data, and
-the Docker Ollama model are preserved.
+For an ordinary code/configuration change, push from development and let the
+deployment script rebuild/recreate both independently packaged API images.
+Existing pgvector embeddings, BM25, Redis data, analytics snapshots, and the
+Docker Ollama model are preserved.
 
 Development machine:
 
 ```bash
 git status --short
 git diff --check
+.venv/bin/ruff check src scripts tests
+.venv/bin/python scripts/check_markdown.py
 .venv/bin/python -m pytest -q
 docker compose config --quiet
 git add -A
@@ -183,6 +186,8 @@ Review and verify the complete change set:
 git status --short
 git diff --stat
 git diff --check
+.venv/bin/ruff check src scripts tests
+.venv/bin/python scripts/check_markdown.py
 .venv/bin/pytest -q
 docker compose config --quiet
 ```

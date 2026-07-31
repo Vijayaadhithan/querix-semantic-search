@@ -19,7 +19,6 @@ from storage.search_analytics import (
     write_search_analytics_events,
 )
 
-
 LOGGER = logging.getLogger("uvicorn.error")
 _STOP = object()
 _SCHEMA_VERSION = 2
