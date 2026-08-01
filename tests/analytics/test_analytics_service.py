@@ -22,6 +22,7 @@ from analytics_service.config import (
     DatasetMapping,
     load_company_analytics_config,
 )
+from analytics_service.domain.search.records import build_query_records
 from analytics_service.metrics import (
     COMPANY_DEEP_METRICS,
     COMPANY_MARKET_METRICS,
@@ -91,6 +92,12 @@ def analytics_data() -> dict[str, pd.DataFrame]:
                 "thought_tokens": 0,
                 "total_tokens": 120,
                 "duration_ms": 500.0,
+                "plan_cache_hit": True,
+                "result_cache_hit": False,
+                "timings_json": (
+                    '{"total_server_ms":500.0,"planning_ms":200.0,'
+                    '"retrieval_ms":180.0,"reranking_ms":90.0}'
+                ),
                 "attempts_json": (
                     '[{"attempt_number":1,"provider":"groq",'
                     '"model":"planner","operation":"query_planning",'
@@ -113,6 +120,12 @@ def analytics_data() -> dict[str, pd.DataFrame]:
                 "thought_tokens": 0,
                 "total_tokens": 0,
                 "duration_ms": 100.0,
+                "plan_cache_hit": False,
+                "result_cache_hit": False,
+                "timings_json": (
+                    '{"total_server_ms":100.0,"planning_ms":5.0,'
+                    '"database_filter_ms":80.0}'
+                ),
                 "attempts_json": "[]",
                 "created_at": "2026-07-29 11:00:00",
             },
@@ -316,8 +329,6 @@ analytics:
         - q10_language
       market_intelligence: []
     internal:
-      search_intelligence:
-        - q7_zero_results
       api_performance:
         - q21_success_rate
         - q23_latency_stats
@@ -351,7 +362,6 @@ analytics:
         "market_intelligence": (),
     }
     assert config.internal_metric_profile == {
-        "search_intelligence": ("q7_zero_results",),
         "api_performance": (
             "q21_success_rate",
             "q23_latency_stats",
@@ -432,9 +442,13 @@ def test_daily_refresh_publishes_both_audiences_and_queries(tmp_path):
     assert tuple(internal_dashboard["api_performance"]) == (
         INTERNAL_API_METRICS
     )
-    assert internal_dashboard["search_intelligence"] == (
-        company_dashboard["search_intelligence"]
-    )
+    assert internal_dashboard["metadata"]["modules"] == [
+        "individual_queries",
+        "api_performance",
+    ]
+    assert "search_intelligence" not in internal_dashboard
+    assert "deep_analytics" not in internal_dashboard
+    assert "market_intelligence" not in internal_dashboard
     assert company_dashboard["metadata"]["schema_version"] == "2.0"
 
     company_queries = store.query_records(
@@ -460,8 +474,60 @@ def test_daily_refresh_publishes_both_audiences_and_queries(tmp_path):
         internal=True,
         limit=10,
     )
-    assert "api" in internal_queries["items"][0]
-    assert "attempts" in internal_queries["items"][0]
+    detailed = next(
+        item
+        for item in internal_queries["items"]
+        if item["request_id"] == "req-1"
+    )
+    assert detailed["performance"] == {
+        "server_duration_ms": 500.0,
+        "total_server_duration_ms": 500.0,
+        "measurement_scope": "server_search_processing",
+        "timing_semantics": "stages_may_overlap_do_not_sum",
+        "execution_path": "semantic",
+        "cache": {"plan_hit": True, "result_hit": False},
+        "stages_ms": {
+            "total_server_ms": 500.0,
+            "planning_ms": 200.0,
+            "query_model_ms": None,
+            "query_model_load_ms": None,
+            "engine_total_ms": None,
+            "result_cache_ms": None,
+            "embedding_ms": None,
+            "embedding_load_ms": None,
+            "vector_search_ms": None,
+            "bm25_search_ms": None,
+            "retrieval_ms": 180.0,
+            "parallel_retrieval_ms": None,
+            "fusion_ms": None,
+            "type_lookup_ms": None,
+            "reranker_load_ms": None,
+            "reranking_ms": 90.0,
+            "related_tail_ms": None,
+            "database_filter_ms": None,
+            "eligibility_ms": None,
+            "hydration_ms": None,
+            "response_mapping_ms": None,
+            "session_storage_ms": None,
+            "usage_recording_ms": None,
+            "recent_search_ms": None,
+        },
+        "downstream_api_calls": 3,
+        "attempt_count": 1,
+        "successful_attempt_count": 1,
+        "failed_attempt_count": 0,
+    }
+    assert detailed["token_usage"] == {
+        "input_tokens": 100,
+        "output_tokens": 20,
+        "thought_tokens": 0,
+        "total_tokens": 120,
+        "tokens_per_result": 6.0,
+    }
+    assert detailed["api"]["duration_ms"] == 500.0
+    assert detailed["attempts"][0]["duration_ms"] == 200
+    assert "performance" not in company_queries["items"][0]
+    assert "token_usage" not in company_queries["items"][0]
 
 
 def test_daily_refresh_supports_empty_search_telemetry(tmp_path):
@@ -496,6 +562,24 @@ def test_daily_refresh_supports_empty_search_telemetry(tmp_path):
     )["items"] == []
 
 
+def test_internal_query_marks_missing_operational_telemetry_as_unavailable():
+    data = analytics_data()
+    data["api_usage"] = data["api_usage"].iloc[0:0].copy()
+
+    record = build_query_records(data)["queries"][0]
+
+    assert record["outcome"] == "telemetry_missing"
+    assert record["performance"]["total_server_duration_ms"] is None
+    assert record["performance"]["cache"] == {
+        "plan_hit": None,
+        "result_hit": None,
+    }
+    assert all(
+        value is None
+        for value in record["performance"]["stages_ms"].values()
+    )
+
+
 def test_refresh_applies_separate_company_and_internal_metric_profiles(
     tmp_path,
 ):
@@ -516,7 +600,6 @@ def test_refresh_applies_separate_company_and_internal_metric_profiles(
             "market_intelligence": (),
         },
         internal_metric_profile={
-            "search_intelligence": ("q7_zero_results",),
             "api_performance": (
                 "q21_success_rate",
                 "q23_latency_stats",
@@ -540,9 +623,7 @@ def test_refresh_applies_separate_company_and_internal_metric_profiles(
     assert external["metadata"]["metric_counts"][
         "market_intelligence"
     ] == 0
-    assert tuple(internal["search_intelligence"]) == (
-        "q7_zero_results",
-    )
+    assert "search_intelligence" not in internal
     assert tuple(internal["api_performance"]) == (
         "q21_success_rate",
         "q23_latency_stats",

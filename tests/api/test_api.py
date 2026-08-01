@@ -1016,7 +1016,10 @@ def test_search_analytics_records_route_provider_calls_and_user_context():
             }
         ],
         "result_cache_hit": False,
-        "plan_cache_hit": False,
+        "plan_cache_hit": True,
+        "seconds": 0.2,
+        "retrieval_seconds": 0.7,
+        "reranker_seconds": 0.3,
     }
 
     submitted = service.record_search_analytics(
@@ -1033,6 +1036,16 @@ def test_search_analytics_records_route_provider_calls_and_user_context():
     assert event.execution_path == "semantic"
     assert event.api_call_count == 3
     assert event.total_tokens == 620
+    assert event.plan_cache_hit is True
+    assert event.result_cache_hit is False
+    assert event.timings_ms == {
+        "planning_ms": 200.0,
+        "retrieval_ms": 700.0,
+        "reranking_ms": 300.0,
+        "query_model_ms": 400.0,
+        "embedding_ms": 90.0,
+        "total_server_ms": 1500.0,
+    }
     assert [
         (item.provider, item.operation)
         for item in event.api_usage
@@ -1041,6 +1054,84 @@ def test_search_analytics_records_route_provider_calls_and_user_context():
         ("ollama", "embedding"),
         ("voyage-2.5", "reranking"),
     ]
+
+
+def test_search_records_full_server_workflow_duration_and_stages():
+    analytics = CaptureAnalyticsStore()
+    service = ProductSearchService(
+        FakeEngine(),
+        company_id="gainr",
+        analytics_store=analytics,
+    )
+
+    response = service.search(
+        SearchRequest(query="camera rent", page_size=20)
+    )
+
+    assert len(response.items) == 5
+    event = analytics.events[0]
+    assert round(event.duration_ms, 3) == event.timings_ms["total_server_ms"]
+    assert event.duration_ms >= event.timings_ms["engine_total_ms"]
+    assert set(event.timings_ms) >= {
+        "planning_ms",
+        "vector_search_ms",
+        "bm25_search_ms",
+        "reranking_ms",
+        "engine_total_ms",
+        "usage_recording_ms",
+        "response_mapping_ms",
+        "session_storage_ms",
+        "total_server_ms",
+    }
+    assert response.timings_ms["total"] == event.duration_ms
+
+
+def test_search_processing_failure_is_recorded_without_exception_message():
+    class FailingEngine(FakeEngine):
+        def search(self, query, limit=None):
+            raise RuntimeError("provider response with private details")
+
+    analytics = CaptureAnalyticsStore()
+    service = ProductSearchService(
+        FailingEngine(),
+        company_id="gainr",
+        analytics_store=analytics,
+    )
+    usage_store = MonthlyUsageStore(":memory:")
+    app = create_app(
+        service=service,
+        preload_models=False,
+        usage_store=usage_store,
+    )
+
+    try:
+        with TestClient(app, raise_server_exceptions=False) as client:
+            response = client.post(
+                "/api/v1/search",
+                json={"query": "camera rent", "page_size": 20},
+            )
+    finally:
+        usage_store.close()
+
+    assert response.status_code == 503
+    assert len(analytics.events) == 1
+    event = analytics.events[0]
+    assert event.query_text == "camera rent"
+    assert event.status == "failure"
+    assert event.result_count == 0
+    assert event.total_results == 0
+    assert event.duration_ms >= 0
+    assert event.plan_cache_hit is None
+    assert event.result_cache_hit is None
+    assert abs(
+        event.timings_ms["total_server_ms"] - event.duration_ms
+    ) <= 0.001
+    assert event.api_call_count == 0
+    assert event.total_tokens == 0
+    assert len(event.api_usage) == 1
+    assert event.api_usage[0].operation == "search"
+    assert event.api_usage[0].failure_reason == "RuntimeError"
+    assert "private details" not in str(event)
 
 
 def test_gainr_compatibility_routes_are_enabled_only_by_tenant_config(
@@ -1147,6 +1238,61 @@ def test_gainr_compatibility_routes_are_enabled_only_by_tenant_config(
     assert mismatched.status_code == 403
     assert closed_generic.status_code == 404
     assert alpha_generic.status_code == 200
+
+
+def test_gainr_processing_failure_is_added_to_durable_query_history(
+    tmp_path,
+):
+    gainr = tenant_profile(
+        tmp_path,
+        "gainr",
+        compatibility=TenantCompatibilityConfig(
+            adapter="gainr_legacy",
+        ),
+    )
+    registry = TenantRegistry(
+        {"gainr": gainr},
+        api_keys={"gainr": ["gainr-key"]},
+    )
+    analytics = CaptureAnalyticsStore()
+
+    class FailingCompatibility:
+        def __init__(self, _profile, product_search_service, _cache):
+            self.product_search_service = product_search_service
+            self.product_search_service.analytics_store = analytics
+
+        def parse_filter_result(self, payload):
+            return GainrFilterResultRequest.model_validate(payload)
+
+        def filter_results(self, request, *, user_id=None):
+            raise RuntimeError("private database failure response")
+
+    usage_store = MonthlyUsageStore(":memory:")
+    app = create_app(
+        tenant_registry=registry,
+        tenant_engine_factory=lambda *_args: FakeEngine(),
+        compatibility_factory=FailingCompatibility,
+        preload_models=False,
+        usage_store=usage_store,
+    )
+    try:
+        with TestClient(app, raise_server_exceptions=False) as client:
+            response = client.post(
+                "/api/v1/gainr/filter-result",
+                headers={"X-API-Key": "gainr-key"},
+                json={"searchTerm": "bike rent", "filter": {}, "page": 1},
+            )
+    finally:
+        usage_store.close()
+
+    assert response.status_code == 503
+    assert len(analytics.events) == 1
+    event = analytics.events[0]
+    assert event.company_id == "gainr"
+    assert event.query_text == "bike rent"
+    assert event.status == "failure"
+    assert event.api_usage[0].failure_reason == "RuntimeError"
+    assert "private database" not in str(event)
 
 
 def test_admin_status_requires_separate_key_and_hides_queries(

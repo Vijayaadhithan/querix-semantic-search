@@ -139,6 +139,13 @@ def test_search_analytics_writer_inserts_parent_and_provider_rows(monkeypatch):
         duration_ms=1234.5,
         result_count=20,
         total_results=80,
+        plan_cache_hit=True,
+        result_cache_hit=False,
+        timings_ms={
+            "total_server_ms": 1234.5,
+            "planning_ms": 100.25,
+            "unapproved_internal_value": 999.0,
+        },
         created_at=datetime(2026, 7, 29, 3, 0, tzinfo=timezone.utc),
         api_usage=(
             SearchApiUsageEvent(
@@ -187,6 +194,11 @@ def test_search_analytics_writer_inserts_parent_and_provider_rows(monkeypatch):
     assert attempts[0]["provider"] == "groq"
     assert attempts[0]["model"] == "openai/gpt-oss-20b"
     assert attempts[0]["operation"] == "query_planning"
+    assert usage_params[13:15] == (True, False)
+    assert json.loads(usage_params[15]) == {
+        "total_server_ms": 1234.5,
+        "planning_ms": 100.25,
+    }
     assert "ON DUPLICATE KEY UPDATE" in (
         connection.cursor_instance.execute_calls[0][0]
     )
@@ -202,6 +214,9 @@ def spool_event(request_id="b" * 32, query="family bike"):
         duration_ms=1234.5,
         result_count=20,
         total_results=80,
+        plan_cache_hit=True,
+        result_cache_hit=False,
+        timings_ms={"total_server_ms": 1234.5, "planning_ms": 100.25},
         created_at=datetime(2026, 7, 29, 3, 0, tzinfo=timezone.utc),
         api_usage=(
             SearchApiUsageEvent(
@@ -228,15 +243,16 @@ def test_search_analytics_spool_round_trip_preserves_request_and_usage():
     assert restored == original
     assert restored.api_call_count == 1
     assert restored.total_tokens == 120
-    assert payload["schema_version"] == 2
+    assert payload["schema_version"] == 3
     assert {
         "user_id",
         "route_reason",
         "page_number",
         "filters",
-        "result_cache_hit",
-        "plan_cache_hit",
     }.isdisjoint(payload)
+    assert payload["plan_cache_hit"] is True
+    assert payload["result_cache_hit"] is False
+    assert payload["timings_ms"]["planning_ms"] == 100.25
 
 
 def test_spool_reader_accepts_legacy_payload_without_retaining_extra_fields():
@@ -249,12 +265,18 @@ def test_spool_reader_accepts_legacy_payload_without_retaining_extra_fields():
             "filters": {"city_id": 456},
         }
     )
+    payload.pop("plan_cache_hit")
+    payload.pop("result_cache_hit")
+    payload.pop("timings_ms")
 
     restored = deserialize_search_analytics_event(json.dumps(payload))
 
     assert restored.company_id == "gainr"
     assert restored.query_text == "family bike"
     assert not hasattr(restored, "user_id")
+    assert restored.plan_cache_hit is None
+    assert restored.result_cache_hit is None
+    assert restored.timings_ms == {}
 
 
 def test_daily_spool_persists_pending_event_off_request_path(tmp_path):

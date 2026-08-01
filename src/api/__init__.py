@@ -422,24 +422,43 @@ def create_app(
         *,
         company_endpoint: str | None = None,
     ) -> SearchResponse:
+        search_service: ProductSearchService | None = None
+        search_started: float | None = None
+
+        def record_processing_failure(exc: Exception) -> None:
+            if (
+                search_service is None
+                or search_started is None
+                or request.query is None
+            ):
+                return
+            search_service.record_search_failure(
+                request.query,
+                duration_ms=(time.perf_counter() - search_started) * 1000,
+                error_type=type(exc).__name__,
+            )
+
         try:
             search_service = resolve_service(
                 x_api_key,
                 apply_rate_limit=True,
                 company_endpoint=company_endpoint,
             )
+            search_started = time.perf_counter()
             return search_service.search(request)
         except InvalidCursorError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except ExpiredCursorError as exc:
             raise HTTPException(status_code=410, detail=str(exc)) from exc
         except SearchCapacityError as exc:
+            record_processing_failure(exc)
             raise HTTPException(
                 status_code=503,
                 detail=str(exc),
                 headers={"Retry-After": "2"},
             ) from exc
         except RuntimeError as exc:
+            record_processing_failure(exc)
             LOGGER.exception(
                 "search_request status=failed company=%s error_type=%s "
                 "query_chars=%d",
@@ -449,6 +468,7 @@ def create_app(
             )
             raise HTTPException(status_code=503, detail=str(exc)) from exc
         except Exception as exc:
+            record_processing_failure(exc)
             LOGGER.exception(
                 "search_request status=failed company=%s error_type=%s "
                 "query_chars=%d",
@@ -814,10 +834,6 @@ def create_app(
         )
         try:
             request = compatibility_service.parse_filter_result(payload)
-            return compatibility_service.filter_results(
-                request,
-                user_id=x_user_id,
-            )
         except ValidationError as exc:
             raise HTTPException(
                 status_code=422,
@@ -825,8 +841,27 @@ def create_app(
             ) from exc
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+        search_started = time.perf_counter()
+        try:
+            return compatibility_service.filter_results(
+                request,
+                user_id=x_user_id,
+            )
         except RuntimeError as exc:
+            compatibility_service.product_search_service.record_search_failure(
+                request.searchTerm,
+                duration_ms=(time.perf_counter() - search_started) * 1000,
+                error_type=type(exc).__name__,
+            )
             raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except Exception as exc:
+            compatibility_service.product_search_service.record_search_failure(
+                request.searchTerm,
+                duration_ms=(time.perf_counter() - search_started) * 1000,
+                error_type=type(exc).__name__,
+            )
+            raise
 
     @application.get(
         "/api/v1/{company_endpoint}/recent-search",

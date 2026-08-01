@@ -29,6 +29,7 @@ from core.settings import (
 )
 from search.engine import ProductSearchEngine
 from storage.search_analytics import (
+    SEARCH_ANALYTICS_TIMING_FIELDS,
     SearchAnalyticsEvent,
     SearchAnalyticsStore,
     SearchApiUsageEvent,
@@ -39,6 +40,21 @@ LOGGER = logging.getLogger("uvicorn.error")
 
 
 class ProductSearchService:
+    _TIMING_SECONDS_FIELDS = {
+        "planning_ms": "seconds",
+        "vector_search_ms": "vector_seconds",
+        "bm25_search_ms": "bm25_seconds",
+        "retrieval_ms": "retrieval_seconds",
+        "parallel_retrieval_ms": "parallel_retrieval_seconds",
+        "fusion_ms": "fusion_seconds",
+        "type_lookup_ms": "type_lookup_seconds",
+        "reranker_load_ms": "reranker_load_seconds",
+        "reranking_ms": "reranker_seconds",
+        "related_tail_ms": "related_tail_seconds",
+        "result_cache_ms": "result_cache_seconds",
+    }
+    _EXPLICIT_TIMING_FIELDS = SEARCH_ANALYTICS_TIMING_FIELDS
+
     def __init__(
         self,
         engine: ProductSearchEngine,
@@ -638,10 +654,13 @@ class ProductSearchService:
         return self._page(session, offset, request.page_size, cached)
 
     def _start_search(self, query: str) -> SearchSession:
+        request_started = time.perf_counter()
         result = self.run_engine_search(query, limit=self.max_results)
-        total_ms = float(result.get("_service_total_ms", 0.0))
+        engine_total_ms = float(result.get("_service_total_ms", 0.0))
         query_plan = result["query_plan"]
+        usage_started = time.perf_counter()
         usage = self._record_usage(result)
+        usage_recording_ms = (time.perf_counter() - usage_started) * 1000
         interpreted_query = {
             key: query_plan.get(key)
             for key in (
@@ -685,7 +704,7 @@ class ProductSearchService:
                 0.0,
             )
             * 1000,
-            "total": total_ms,
+            "total": engine_total_ms,
         }
         query_metrics = result.get("query_model_metrics") or {}
         embedding_metrics = result.get("embedding_model_metrics") or {}
@@ -697,6 +716,7 @@ class ProductSearchService:
                 "embedding_model_load": embedding_metrics.get("load_ms", 0.0),
             }
         )
+        response_mapping_started = time.perf_counter()
         items = [
             public_product(
                 product,
@@ -706,14 +726,11 @@ class ProductSearchService:
             for product in result["products"]
             if product_is_visible(product)
         ]
-        self.record_search_analytics(
-            query,
-            result,
-            duration_ms=total_ms,
-            result_count=len(items),
-            total_results=len(result.get("product_ids") or items),
-        )
-        return self.sessions.create(
+        response_mapping_ms = (
+            time.perf_counter() - response_mapping_started
+        ) * 1000
+        session_storage_started = time.perf_counter()
+        session = self.sessions.create(
             query=query,
             items=items,
             interpreted_query=interpreted_query,
@@ -723,6 +740,25 @@ class ProductSearchService:
             usage=usage,
             company_id=self.company_id,
         )
+        session_storage_ms = (
+            time.perf_counter() - session_storage_started
+        ) * 1000
+        total_server_ms = (time.perf_counter() - request_started) * 1000
+        timings_ms["total"] = total_server_ms
+        result["_analytics_timings_ms"] = {
+            "engine_total_ms": engine_total_ms,
+            "usage_recording_ms": usage_recording_ms,
+            "response_mapping_ms": response_mapping_ms,
+            "session_storage_ms": session_storage_ms,
+        }
+        self.record_search_analytics(
+            query,
+            result,
+            duration_ms=total_server_ms,
+            result_count=len(items),
+            total_results=len(result.get("product_ids") or items),
+        )
+        return session
 
     def _record_usage(self, result: dict) -> dict[str, Any]:
         company_id = self.company_id or "legacy"
@@ -921,6 +957,7 @@ class ProductSearchService:
         if self.analytics_store is None:
             return False
         query_plan = result.get("query_plan") or {}
+        timings_ms = self._search_timings_ms(result, duration_ms)
         event = SearchAnalyticsEvent(
             company_id=self.company_id or "legacy",
             query_text=query,
@@ -932,8 +969,112 @@ class ProductSearchService:
             status="success",
             duration_ms=duration_ms,
             api_usage=self._search_api_usage_events(result),
+            plan_cache_hit=bool(result.get("plan_cache_hit")),
+            result_cache_hit=bool(result.get("result_cache_hit")),
+            timings_ms=timings_ms,
         )
         return self.analytics_store.submit(event)
+
+    @classmethod
+    def _search_timings_ms(
+        cls,
+        result: dict[str, Any],
+        total_server_ms: float,
+    ) -> dict[str, float]:
+        """Return safe measured stages; stages may overlap and are not totals."""
+        timings: dict[str, float] = {}
+
+        def add(name: str, value: Any, multiplier: float = 1.0) -> None:
+            try:
+                measured = float(value) * multiplier
+            except (TypeError, ValueError):
+                return
+            if measured >= 0:
+                timings[name] = round(measured, 3)
+
+        for canonical, source in cls._TIMING_SECONDS_FIELDS.items():
+            if source in result:
+                add(canonical, result[source], 1000.0)
+
+        query_metrics = result.get("query_model_metrics") or {}
+        embedding_metrics = result.get("embedding_model_metrics") or {}
+        for canonical, metrics, source in (
+            ("query_model_ms", query_metrics, "total_ms"),
+            ("query_model_load_ms", query_metrics, "load_ms"),
+            ("embedding_ms", embedding_metrics, "total_ms"),
+            ("embedding_load_ms", embedding_metrics, "load_ms"),
+        ):
+            if source in metrics:
+                add(canonical, metrics[source])
+        if "query_model_ms" not in timings:
+            query_attempts = query_metrics.get("attempts") or []
+            attempt_total_ms = sum(
+                max(float(attempt.get("total_ms", 0.0) or 0.0), 0.0)
+                for attempt in query_attempts
+            )
+            if query_attempts:
+                add("query_model_ms", attempt_total_ms)
+
+        for name, value in (result.get("_analytics_timings_ms") or {}).items():
+            if name in cls._EXPLICIT_TIMING_FIELDS:
+                add(name, value)
+
+        # This is the only authoritative whole-request duration. It always
+        # wins over caller-supplied stage data and must not be reconstructed
+        # by summing overlapping stages.
+        add("total_server_ms", total_server_ms)
+        return timings
+
+    def record_search_failure(
+        self,
+        query: str,
+        *,
+        duration_ms: float,
+        error_type: str,
+        execution_path: str = "unknown",
+    ) -> bool:
+        """Durably record an authenticated search-processing failure.
+
+        Only the exception class is retained. Exception messages can contain
+        provider responses or other sensitive operational context and must not
+        enter tenant telemetry.
+        """
+        if self.analytics_store is None:
+            return False
+        normalized_error_type = (error_type or "SearchError")[:255]
+        event = SearchAnalyticsEvent(
+            company_id=self.company_id or "legacy",
+            query_text=query,
+            execution_path=execution_path,
+            result_count=0,
+            total_results=0,
+            status="failure",
+            duration_ms=max(float(duration_ms), 0.0),
+            timings_ms={
+                "total_server_ms": round(max(float(duration_ms), 0.0), 3)
+            },
+            api_usage=(
+                SearchApiUsageEvent(
+                    provider="internal",
+                    model=execution_path,
+                    operation="search",
+                    status="failure",
+                    api_calls=0,
+                    duration_ms=max(float(duration_ms), 0.0),
+                    failure_reason=normalized_error_type,
+                ),
+            ),
+        )
+        try:
+            return self.analytics_store.submit(event)
+        except Exception as exc:
+            LOGGER.error(
+                "search_analytics_failure_submit status=failed "
+                "company=%s error_type=%s",
+                self.company_id or "legacy",
+                type(exc).__name__,
+            )
+            return False
 
     def usage_summary(self, month_utc: str | None = None) -> dict[str, Any]:
         if self.usage_store is None:

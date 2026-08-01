@@ -74,7 +74,6 @@ DEFAULT_COMPANY_METRIC_PROFILE = {
 }
 
 DEFAULT_INTERNAL_METRIC_PROFILE = {
-    **DEFAULT_COMPANY_METRIC_PROFILE,
     "api_performance": INTERNAL_API_METRICS,
 }
 
@@ -253,11 +252,8 @@ def resolve_metric_profiles(
         **DEFAULT_COMPANY_METRIC_PROFILE,
         **company_overrides,
     }
-    # Internal business modules inherit the resolved company selection unless
-    # explicitly overridden. API performance remains internal-only.
     internal_profile = {
-        **company_profile,
-        "api_performance": INTERNAL_API_METRICS,
+        **DEFAULT_INTERNAL_METRIC_PROFILE,
         **internal_overrides,
     }
     return company_profile, internal_profile

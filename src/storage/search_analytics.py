@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import queue
 import threading
 import time
@@ -19,6 +20,34 @@ from storage.mysql import (
 
 LOGGER = logging.getLogger("uvicorn.error")
 _STOP = object()
+SEARCH_ANALYTICS_TIMING_FIELDS = frozenset(
+    {
+        "total_server_ms",
+        "planning_ms",
+        "query_model_ms",
+        "query_model_load_ms",
+        "engine_total_ms",
+        "result_cache_ms",
+        "embedding_ms",
+        "embedding_load_ms",
+        "vector_search_ms",
+        "bm25_search_ms",
+        "retrieval_ms",
+        "parallel_retrieval_ms",
+        "fusion_ms",
+        "type_lookup_ms",
+        "reranker_load_ms",
+        "reranking_ms",
+        "related_tail_ms",
+        "database_filter_ms",
+        "eligibility_ms",
+        "hydration_ms",
+        "response_mapping_ms",
+        "session_storage_ms",
+        "usage_recording_ms",
+        "recent_search_ms",
+    }
+)
 
 
 def utc_now() -> datetime:
@@ -56,6 +85,9 @@ class SearchAnalyticsEvent:
     total_results: int
     status: str = "success"
     api_usage: tuple[SearchApiUsageEvent, ...] = ()
+    plan_cache_hit: bool | None = None
+    result_cache_hit: bool | None = None
+    timings_ms: dict[str, float] = field(default_factory=dict)
     request_id: str = field(default_factory=lambda: uuid.uuid4().hex)
     created_at: datetime = field(default_factory=utc_now)
 
@@ -135,6 +167,9 @@ def create_search_analytics_schema(
                     total_tokens BIGINT UNSIGNED NOT NULL DEFAULT 0,
                     duration_ms DECIMAL(14, 3) NOT NULL DEFAULT 0,
                     attempts_json LONGTEXT NOT NULL,
+                    plan_cache_hit TINYINT(1) NULL,
+                    result_cache_hit TINYINT(1) NULL,
+                    timings_json LONGTEXT NULL,
                     created_at DATETIME(6) NOT NULL,
                     PRIMARY KEY (id),
                     UNIQUE KEY uq_api_usage_request (request_id),
@@ -347,6 +382,9 @@ def _migrate_search_analytics_schema(
                 total_tokens BIGINT UNSIGNED NOT NULL DEFAULT 0,
                 duration_ms DECIMAL(14, 3) NOT NULL DEFAULT 0,
                 attempts_json LONGTEXT NOT NULL,
+                plan_cache_hit TINYINT(1) NULL,
+                result_cache_hit TINYINT(1) NULL,
+                timings_json LONGTEXT NULL,
                 created_at DATETIME(6) NOT NULL,
                 PRIMARY KEY (id),
                 UNIQUE KEY uq_api_usage_request (request_id),
@@ -374,6 +412,9 @@ def _migrate_search_analytics_schema(
                 total_tokens,
                 duration_ms,
                 attempts_json,
+                plan_cache_hit,
+                result_cache_hit,
+                timings_json,
                 created_at
             )
             SELECT
@@ -416,6 +457,9 @@ def _migrate_search_analytics_schema(
                         ']'
                     )
                 END,
+                NULL,
+                NULL,
+                NULL,
                 search_history.created_at
             FROM {history} AS search_history
             LEFT JOIN {usage} AS api_usage
@@ -467,6 +511,20 @@ def _migrate_search_analytics_schema(
             """
         )
         cursor.execute(f"DROP TABLE {backup}")
+
+    # Version 4 adds extensible operational timings and explicit cache state.
+    # Columns are nullable so pre-migration rows correctly mean "unknown".
+    usage_columns = _table_columns(cursor, api_usage_table)
+    for column_name, definition in (
+        ("plan_cache_hit", "TINYINT(1) NULL"),
+        ("result_cache_hit", "TINYINT(1) NULL"),
+        ("timings_json", "LONGTEXT NULL"),
+    ):
+        if column_name not in usage_columns:
+            cursor.execute(
+                f"ALTER TABLE {usage} ADD COLUMN "
+                f"{quote_mysql_identifier(column_name)} {definition}"
+            )
 
     # The tenant receives only the query and its timestamp. request_id remains
     # as the idempotency/correlation key; every other field is internal.
@@ -523,6 +581,9 @@ def search_analytics_schema_status(
             "total_tokens",
             "duration_ms",
             "attempts_json",
+            "plan_cache_hit",
+            "result_cache_hit",
+            "timings_json",
             "created_at",
         },
     }
@@ -622,6 +683,21 @@ def write_search_analytics_events(
                     separators=(",", ":"),
                     ensure_ascii=False,
                 )
+                timings: dict[str, float] = {}
+                for name, value in event.timings_ms.items():
+                    if name not in SEARCH_ANALYTICS_TIMING_FIELDS:
+                        continue
+                    try:
+                        measured = float(value)
+                    except (TypeError, ValueError):
+                        continue
+                    if math.isfinite(measured) and measured >= 0:
+                        timings[name] = round(measured, 3)
+                timings_json = json.dumps(
+                    timings,
+                    separators=(",", ":"),
+                    ensure_ascii=False,
+                )
                 cursor.execute(
                     f"""
                     INSERT INTO {usage} (
@@ -638,11 +714,15 @@ def write_search_analytics_events(
                         total_tokens,
                         duration_ms,
                         attempts_json,
+                        plan_cache_hit,
+                        result_cache_hit,
+                        timings_json,
                         created_at
                     )
                     VALUES (
                         %s, %s, %s, %s, %s, %s, %s,
-                        %s, %s, %s, %s, %s, %s, %s
+                        %s, %s, %s, %s, %s, %s, %s,
+                        %s, %s, %s
                     )
                     ON DUPLICATE KEY UPDATE
                         company_id = VALUES(company_id),
@@ -657,6 +737,9 @@ def write_search_analytics_events(
                         total_tokens = VALUES(total_tokens),
                         duration_ms = VALUES(duration_ms),
                         attempts_json = VALUES(attempts_json),
+                        plan_cache_hit = VALUES(plan_cache_hit),
+                        result_cache_hit = VALUES(result_cache_hit),
+                        timings_json = VALUES(timings_json),
                         created_at = VALUES(created_at)
                     """,
                     (
@@ -673,6 +756,9 @@ def write_search_analytics_events(
                         event.total_tokens,
                         max(float(event.duration_ms), 0.0),
                         attempts_json,
+                        event.plan_cache_hit,
+                        event.result_cache_hit,
+                        timings_json,
                         created_at,
                     ),
                 )

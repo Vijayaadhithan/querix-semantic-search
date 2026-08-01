@@ -77,6 +77,9 @@ DATASET_SPECS: dict[str, DatasetSpec] = {
             "status",
             "duration_ms",
             "attempts_json",
+            "plan_cache_hit",
+            "result_cache_hit",
+            "timings_json",
             "created_at",
         ),
         usecols=(
@@ -94,6 +97,9 @@ DATASET_SPECS: dict[str, DatasetSpec] = {
             "total_tokens",
             "duration_ms",
             "attempts_json",
+            "plan_cache_hit",
+            "result_cache_hit",
+            "timings_json",
             "created_at",
         ),
         numeric_columns=(

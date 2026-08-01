@@ -38,11 +38,12 @@ Company dashboard modules:
 
 Internal dashboard modules:
 
-- the same curated company modules for one explicitly selected company;
 - API Performance (15 curated metrics);
+- Individual Query History for the explicitly selected company;
 - provider and model attempts;
-- token usage;
-- failures, fallbacks, execution paths, and latency;
+- token usage, result counts, and cache state;
+- failures, fallbacks, execution paths, total latency, and measured stage
+  timings.
 
 The internal service does not aggregate analytics across companies. The
 companies endpoint is only a tenant/snapshot inventory. Every dashboard and
@@ -54,10 +55,9 @@ returned. Misleading estimates, duplicated reports, provider-specific reports,
 and niche Gainr-only questions are excluded.
 
 Each tenant can override the curated defaults without changing code. Company
-and internal profiles are separate. Internal business modules inherit that
-company's external selection unless explicitly overridden, while
-`api_performance` is rejected in a company profile. An empty list hides a
-module for that audience:
+and internal profiles are separate. Internal profiles accept only operational
+`api_performance` metrics; Search Intelligence, Deep Analytics, and Market
+Intelligence remain company-facing. An empty list hides a configurable module:
 
 ```yaml
 analytics:
@@ -69,9 +69,6 @@ analytics:
         - q7_zero_results
       market_intelligence: []
     internal:
-      search_intelligence:
-        - q7_zero_results
-        - q11_typos
       api_performance:
         - q21_success_rate
         - q23_latency_stats
@@ -85,7 +82,79 @@ configuration rather than silently weakening the audience boundary.
 Company query records include query classification and search outcome. They do
 not include provider names, model names, execution paths, tokens, attempts,
 failure reasons, or internal latency diagnostics. Internal query records retain
-the full operational projection.
+the full operational projection. Each internal record exposes stable
+`performance` and `token_usage` objects plus ordered provider/model `attempts`:
+
+```json
+{
+  "query": "camera rent",
+  "outcome": "fulfilled",
+  "performance": {
+    "server_duration_ms": 500.123,
+    "total_server_duration_ms": 500.123,
+    "measurement_scope": "server_search_processing",
+    "timing_semantics": "stages_may_overlap_do_not_sum",
+    "execution_path": "semantic",
+    "cache": {
+      "plan_hit": true,
+      "result_hit": false
+    },
+    "stages_ms": {
+      "total_server_ms": 500.123,
+      "planning_ms": 72.1,
+      "embedding_ms": 31.4,
+      "retrieval_ms": 190.2,
+      "reranking_ms": 84.7,
+      "hydration_ms": 54.8,
+      "response_mapping_ms": 6.2,
+      "session_storage_ms": 0.3
+    },
+    "downstream_api_calls": 3,
+    "attempt_count": 3,
+    "successful_attempt_count": 3,
+    "failed_attempt_count": 0
+  },
+  "token_usage": {
+    "input_tokens": 100,
+    "output_tokens": 20,
+    "thought_tokens": 0,
+    "total_tokens": 120,
+    "tokens_per_result": 6.0
+  },
+  "attempts": [
+    {
+      "attempt_number": 1,
+      "provider": "groq",
+      "model": "groq:openai/gpt-oss-20b",
+      "operation": "query_planning",
+      "status": "success",
+      "duration_ms": 200.456,
+      "input_tokens": 100,
+      "output_tokens": 20,
+      "total_tokens": 120
+    }
+  ]
+}
+```
+
+`total_server_duration_ms` (and its compatibility alias `server_duration_ms`)
+is measured with a monotonic high-resolution clock around
+server-side search processing and stored to three decimal places. It includes
+planning, retrieval/database work, result hydration, response mapping, usage
+aggregation, and search-session storage. It does not include internet transit,
+browser rendering, or FastAPI response serialization after the service returns.
+Attempt and stage durations can overlap because retrieval is parallel and some
+work is speculative; never sum them to reconstruct total server latency. A
+stage value of `null` means it was not measured for that row (including older
+rows), while `0` is a measured zero. Cache values are also nullable for older
+telemetry. The legacy `api` object remains in the internal response during the
+frontend rollout.
+
+Authenticated search-processing failures are written to the same durable
+history with `outcome: failure`. Only the exception class is retained as the
+internal attempt failure reason; exception messages and provider response
+bodies are excluded. Authentication failures and invalid request payloads are
+not analytics searches and are not added to query history.
 
 The analytics service reads business data and tenant-facing query history from
 the company database. API telemetry can use the company database initially or

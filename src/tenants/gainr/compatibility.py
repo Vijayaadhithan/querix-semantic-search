@@ -485,6 +485,17 @@ class GainrCompatibilityService:
             self.remember_search(user_id, request.searchTerm)
         recent_ms = (time.perf_counter() - recent_started) * 1000
         duration_ms = (time.perf_counter() - request_started) * 1000
+        analytics_result["_analytics_timings_ms"] = {
+            "total_server_ms": duration_ms,
+            "planning_ms": planning_ms,
+            "engine_total_ms": engine_ms,
+            "database_filter_ms": database_ms,
+            "eligibility_ms": eligibility_ms,
+            "hydration_ms": hydration_ms,
+            "response_mapping_ms": card_mapping_ms,
+            "usage_recording_ms": usage_ms,
+            "recent_search_ms": recent_ms,
+        }
         self.product_search_service.record_search_analytics(
             request.searchTerm,
             analytics_result,

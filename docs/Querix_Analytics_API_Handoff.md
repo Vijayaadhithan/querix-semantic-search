@@ -305,8 +305,8 @@ The company dashboard never returns `api_performance`.
 
 Request authentication: internal-admin session cookie only.
 
-The response uses the company dashboard envelope with
-`"audience": "internal"`. It may have a different metric selection and adds:
+The response uses the same dashboard envelope with `"audience": "internal"`,
+but its module list is only `individual_queries` and `api_performance`:
 
 ```json
 {
@@ -386,9 +386,15 @@ Company response `200`:
 ```
 
 The internal response uses the same envelope, but each item additionally
-contains operational `api` and `attempts` projections, including execution
-path, latency, result counts, token counts, providers, models, fallbacks, and
-failures. These fields are intentionally removed from the company projection.
+contains operational `performance`, `token_usage`, `api`, and `attempts`
+projections. `performance.total_server_duration_ms` is the authoritative
+server processing duration. `performance.cache` reports nullable plan/result
+cache hits, and `performance.stages_ms` reports allowlisted planning, model,
+retrieval, reranking, database/hydration, response mapping, usage-recording,
+session-storage, and recent-search timings. Stage and provider timings can overlap and must not
+be summed. `null` means that stage was unavailable or was written before
+detailed telemetry existed; it is distinct from a measured `0`. These fields
+are intentionally removed from the company projection.
 
 ### `GET /api/v1/{company}/analytics/status`
 
@@ -540,7 +546,8 @@ curl -sS -o /dev/null -w "%{http_code}\n" \
 
 ## 7. Per-company dashboard configuration
 
-Each tenant YAML can independently select external and internal questions:
+Each tenant YAML can select company-facing business questions and internal
+operational API questions independently:
 
 ```yaml
 company:
@@ -567,10 +574,6 @@ analytics:
         - q78_pricing_benchmark
 
     internal:
-      search_intelligence:
-        - q7_zero_results
-        - q11_typos
-        - q15_search_volume
       api_performance:
         - q21_success_rate
         - q23_latency_stats
@@ -582,8 +585,9 @@ Rules:
 
 - Omitted modules use the safe curated defaults.
 - An empty list hides that module for that audience.
-- Internal business modules inherit the resolved external company selection
-  unless an internal override is supplied.
+- Internal dashboards contain only `individual_queries` and
+  `api_performance`; company business modules are rejected in an internal
+  profile.
 - `api_performance` is accepted only under `internal`.
 - Unknown modules, metric names, duplicate metrics, and accidental string
   values fail configuration validation.

@@ -9,7 +9,8 @@ tables in its configured company database:
   is retained solely for idempotent delivery and correlation.
 - `semantic_search_api_usage` is the operator-facing table, with one row per
   search request. It stores company, execution path, result counts, status,
-  final end-to-end latency, aggregate API calls, aggregate token counts, and
+  final end-to-end latency, aggregate API calls, aggregate token counts,
+  nullable plan/result cache flags, an allowlisted `timings_json` object, and
   UTC timestamp. Planner, embedding, and reranker attempts—including
   provider, model, per-attempt tokens/duration, and failure reason—are
   preserved in `attempts_json`.
@@ -91,8 +92,19 @@ ORDER BY created_at DESC;
 Each internal usage row represents one incoming search request, so `COUNT(*)`
 is the request count and `SUM(api_call_count)` is the number of downstream
 planner, embedding, and reranker calls. Its top-level `duration_ms` is the
-final end-to-end API latency measured by the Gainr compatibility endpoint.
-Durations inside `attempts_json` apply only to individual provider attempts;
-they can overlap and must not be summed to infer endpoint latency. Ollama
-embedding calls are counted even though its embedding endpoint does not report
-token usage.
+server-side search-processing latency measured by a monotonic high-resolution
+clock. For Gainr it covers the compatibility workflow through result mapping;
+it does not include internet transit or frontend rendering. Durations inside
+`attempts_json` apply only to individual provider attempts; they can overlap
+and must not be summed to infer endpoint latency. The same applies to values in
+`timings_json`: retrieval can run in parallel and speculative work can overlap
+other stages. `duration_ms`/`total_server_ms` is the authoritative total.
+Nullable cache or timing values mean the value was unavailable, particularly
+for rows written before this additive schema version. Ollama embedding calls
+are counted even though its embedding endpoint does not report token usage.
+
+Authenticated requests that fail after search processing starts are retained
+with `status = 'failure'`, zero results, and one internal failure attempt. The
+attempt stores only the exception class in `failure_reason`, never the
+exception message or provider response. This makes daily success/failure
+metrics representative without storing additional sensitive diagnostics.

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import math
 from datetime import UTC, datetime
@@ -38,6 +39,33 @@ ATTEMPT_FIELDS = (
     "total_tokens",
     "duration_ms",
     "failure_reason",
+)
+
+TIMING_FIELDS = (
+    "total_server_ms",
+    "planning_ms",
+    "query_model_ms",
+    "query_model_load_ms",
+    "engine_total_ms",
+    "result_cache_ms",
+    "embedding_ms",
+    "embedding_load_ms",
+    "vector_search_ms",
+    "bm25_search_ms",
+    "retrieval_ms",
+    "parallel_retrieval_ms",
+    "fusion_ms",
+    "type_lookup_ms",
+    "reranker_load_ms",
+    "reranking_ms",
+    "related_tail_ms",
+    "database_filter_ms",
+    "eligibility_ms",
+    "hydration_ms",
+    "response_mapping_ms",
+    "session_storage_ms",
+    "usage_recording_ms",
+    "recent_search_ms",
 )
 
 
@@ -93,6 +121,55 @@ def _sanitize_attempts(value: Any) -> list[dict[str, Any]]:
     ]
 
 
+def _cache_value(value: Any) -> bool | None:
+    normalized = _json_value(value)
+    if normalized is None:
+        return None
+    if isinstance(normalized, str):
+        lowered = normalized.strip().casefold()
+        if lowered in {"0", "false"}:
+            return False
+        if lowered in {"1", "true"}:
+            return True
+    return bool(normalized)
+
+
+def _sanitize_timings(
+    value: Any,
+    duration_ms: float | None,
+) -> dict[str, float | None]:
+    parsed: dict[str, Any] = {}
+    normalized = _json_value(value)
+    if isinstance(normalized, str) and normalized.strip():
+        try:
+            candidate = json.loads(normalized)
+        except (TypeError, ValueError):
+            candidate = {}
+        if isinstance(candidate, dict):
+            parsed = candidate
+    elif isinstance(normalized, dict):
+        parsed = normalized
+
+    timings: dict[str, float | None] = {}
+    for name in TIMING_FIELDS:
+        raw = _json_value(parsed.get(name))
+        try:
+            measured = float(raw) if raw is not None else None
+        except (TypeError, ValueError):
+            measured = None
+        timings[name] = (
+            round(measured, 3)
+            if measured is not None and math.isfinite(measured) and measured >= 0
+            else None
+        )
+    # The normalized top-level duration predates detailed stage telemetry and
+    # remains authoritative for both old and new rows.
+    timings["total_server_ms"] = (
+        round(duration_ms, 3) if duration_ms is not None else None
+    )
+    return timings
+
+
 def _outcome(row: pd.Series) -> str:
     status = str(_json_value(row.get("status"), "missing")).casefold()
     if status not in {"success", "successful", "ok"}:
@@ -109,7 +186,26 @@ def _build_record(
     categories = classify_search_query(query)
     total_results = int(_json_value(row.get("total_results"), 0) or 0)
     total_tokens = int(_json_value(row.get("total_tokens"), 0) or 0)
-    duration_ms = float(_json_value(row.get("duration_ms"), 0.0) or 0.0)
+    duration_value = _json_value(row.get("duration_ms"))
+    duration_ms = (
+        float(duration_value) if duration_value is not None else None
+    )
+    api_call_count = int(_json_value(row.get("api_call_count"), 0) or 0)
+    input_tokens = int(_json_value(row.get("input_tokens"), 0) or 0)
+    output_tokens = int(_json_value(row.get("output_tokens"), 0) or 0)
+    thought_tokens = int(_json_value(row.get("thought_tokens"), 0) or 0)
+    execution_path = _json_value(row.get("execution_path"), "missing")
+    attempts = _sanitize_attempts(row.get("attempts_json"))
+    stage_timings = _sanitize_timings(row.get("timings_json"), duration_ms)
+    successful_attempts = sum(
+        str(attempt.get("status") or "").casefold()
+        in {"success", "successful", "ok", "cache_hit"}
+        for attempt in attempts
+    )
+    failed_attempts = len(attempts) - successful_attempts
+    tokens_per_result = (
+        round(total_tokens / total_results, 2) if total_results else None
+    )
 
     record = {
         "search_id": _json_value(row.get("id_query"), _json_value(row.get("id"))),
@@ -133,22 +229,53 @@ def _build_record(
             "is_uncategorized": categories == ["Other / Uncategorized"],
         },
         "outcome": _outcome(row),
+        # Stable, explicitly named internal projections. ``api`` below stays
+        # available for the deployed frontend during the additive rollout.
+        # The duration is measured with time.perf_counter around server-side
+        # search processing; it is not client/network round-trip time.
+        "performance": {
+            "server_duration_ms": (
+                round(duration_ms, 3) if duration_ms is not None else None
+            ),
+            "total_server_duration_ms": (
+                round(duration_ms, 3) if duration_ms is not None else None
+            ),
+            "measurement_scope": "server_search_processing",
+            "timing_semantics": "stages_may_overlap_do_not_sum",
+            "execution_path": execution_path,
+            "cache": {
+                "plan_hit": _cache_value(row.get("plan_cache_hit")),
+                "result_hit": _cache_value(row.get("result_cache_hit")),
+            },
+            "stages_ms": stage_timings,
+            "downstream_api_calls": api_call_count,
+            "attempt_count": len(attempts),
+            "successful_attempt_count": successful_attempts,
+            "failed_attempt_count": failed_attempts,
+        },
+        "token_usage": {
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "thought_tokens": thought_tokens,
+            "total_tokens": total_tokens,
+            "tokens_per_result": tokens_per_result,
+        },
         "api": {
             "status": _json_value(row.get("status"), "missing"),
-            "execution_path": _json_value(row.get("execution_path"), "missing"),
+            "execution_path": execution_path,
             "result_count": int(_json_value(row.get("result_count"), 0) or 0),
             "total_results": total_results,
-            "duration_ms": round(duration_ms, 3),
-            "api_call_count": int(_json_value(row.get("api_call_count"), 0) or 0),
-            "input_tokens": int(_json_value(row.get("input_tokens"), 0) or 0),
-            "output_tokens": int(_json_value(row.get("output_tokens"), 0) or 0),
-            "thought_tokens": int(_json_value(row.get("thought_tokens"), 0) or 0),
-            "total_tokens": total_tokens,
-            "tokens_per_result": (
-                round(total_tokens / total_results, 2) if total_results else None
+            "duration_ms": (
+                round(duration_ms, 3) if duration_ms is not None else None
             ),
+            "api_call_count": api_call_count,
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "thought_tokens": thought_tokens,
+            "total_tokens": total_tokens,
+            "tokens_per_result": tokens_per_result,
         },
-        "attempts": _sanitize_attempts(row.get("attempts_json")),
+        "attempts": attempts,
     }
     enrichment = enrichments.get(normalized)
     if enrichment:
@@ -165,7 +292,7 @@ def build_query_records(
     records = [_build_record(row, enrichment_map) for _, row in merged.iterrows()]
     return {
         "metadata": {
-            "schema_version": "1.0",
+            "schema_version": "2.0",
             "generated_at": datetime.now(UTC).isoformat(),
             "record_count": len(records),
             "fields": {

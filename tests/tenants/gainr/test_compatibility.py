@@ -299,6 +299,21 @@ def test_filter_result_queues_minimized_durable_history(tmp_path):
     assert not hasattr(event, "user_id")
     assert not hasattr(event, "filters")
     assert event.result_count == len(response["data"])
+    assert event.plan_cache_hit is False
+    assert event.result_cache_hit is False
+    assert event.timings_ms["total_server_ms"] == pytest.approx(
+        event.duration_ms,
+        abs=0.001,
+    )
+    assert set(event.timings_ms) >= {
+        "planning_ms",
+        "engine_total_ms",
+        "eligibility_ms",
+        "hydration_ms",
+        "response_mapping_ms",
+        "usage_recording_ms",
+        "recent_search_ms",
+    }
 
 
 def test_unfiltered_semantic_search_reuses_current_engine_rows(tmp_path):

@@ -118,9 +118,9 @@ analytics:
     - ACME_ANALYTICS_API_KEY
   history_days: 90
   # Optional per-company dashboard profiles. Omitted modules use the curated
-  # defaults. An empty list hides that module. Internal business modules inherit
-  # the company selection unless explicitly overridden; api_performance can
-  # only be selected for internal users.
+  # defaults. An empty list hides that module. Internal analytics is deliberately
+  # operational and accepts only api_performance; individual query history is
+  # always included separately.
   metrics:
     company:
       search_intelligence:
@@ -135,11 +135,6 @@ analytics:
         - q75_marketplace_overview
         - q78_pricing_benchmark
     internal:
-      search_intelligence:
-        - q1_category_distribution
-        - q7_zero_results
-        - q11_typos
-        - q15_search_volume
       api_performance:
         - q21_success_rate
         - q23_latency_stats

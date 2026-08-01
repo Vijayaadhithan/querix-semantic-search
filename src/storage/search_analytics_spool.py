@@ -14,6 +14,7 @@ from typing import Any
 
 from storage.mysql import MySQLRuntimeConfig, mysql_connection, require_pymysql
 from storage.search_analytics import (
+    SEARCH_ANALYTICS_TIMING_FIELDS,
     SearchAnalyticsEvent,
     SearchApiUsageEvent,
     write_search_analytics_events,
@@ -21,7 +22,7 @@ from storage.search_analytics import (
 
 LOGGER = logging.getLogger("uvicorn.error")
 _STOP = object()
-_SCHEMA_VERSION = 2
+_SCHEMA_VERSION = 3
 
 
 def _utc_iso(value: datetime) -> str:
@@ -41,6 +42,13 @@ def serialize_search_analytics_event(event: SearchAnalyticsEvent) -> str:
         "total_results": event.total_results,
         "status": event.status,
         "duration_ms": event.duration_ms,
+        "plan_cache_hit": event.plan_cache_hit,
+        "result_cache_hit": event.result_cache_hit,
+        "timings_ms": {
+            name: value
+            for name, value in event.timings_ms.items()
+            if name in SEARCH_ANALYTICS_TIMING_FIELDS
+        },
         "created_at": _utc_iso(event.created_at),
         "api_usage": [
             {
@@ -71,7 +79,7 @@ def deserialize_search_analytics_event(
     payload_json: str,
 ) -> SearchAnalyticsEvent:
     payload = json.loads(payload_json)
-    if int(payload.get("schema_version", 0)) not in {1, _SCHEMA_VERSION}:
+    if int(payload.get("schema_version", 0)) not in {1, 2, _SCHEMA_VERSION}:
         raise ValueError("Unsupported search analytics spool schema")
     return SearchAnalyticsEvent(
         request_id=str(payload["request_id"]),
@@ -82,6 +90,12 @@ def deserialize_search_analytics_event(
         total_results=int(payload.get("total_results", 0)),
         status=str(payload.get("status") or "success"),
         duration_ms=float(payload.get("duration_ms", 0.0)),
+        plan_cache_hit=payload.get("plan_cache_hit"),
+        result_cache_hit=payload.get("result_cache_hit"),
+        timings_ms={
+            str(name): float(value)
+            for name, value in (payload.get("timings_ms") or {}).items()
+        },
         created_at=datetime.fromisoformat(str(payload["created_at"])),
         api_usage=tuple(
             SearchApiUsageEvent(
