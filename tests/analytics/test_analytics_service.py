@@ -526,6 +526,16 @@ def test_daily_refresh_publishes_both_audiences_and_queries(tmp_path):
     }
     assert detailed["api"]["duration_ms"] == 500.0
     assert detailed["attempts"][0]["duration_ms"] == 200
+    semantic_queries = store.query_records(
+        "gainr",
+        internal=True,
+        limit=10,
+        execution_path="SEMANTIC",
+    )
+    assert semantic_queries["returned"] == 1
+    assert semantic_queries["items"][0]["performance"][
+        "execution_path"
+    ] == "semantic"
     assert "performance" not in company_queries["items"][0]
     assert "token_usage" not in company_queries["items"][0]
 

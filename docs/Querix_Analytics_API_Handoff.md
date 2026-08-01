@@ -345,6 +345,7 @@ Both accept:
 | `query` | string, max 1000 | Case-insensitive query-text search |
 | `outcome` | `fulfilled`, `zero_result`, `failure`, or `telemetry_missing` | Search outcome |
 | `category` | string, max 191 | Category filter |
+| `execution_path` | string, max 128; internal only | Exact, case-insensitive execution-path filter |
 | `language` | string, max 64 | Language filter |
 | `from` | ISO-8601 datetime | Inclusive lower time boundary |
 | `to` | ISO-8601 datetime | Inclusive upper time boundary |

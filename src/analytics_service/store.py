@@ -348,6 +348,7 @@ class AnalyticsSnapshotStore:
         query: str | None = None,
         outcome: str | None = None,
         category: str | None = None,
+        execution_path: str | None = None,
         language: str | None = None,
         created_from: str | None = None,
         created_to: str | None = None,
@@ -391,6 +392,12 @@ class AnalyticsSnapshotStore:
         if category:
             clauses.append("records.categories_text LIKE ?")
             values.append(f"%|{category}|%")
+        if execution_path:
+            clauses.append(
+                "LOWER(json_extract(records.internal_json, "
+                "'$.performance.execution_path')) = ?"
+            )
+            values.append(execution_path.casefold())
         if language:
             clauses.append("records.language = ?")
             values.append(language)

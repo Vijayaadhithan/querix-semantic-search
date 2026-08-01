@@ -230,6 +230,7 @@ cursor
 query
 outcome
 category
+execution_path (internal endpoint only)
 language
 from
 to

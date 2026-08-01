@@ -42,6 +42,9 @@ class MutableClock:
 
 
 class StubSnapshotStore:
+    def __init__(self):
+        self.last_query_kwargs = None
+
     def company_status(self, company_id: str):
         return {
             "company_id": company_id,
@@ -59,7 +62,8 @@ class StubSnapshotStore:
             }
         }
 
-    def query_records(self, company_id: str, **_kwargs):
+    def query_records(self, company_id: str, **kwargs):
+        self.last_query_kwargs = kwargs
         return {
             "company_id": company_id,
             "items": [],
@@ -141,13 +145,14 @@ def portal_app(tmp_path):
             "acme": company_config(tmp_path, "acme"),
         }
     )
+    snapshot_store = StubSnapshotStore()
     app = create_app(
         settings=settings,
         registry=registry,
-        store=StubSnapshotStore(),
+        store=snapshot_store,
         auth_store=auth_store,
     )
-    return app, auth_store, clock
+    return app, auth_store, snapshot_store
 
 
 def login(
@@ -375,7 +380,7 @@ def test_both_sessions_coexist_and_logout_is_portal_specific(portal_app):
 
 
 def test_each_route_reads_only_its_portal_cookie_and_enforces_tenant(portal_app):
-    app, _, _ = portal_app
+    app, _, snapshot_store = portal_app
     with TestClient(app, base_url="https://api.test") as company_client:
         assert login(
             company_client,
@@ -402,6 +407,13 @@ def test_each_route_reads_only_its_portal_cookie_and_enforces_tenant(portal_app)
         assert internal_client.get(
             "/api/v1/admin/analytics/companies"
         ).status_code == 200
+        assert internal_client.get(
+            "/api/v1/admin/analytics/gainr/queries",
+            params={"execution_path": "direct_semantic"},
+        ).status_code == 200
+        assert snapshot_store.last_query_kwargs[
+            "execution_path"
+        ] == "direct_semantic"
         assert internal_client.get(
             "/api/v1/gainr/analytics/dashboard"
         ).status_code == 401
