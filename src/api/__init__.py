@@ -64,7 +64,6 @@ from search.engine import ProductSearchEngine
 from storage.redis import create_redis_cache
 from storage.usage import MonthlyUsageStore
 from storage.vector import get_tenant_vector_collection
-from tenants.gainr.compatibility import GainrFilterDataRequest, GainrSuggestionRequest
 
 LOGGER = logging.getLogger("uvicorn.error")
 
@@ -344,6 +343,24 @@ def create_app(
                 detail="This company has no compatibility API configured.",
             )
         return compatibility_service
+
+    def parse_compatibility_payload(
+        compatibility_service,
+        parser_name: str,
+        payload: dict[str, Any],
+    ):
+        parser = getattr(compatibility_service, parser_name, None)
+        if parser is None:
+            return payload
+        try:
+            return parser(payload)
+        except ValidationError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail=exc.errors(include_context=False),
+            ) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     def require_admin_key(admin_key: str | None) -> None:
         if not application.state.tenant_mode or not API_ADMIN_KEY:
@@ -790,14 +807,20 @@ def create_app(
     )
     def company_search_suggestions(
         company_endpoint: str,
-        request: GainrSuggestionRequest,
+        payload: dict[str, Any],
         x_api_key: str | None = Header(default=None, alias="X-API-Key"),
     ) -> dict[str, Any]:
         try:
-            return resolve_compatibility_service(
+            compatibility_service = resolve_compatibility_service(
                 x_api_key,
                 company_endpoint=company_endpoint,
-            ).search_suggestions(request)
+            )
+            request = parse_compatibility_payload(
+                compatibility_service,
+                "parse_search_suggestions",
+                payload,
+            )
+            return compatibility_service.search_suggestions(request)
         except RuntimeError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
 
@@ -807,14 +830,20 @@ def create_app(
     )
     def company_filter_data(
         company_endpoint: str,
-        request: GainrFilterDataRequest,
+        payload: dict[str, Any],
         x_api_key: str | None = Header(default=None, alias="X-API-Key"),
     ) -> dict[str, Any]:
         try:
-            return resolve_compatibility_service(
+            compatibility_service = resolve_compatibility_service(
                 x_api_key,
                 company_endpoint=company_endpoint,
-            ).filter_data(request)
+            )
+            request = parse_compatibility_payload(
+                compatibility_service,
+                "parse_filter_data",
+                payload,
+            )
+            return compatibility_service.filter_data(request)
         except RuntimeError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
 

@@ -73,6 +73,18 @@ class GainrCompatibilityService:
             raise ValueError(f"Unsupported fee filter IDs: {unsupported}")
         return request
 
+    def parse_search_suggestions(
+        self,
+        payload: dict[str, Any],
+    ) -> GainrSuggestionRequest:
+        return GainrSuggestionRequest.model_validate(payload)
+
+    def parse_filter_data(
+        self,
+        payload: dict[str, Any],
+    ) -> GainrFilterDataRequest:
+        return GainrFilterDataRequest.model_validate(payload)
+
     def _cache_key(self, namespace: str, value: str) -> str:
         digest = hashlib.sha256(value.encode("utf-8")).hexdigest()
         return f"{self.profile.company_id}:{namespace}:{digest}"

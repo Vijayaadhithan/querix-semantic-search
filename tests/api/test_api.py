@@ -1151,8 +1151,20 @@ def test_gainr_compatibility_routes_are_enabled_only_by_tenant_config(
     )
 
     class FakeCompatibility:
+        def parse_search_suggestions(self, payload):
+            class Request:
+                term = payload["term"]
+
+            return Request()
+
         def search_suggestions(self, request):
             return {"status": True, "data": [{"value": request.term}]}
+
+        def parse_filter_data(self, payload):
+            class Request:
+                city_id = payload["city_id"]
+
+            return Request()
 
         def filter_data(self, request):
             return {"data": {"city_id": request.city_id}}

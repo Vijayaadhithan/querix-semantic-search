@@ -37,6 +37,9 @@ Runtime code is grouped by responsibility under `src/`:
 - `ingestion` owns document preparation and index synchronization.
 - `tenants/<company>` owns compatibility contracts and company-specific search
   behavior. Generic search modules do not import company vocabulary directly.
+- `tenants.compatibility` owns the compatibility-adapter registry. The shared
+  API routes call the adapter protocol; tenant request models and legacy
+  response shapes stay inside the tenant package.
 - `cli` owns executable chat, ingestion, and evaluation entry points.
 
 The `tests/` tree mirrors these boundaries so ownership and regression coverage
@@ -86,6 +89,23 @@ to use its existing image and port 8000.
 9. IDs are hydrated from the canonical result table.
 10. The canonical API returns a cursor; compatibility adapters may expose
     page-number pagination. Eligible responses enter Redis with diagnostics.
+
+## Compatibility adapters
+
+The canonical company API is `/api/v1/{company_endpoint}/search`. A tenant that
+must preserve an existing mobile/web contract can set `compatibility.adapter`
+in its YAML profile. The adapter is resolved through
+`tenants.compatibility.build_compatibility_adapter`, then receives raw route
+payloads for validation and response shaping.
+
+Adding a new compatibility contract should require:
+
+- a tenant package under `src/tenants/<company>/`;
+- adapter request/response parsing inside that package;
+- one registry entry in `src/tenants/compatibility.py`;
+- tenant YAML selecting the adapter name.
+
+Shared API code must not import the new tenant's Pydantic request models.
 
 ## Routing and tenant language
 

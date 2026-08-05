@@ -20,7 +20,7 @@ from storage.search_analytics import MySQLSearchAnalyticsStore
 from storage.search_analytics_spool import SQLiteSearchAnalyticsSpoolStore
 from storage.usage import MonthlyUsageStore
 from storage.vector import get_tenant_vector_collection
-from tenants.gainr.compatibility import GainrCompatibilityService
+from tenants.compatibility import build_compatibility_adapter
 
 LOGGER = logging.getLogger("uvicorn.error")
 
@@ -50,9 +50,7 @@ class TenantServicePool:
         self.shared_cache = shared_cache
         self.max_services = max_services
         self.engine_factory = engine_factory
-        self.compatibility_factory = (
-            compatibility_factory or GainrCompatibilityService
-        )
+        self.compatibility_factory = compatibility_factory
         self.usage_store = usage_store
         self.shared_reranker = SharedReranker()
         self.reranker_load_ms = 0.0
@@ -254,11 +252,20 @@ class TenantServicePool:
         service.reranker_load_ms = self.reranker_load_ms
         service.embedding_warmup = self.embedding_warmup
         service.compatibility_service = None
-        if profile.compatibility.adapter == "gainr_legacy":
-            service.compatibility_service = self.compatibility_factory(
-                profile,
-                service,
-                self.shared_cache,
+        if profile.compatibility.adapter:
+            service.compatibility_service = (
+                self.compatibility_factory(
+                    profile,
+                    service,
+                    self.shared_cache,
+                )
+                if self.compatibility_factory is not None
+                else build_compatibility_adapter(
+                    profile.compatibility.adapter,
+                    profile,
+                    service,
+                    self.shared_cache,
+                )
             )
         return service
 

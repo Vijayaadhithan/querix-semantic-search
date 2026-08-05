@@ -14,6 +14,7 @@ from core.settings import PROJECT_ROOT
 from search.policy_registry import supported_search_policies
 from storage.mysql import MySQLRuntimeConfig
 from storage.postgres import PostgresRuntimeConfig
+from tenants.compatibility import supported_compatibility_adapters
 
 TENANT_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,62}$")
 DEFAULT_TENANT_CONFIG_DIR = PROJECT_ROOT / "configs" / "tenants"
@@ -106,9 +107,12 @@ class TenantCompatibilityConfig:
     image_path: str = ""
 
     def __post_init__(self) -> None:
-        if self.adapter not in {"", "gainr_legacy"}:
+        supported_adapters = set(supported_compatibility_adapters())
+        if self.adapter and self.adapter not in supported_adapters:
+            supported = ", ".join(supported_compatibility_adapters())
             raise ValueError(
-                f"Unsupported compatibility adapter {self.adapter!r}"
+                f"Unsupported compatibility adapter {self.adapter!r}; "
+                f"expected one of: {supported}"
             )
         if not self.users_table:
             raise ValueError("Compatibility users_table must not be empty")
