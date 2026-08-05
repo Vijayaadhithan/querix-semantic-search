@@ -214,6 +214,8 @@ rate_limit:
 analytics:
   enabled: true
   endpoint_slug: gainr
+  # Company-facing dashboard, query, and status response contract.
+  adapter: default
   # Separate product credential: the search API continues using GAINR_API_KEY.
   api_key_envs:
     - GAINR_ANALYTICS_API_KEY

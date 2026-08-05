@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+from dataclasses import replace
 from pathlib import Path
 
 import pandas as pd
@@ -289,6 +290,29 @@ class FakeSource:
         }
 
 
+class WrappedAnalyticsAdapter:
+    def __init__(self, company_id: str):
+        self.company_id = company_id
+
+    def dashboard_response(self, dashboard):
+        return {
+            "contract": f"{self.company_id}-dashboard",
+            "payload": dashboard,
+        }
+
+    def queries_response(self, queries):
+        return {
+            "contract": f"{self.company_id}-queries",
+            "payload": queries,
+        }
+
+    def status_response(self, status):
+        return {
+            "contract": f"{self.company_id}-status",
+            "payload": status,
+        }
+
+
 def test_tenant_yaml_builds_normalized_sql_source_config(
     tmp_path,
     monkeypatch,
@@ -320,6 +344,7 @@ database:
 analytics:
   enabled: true
   endpoint_slug: testco-analytics
+  adapter: default
   api_key_envs: [TESTCO_ANALYTICS_API_KEY]
   history_days: 120
   metrics:
@@ -348,6 +373,7 @@ analytics:
 
     assert config.database.host == "db.internal"
     assert config.endpoint_slug == "testco-analytics"
+    assert config.adapter == "default"
     assert config.api_key_envs == ("TESTCO_ANALYTICS_API_KEY",)
     assert config.database.tls_mode == "require"
     assert config.telemetry_database is config.database
@@ -385,6 +411,13 @@ analytics:
         "`created_at` >= CURRENT_TIMESTAMP - INTERVAL 120 DAY"
         in history_sql
     )
+
+
+def test_unknown_company_analytics_adapter_is_rejected(tmp_path):
+    company = analytics_company(tmp_path)
+
+    with pytest.raises(ValueError, match="Unsupported analytics adapter"):
+        replace(company, adapter="missing")
 
 
 def test_source_normalizes_configured_numeric_columns():
@@ -839,6 +872,66 @@ def test_api_enforces_company_and_internal_field_boundaries(
     assert "api_performance" in internal.json()
     assert overview.status_code == 404
     assert "attempts" in internal_queries.json()["items"][0]
+
+
+def test_company_analytics_routes_apply_tenant_response_adapter(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv(
+        "GAINR_ANALYTICS_API_KEY",
+        "gainr-analytics-secret",
+    )
+    company = analytics_company(tmp_path)
+    registry = AnalyticsRegistry({"gainr": company})
+    settings = AnalyticsSettings(
+        host="127.0.0.1",
+        port=8010,
+        snapshot_db_path=tmp_path / "snapshots.sqlite3",
+        tenant_config_dir=tmp_path,
+        cors_origins=(),
+        query_page_size=50,
+        query_max_page_size=200,
+        session_cookie_secure=False,
+    )
+    store = AnalyticsSnapshotStore(settings.snapshot_db_path)
+    AnalyticsRefreshService(
+        FakeSource(analytics_data()),
+        store,
+    ).refresh(company)
+    app = create_app(
+        settings=settings,
+        registry=registry,
+        store=store,
+        analytics_adapter_factory=lambda active_company: (
+            WrappedAnalyticsAdapter(active_company.company_id)
+        ),
+    )
+    headers = {"X-API-Key": "gainr-analytics-secret"}
+
+    with TestClient(app) as client:
+        dashboard = client.get(
+            "/api/v1/gainr/analytics/dashboard",
+            headers=headers,
+        )
+        queries = client.get(
+            "/api/v1/gainr/analytics/queries",
+            headers=headers,
+        )
+        status = client.get(
+            "/api/v1/gainr/analytics/status",
+            headers=headers,
+        )
+
+    assert dashboard.status_code == 200
+    assert dashboard.json()["contract"] == "gainr-dashboard"
+    assert dashboard.json()["payload"]["metadata"]["company_id"] == "gainr"
+    assert queries.status_code == 200
+    assert queries.json()["contract"] == "gainr-queries"
+    assert queries.json()["payload"]["returned"] == 2
+    assert status.status_code == 200
+    assert status.json()["contract"] == "gainr-status"
+    assert status.json()["payload"]["company_id"] == "gainr"
 
 
 def test_analytics_auth_hashes_passwords_locks_and_revokes_sessions(

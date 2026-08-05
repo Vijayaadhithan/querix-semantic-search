@@ -114,6 +114,8 @@ rate_limit:
 analytics:
   enabled: false
   endpoint_slug: acme
+  # Use a registered tenant adapter when this company needs a custom response.
+  adapter: default
   api_key_envs:
     - ACME_ANALYTICS_API_KEY
   history_days: 90

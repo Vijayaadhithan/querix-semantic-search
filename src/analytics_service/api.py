@@ -15,6 +15,11 @@ from fastapi import (
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, SecretStr
 
+from .adapters import (
+    AnalyticsAdapterFactory,
+    CompanyAnalyticsAdapter,
+    build_analytics_adapter,
+)
 from .auth import (
     COMPANY_PORTAL,
     COMPANY_USER,
@@ -45,6 +50,7 @@ def create_app(
     registry: AnalyticsRegistry | None = None,
     store: AnalyticsSnapshotStore | None = None,
     auth_store: AnalyticsAuthStore | None = None,
+    analytics_adapter_factory: AnalyticsAdapterFactory | None = None,
 ) -> FastAPI:
     active_settings = settings or AnalyticsSettings.from_env()
     active_registry = registry or load_analytics_registry(
@@ -72,6 +78,14 @@ def create_app(
         lock_seconds=active_settings.login_lock_seconds,
         password_min_length=active_settings.password_min_length,
     )
+    active_adapters = {
+        company.company_id: (
+            analytics_adapter_factory(company)
+            if analytics_adapter_factory is not None
+            else build_analytics_adapter(company.adapter, company)
+        )
+        for company in active_registry.companies.values()
+    }
     application = FastAPI(
         title="Company Analytics API",
         version="1.0.0",
@@ -83,6 +97,7 @@ def create_app(
     application.state.registry = active_registry
     application.state.store = active_store
     application.state.auth_store = active_auth_store
+    application.state.analytics_adapters = active_adapters
 
     if active_settings.cors_origins:
         application.add_middleware(
@@ -315,6 +330,17 @@ def create_app(
                 detail="Unknown company analytics endpoint.",
             )
         return company
+
+    def company_adapter(
+        company: CompanyAnalyticsConfig,
+    ) -> CompanyAnalyticsAdapter:
+        try:
+            return active_adapters[company.company_id]
+        except KeyError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail="Company analytics adapter is unavailable.",
+            ) from exc
 
     def get_dashboard(
         company: CompanyAnalyticsConfig,
@@ -737,7 +763,9 @@ def create_app(
             analytics_session,
             response,
         )
-        return get_dashboard(company, internal=False)
+        return company_adapter(company).dashboard_response(
+            get_dashboard(company, internal=False)
+        )
 
     @application.get(
         "/api/v1/{company_endpoint}/analytics/queries",
@@ -773,18 +801,20 @@ def create_app(
             analytics_session,
             response,
         )
-        return get_queries(
-            company,
-            internal=False,
-            limit=limit,
-            cursor=cursor,
-            query=query,
-            outcome=outcome,
-            category=category,
-            execution_path=None,
-            language=language,
-            created_from=created_from,
-            created_to=created_to,
+        return company_adapter(company).queries_response(
+            get_queries(
+                company,
+                internal=False,
+                limit=limit,
+                cursor=cursor,
+                query=query,
+                outcome=outcome,
+                category=category,
+                execution_path=None,
+                language=language,
+                created_from=created_from,
+                created_to=created_to,
+            )
         )
 
     @application.get(
@@ -807,11 +837,12 @@ def create_app(
             response,
         )
         status = active_store.company_status(company.company_id)
-        return {
+        response_payload = {
             "company_id": status["company_id"],
             "has_snapshot": status["has_snapshot"],
             "snapshot": status["snapshot"],
             "refresh_schedule": status["refresh_schedule"],
         }
+        return company_adapter(company).status_response(response_payload)
 
     return application

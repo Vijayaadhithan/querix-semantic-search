@@ -79,6 +79,25 @@ Metric names and modules are validated when the service loads the tenant
 configuration. A typo or attempt to expose an internal-only module fails
 configuration rather than silently weakening the audience boundary.
 
+## Company analytics adapters
+
+The company-facing dashboard, query-list, and status responses pass through a
+tenant adapter selected by `analytics.adapter`. The built-in `default` adapter
+preserves the canonical response contract:
+
+```yaml
+analytics:
+  enabled: true
+  endpoint_slug: acme
+  adapter: default
+```
+
+When a company needs a different response shape, add its adapter beside
+`analytics_service/adapters.py`, register one factory there, and select it in
+that company's YAML. Shared authentication, endpoint-to-company resolution,
+snapshot storage, and audience filtering remain outside the adapter. Internal
+admin endpoints deliberately keep one stable operational response contract.
+
 Company query records include query classification and search outcome. They do
 not include provider names, model names, execution paths, tokens, attempts,
 failure reasons, or internal latency diagnostics. Internal query records retain

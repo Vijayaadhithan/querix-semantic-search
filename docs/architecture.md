@@ -29,6 +29,8 @@ Runtime code is grouped by responsibility under `src/`:
   lifecycle.
 - `analytics_service` owns the separate daily SQL extraction, Search/API/Deep/
   Market calculations, versioned snapshot store, and analytics-only API.
+- `analytics_service.adapters` owns company-facing analytics response adapters;
+  authentication, snapshot access, and internal-admin contracts stay shared.
 - `core` owns process settings, tenant profiles, and admission controls.
 - `search` owns planning, BM25, retrieval, ranking, and the generic policy
   contract.
@@ -68,6 +70,14 @@ cross-company analytics endpoint.
 The analytics API is built from `Dockerfile.analytics` and runs as the
 `analytics-api` Compose service on port 8010. The semantic-search API continues
 to use its existing image and port 8000.
+
+Company-facing dashboard, query-list, and status payloads pass through the
+adapter selected by `analytics.adapter` in the tenant YAML. The default adapter
+preserves the canonical contract. A custom company adapter may reshape only
+that company's responses; it cannot change tenant resolution, authentication,
+audience filtering, or another company's stored snapshot. Internal-admin
+analytics deliberately bypass company adapters so operational tooling keeps a
+stable cross-company contract.
 
 ## Request lifecycle
 

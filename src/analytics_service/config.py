@@ -11,6 +11,7 @@ from typing import Any
 import yaml
 from dotenv import load_dotenv
 
+from .adapters import supported_analytics_adapters
 from .metrics import validate_metric_profile
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -290,6 +291,7 @@ class CompanyAnalyticsConfig:
     telemetry_database: DatabaseTarget
     datasets: dict[str, DatasetMapping]
     config_path: Path
+    adapter: str = "default"
     history_days: int = 90
     company_metric_profile: dict[str, tuple[str, ...]] = field(
         default_factory=dict
@@ -306,6 +308,12 @@ class CompanyAnalyticsConfig:
         if not 1 <= self.history_days <= 3650:
             raise ValueError(
                 "Analytics history_days must be between 1 and 3650"
+            )
+        if self.adapter not in supported_analytics_adapters():
+            supported = ", ".join(supported_analytics_adapters())
+            raise ValueError(
+                f"Unsupported analytics adapter {self.adapter!r}; "
+                f"supported adapters: {supported}"
             )
 
 
@@ -478,6 +486,7 @@ def load_company_analytics_config(path: Path) -> CompanyAnalyticsConfig | None:
         telemetry_database=telemetry_database,
         datasets=datasets,
         config_path=path,
+        adapter=str(analytics.get("adapter", "default")).strip().casefold(),
         history_days=int(analytics.get("history_days", 90)),
         company_metric_profile=company_metric_profile,
         internal_metric_profile=internal_metric_profile,
