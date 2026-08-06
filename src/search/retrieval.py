@@ -289,15 +289,12 @@ def related_tail_product_ids(
         "main_category": "main_category_name",
         "subcategory": "subcategory_name",
     }
-    has_explicit_category = any(
-        metadata_key in categorical
-        for metadata_key in category_keys.values()
-    )
-    if not has_explicit_category:
-        for category_key, metadata_key in category_keys.items():
-            value = (inferred_categories or {}).get(category_key)
-            if value:
-                category_filters[metadata_key] = value
+    for category_key, metadata_key in category_keys.items():
+        if metadata_key in categorical:
+            continue
+        value = (inferred_categories or {}).get(category_key)
+        if value:
+            category_filters[metadata_key] = value
 
     has_price_filter = any(
         key in resolved_filters

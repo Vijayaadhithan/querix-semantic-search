@@ -315,6 +315,110 @@ def find_catalog_value(
     return None
 
 
+def _category_concept_token(token: str) -> str:
+    """Normalize conservative noun variants used in catalog category names."""
+    token = normalize_filter_value(token)
+    # Common derivational pair: users naturally say "music instrument" while
+    # catalogs generally call the category "Musical Instruments".
+    if token == "musical":
+        return "music"
+    if token.endswith("ies") and len(token) > 4:
+        return f"{token[:-3]}y"
+    if token.endswith("s") and not token.endswith("ss") and len(token) > 3:
+        return token[:-1]
+    return token
+
+
+def category_catalog_matches(query: str, values: dict) -> list[dict]:
+    """Return category concepts mentioned in a query, including safe variants."""
+    query_tokens = re.findall(r"[^\W_]+", normalize_filter_value(query))
+    normalized_query_tokens = [
+        _category_concept_token(token) for token in query_tokens
+    ]
+    matches = []
+    for actual_value in values.values():
+        value_tokens = re.findall(
+            r"[^\W_]+",
+            normalize_filter_value(actual_value),
+        )
+        normalized_value_tokens = [
+            _category_concept_token(token) for token in value_tokens
+        ]
+        width = len(normalized_value_tokens)
+        if not width or width > len(normalized_query_tokens):
+            continue
+        for start in range(len(normalized_query_tokens) - width + 1):
+            if (
+                normalized_query_tokens[start : start + width]
+                != normalized_value_tokens
+            ):
+                continue
+            end = start + width
+            span_at_head = start == 0 or all(
+                token
+                in {
+                    "a",
+                    "an",
+                    "affordable",
+                    "budget",
+                    "cheap",
+                    "find",
+                    "hire",
+                    "looking",
+                    "low",
+                    "need",
+                    "rent",
+                    "searching",
+                    "show",
+                    "the",
+                    "want",
+                }
+                for token in query_tokens[:start]
+            )
+            followed_by_constraint = (
+                end < len(query_tokens)
+                and query_tokens[end]
+                in {
+                    "at",
+                    "equipped",
+                    "for",
+                    "having",
+                    "in",
+                    "near",
+                    "under",
+                    "with",
+                    "without",
+                }
+            )
+            matches.append(
+                {
+                    "value": actual_value,
+                    "start": start,
+                    "end": end,
+                    "width": width,
+                    "explicit": bool(
+                        not is_repair_subject_usage(query, actual_value)
+                        and (
+                            span_at_head
+                            or followed_by_constraint
+                            or is_explicit_category_request(query, actual_value)
+                        )
+                    ),
+                }
+            )
+            break
+    return sorted(
+        matches,
+        key=lambda match: (
+            bool(match["explicit"]),
+            int(match["width"]),
+            -int(match["start"]),
+            len(str(match["value"])),
+        ),
+        reverse=True,
+    )
+
+
 class QueryAnalysis:
     """Original-query facts that are safe to reuse across planner passes."""
 
@@ -334,14 +438,26 @@ class QueryAnalysis:
             self.query.casefold() != query.casefold()
         )
         self.exact_values = {}
+        self.category_is_explicit = {}
+        self.category_matches = {}
         self.clear_model_location_filter = {}
         for key in QUERY_FILTER_FIELDS:
             if key == "rental_duration":
                 continue
-            exact_value = find_catalog_value(
-                self.query,
-                value_index[key],
-                allow_plural=key in {"main_category", "subcategory"},
+            category_matches = (
+                category_catalog_matches(self.query, value_index[key])
+                if key in {"main_category", "subcategory"}
+                else []
+            )
+            self.category_matches[key] = category_matches
+            exact_value = (
+                category_matches[0]["value"]
+                if category_matches
+                else find_catalog_value(
+                    self.query,
+                    value_index[key],
+                    allow_plural=key in {"main_category", "subcategory"},
+                )
             )
             if exact_value is None:
                 exact_value = find_catalog_alias(
@@ -366,9 +482,28 @@ class QueryAnalysis:
             if clear_model_location_filter:
                 exact_value = None
             self.exact_values[key] = exact_value
+            self.category_is_explicit[key] = bool(
+                category_matches and category_matches[0]["explicit"]
+            )
             self.clear_model_location_filter[key] = (
                 clear_model_location_filter
             )
+        main_matches = self.category_matches.get("main_category") or []
+        subcategory_matches = self.category_matches.get("subcategory") or []
+        if main_matches and subcategory_matches:
+            main_match = main_matches[0]
+            subcategory_match = subcategory_matches[0]
+            overlaps = (
+                int(main_match["start"]) < int(subcategory_match["end"])
+                and int(subcategory_match["start"]) < int(main_match["end"])
+            )
+            if overlaps and int(main_match["width"]) > int(
+                subcategory_match["width"]
+            ):
+                # Prefer the complete head concept ("Musical Instruments")
+                # over a shorter overlapping catalog value (Books -> "Music").
+                self.exact_values["subcategory"] = None
+                self.category_is_explicit["subcategory"] = False
         self.rental_duration = extract_duration_filter(
             self.query,
             value_index["rental_duration"],

@@ -34,6 +34,7 @@ from search.planner_catalog import (
     text_mentions_filter,
 )
 from search.planner_rules import (
+    CATEGORY_ATTRIBUTE_PREFIXES,
     DIRECT_SEMANTIC_BLOCK_TOKENS,
     DIRECT_SEMANTIC_COMPLEX_PATTERNS,
     DIRECT_SEMANTIC_MAX_TOKENS,
@@ -126,6 +127,7 @@ def enrich_query_plan(
         plan["keyword_query"],
     )
     filters = dict(plan["filters"])
+    relaxed_categories = set(plan.get("relaxed_categories") or [])
     inferred_categories = dict(
         plan.get(
             "inferred_categories",
@@ -148,6 +150,10 @@ def enrich_query_plan(
         category_is_explicit = (
             key not in inferred_categories
             or exact_value is None
+            or (
+                not query_was_normalized
+                and analysis.category_is_explicit.get(key, False)
+            )
             or is_explicit_category_request(
                 original_query if query_was_normalized else query,
                 exact_value,
@@ -162,9 +168,31 @@ def enrich_query_plan(
                 inferred_categories[key] = exact_value
             continue
         if exact_value is not None:
-            filters[key] = exact_value
-            if key in inferred_categories:
-                inferred_categories[key] = None
+            attribute_prefixed_subcategory = bool(
+                key == "subcategory"
+                and any(
+                    re.search(
+                        rf"(?<!\w){re.escape(prefix)}\s+"
+                        rf"{category_term_pattern(exact_value)}(?!\w)",
+                        normalize_filter_value(query),
+                    )
+                    for prefix in CATEGORY_ATTRIBUTE_PREFIXES
+                    if prefix == "electric"
+                )
+            )
+            if attribute_prefixed_subcategory:
+                # Descriptive phrases such as "electric bike" and "red car"
+                # retain the parent catalog as a hard boundary while keeping
+                # the child category soft. This lets a stronger sibling match
+                # (for example Electric Scooter) compete without opening the
+                # search to unrelated catalog domains.
+                filters[key] = None
+                inferred_categories[key] = exact_value
+                relaxed_categories.add(key)
+            else:
+                filters[key] = exact_value
+                if key in inferred_categories:
+                    inferred_categories[key] = None
         elif filters.get(key) is not None:
             canonical_value = canonical_catalog_value(
                 key,
@@ -237,7 +265,23 @@ def enrich_query_plan(
             normalize_filter_value(inferred_categories["subcategory"])
         )
         if parent is not None:
-            inferred_categories["main_category"] = parent
+            hard_parent = filters.get("main_category")
+            if (
+                hard_parent is not None
+                and normalize_filter_value(hard_parent)
+                != normalize_filter_value(parent)
+            ):
+                # Never combine a hard parent with a child from another
+                # catalog branch (for example Musical Instruments with the
+                # Books -> Music subcategory). Such an impossible tail filter
+                # is a common cause of avoidable zero-result responses.
+                inferred_categories["subcategory"] = None
+                inferred_categories["main_category"] = None
+            elif "subcategory" in relaxed_categories:
+                filters["main_category"] = parent
+                inferred_categories["main_category"] = None
+            else:
+                inferred_categories["main_category"] = parent
     if (
         filters.get("city") is not None
         and filters.get("locality") is not None
@@ -281,6 +325,7 @@ def enrich_query_plan(
 
     plan["filters"] = filters
     plan["inferred_categories"] = inferred_categories
+    plan["relaxed_categories"] = sorted(relaxed_categories)
     # Keep the model field in the structured response, then validate it locally.
     # This prevents an occasional model-side "wanted" hallucination from
     # reversing an ordinary offer search.

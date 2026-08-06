@@ -1451,6 +1451,41 @@ def test_related_tail_combines_inferred_category_with_partial_filters(tmp_path):
     index.close()
 
 
+def test_related_tail_combines_explicit_parent_with_inferred_child(tmp_path):
+    index = PersistentBM25Index(tmp_path / "parent-child-related-tail.sqlite3")
+    index.upsert(
+        [
+            product_index_row(
+                "bike",
+                "bike",
+                main_category_name="Automobiles",
+                subcategory_name="Bike",
+            ),
+            product_index_row(
+                "car",
+                "car",
+                main_category_name="Automobiles",
+                subcategory_name="Car",
+            ),
+        ]
+    )
+
+    product_ids = related_tail_product_ids(
+        index,
+        {"categorical": {"main_category_name": "Automobiles"}},
+        {"main_category": None, "subcategory": "Bike"},
+        "offer",
+        limit=10,
+        type_fetcher=lambda ids: {
+            str(product_id): "1"
+            for product_id in ids
+        },
+    )
+
+    assert product_ids == ["bike"]
+    index.close()
+
+
 def test_related_tail_requires_at_least_one_resolved_or_inferred_filter(tmp_path):
     index = PersistentBM25Index(tmp_path / "unfiltered-tail.sqlite3")
     index.upsert([product_index_row("bike", "bike")])

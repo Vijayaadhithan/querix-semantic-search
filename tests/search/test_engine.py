@@ -170,6 +170,91 @@ def test_direct_semantic_plan_accepts_objective_catalog_phrase(tmp_path):
     assert plan["keyword_query"] == "red bike with ABS"
     assert plan["filters"]["subcategory"] == "Bike"
     assert plan["filters"]["main_category"] == "Automobiles"
+    assert plan["inferred_categories"]["subcategory"] is None
+    assert plan["relaxed_categories"] == []
+    index.close()
+
+
+def test_direct_semantic_preserves_head_category_and_compound_catalog_concept(
+    tmp_path,
+):
+    index = PersistentBM25Index(tmp_path / "head-category.sqlite3")
+    index.upsert(
+        [
+            product_row(
+                "car",
+                main_category_name="Automobiles",
+                subcategory_name="Car",
+            ),
+            product_row(
+                "wheelchair",
+                main_category_name="Medical Equipments",
+                subcategory_name="Wheelchair",
+            ),
+            product_row(
+                "music-book",
+                main_category_name="Books",
+                subcategory_name="Music",
+            ),
+            product_row(
+                "guitar",
+                main_category_name="Musical Instruments",
+                subcategory_name="Guitar",
+            ),
+        ]
+    )
+    value_index = query_filter_value_index(index)
+
+    accessible_car, car_reason = direct_semantic_query_plan(
+        "car with wheelchair access",
+        value_index,
+    )
+    instrument, instrument_reason = direct_semantic_query_plan(
+        "music instrument with protective case",
+        value_index,
+    )
+
+    assert car_reason == "objective_catalog_phrase"
+    assert accessible_car["filters"]["main_category"] == "Automobiles"
+    assert accessible_car["filters"]["subcategory"] == "Car"
+    assert instrument_reason == "objective_catalog_phrase"
+    assert instrument["filters"]["main_category"] == "Musical Instruments"
+    assert instrument["filters"]["subcategory"] is None
+    assert instrument["inferred_categories"] == {
+        "main_category": None,
+        "subcategory": None,
+    }
+    index.close()
+
+
+def test_attribute_prefixed_category_keeps_parent_hard_and_child_soft(tmp_path):
+    index = PersistentBM25Index(tmp_path / "relaxed-child-category.sqlite3")
+    index.upsert(
+        [
+            product_row(
+                "bike",
+                main_category_name="Automobiles",
+                subcategory_name="Bike",
+            ),
+            product_row(
+                "electric-scooter",
+                main_category_name="Automobiles",
+                subcategory_name="Electric Scooter",
+            ),
+        ]
+    )
+    value_index = query_filter_value_index(index)
+
+    plan, reason = direct_semantic_query_plan(
+        "electric bike with removable battery",
+        value_index,
+    )
+
+    assert reason == "objective_catalog_phrase"
+    assert plan["filters"]["main_category"] == "Automobiles"
+    assert plan["filters"]["subcategory"] is None
+    assert plan["inferred_categories"]["subcategory"] == "Bike"
+    assert plan["relaxed_categories"] == ["subcategory"]
     index.close()
 
 
@@ -993,7 +1078,9 @@ def test_semantic_planner_reuses_exact_query_analysis_between_passes(
 
     assert result["query_plan"]["execution_path"] == "semantic"
     assert provider.calls == 1
-    assert calls == ["red bike"] * 5
+    # Category concepts are resolved by the category matcher; the reusable
+    # analysis still performs the remaining catalog lookups only once.
+    assert calls == ["red bike"] * 4
     engine.close()
     index.close()
 
@@ -1811,11 +1898,13 @@ def test_semantic_search_uses_hybrid_continuation_before_catalogue_tail(
         return {
             "id": doc_id,
             "text": f"candidate {product_id}",
-            "metadata": {
-                "source_type": "mysql",
-                "source_table": engine.search_table,
-                engine.search_id_column: product_id,
-            },
+                "metadata": {
+                    "source_type": "mysql",
+                    "source_table": engine.search_table,
+                    engine.search_id_column: product_id,
+                    "main_category_name": "Automobiles",
+                    "subcategory_name": "Car",
+                },
         }
 
     ranked_candidate = candidate("ranked-doc", 101)
@@ -1829,7 +1918,10 @@ def test_semantic_search_uses_hybrid_continuation_before_catalogue_tail(
             "semantic_query": "comfortable wedding transport",
             "keyword_query": "wedding car driver",
             "target_ad_type": "offer",
-            "inferred_categories": {},
+            "inferred_categories": {
+                "main_category": "Automobiles",
+                "subcategory": "Car",
+            },
             "execution_path": "semantic",
             "sort_order": None,
         },
@@ -1905,6 +1997,199 @@ def test_semantic_search_uses_hybrid_continuation_before_catalogue_tail(
         "related",
         "related",
         "related",
+        "related",
+    ]
+    index.close()
+
+
+def test_semantic_tail_anchors_to_top_ranked_category_before_broad_candidates(
+    tmp_path,
+    monkeypatch,
+):
+    index = build_index(tmp_path / "dynamic-category-tail.sqlite3")
+    engine = ProductSearchEngine(
+        collection=FakeCollection(),
+        bm25_index=index,
+        semantic_related_tail_enabled=True,
+    )
+
+    def candidate(doc_id, product_id, subcategory):
+        return {
+            "id": doc_id,
+            "text": f"candidate {product_id}",
+            "metadata": {
+                "source_type": "mysql",
+                "source_table": engine.search_table,
+                engine.search_id_column: product_id,
+                "main_category_name": "Personal & Home Services",
+                "subcategory_name": subcategory,
+            },
+        }
+
+    plumber = candidate("plumber-ranked", 101, "Plumber")
+    plumber_tail = candidate("plumber-tail", 102, "Plumber")
+    appliance_tail = candidate(
+        "appliance-tail",
+        199,
+        "Refrigerator Repair and Servicemen",
+    )
+    planned = {
+        "query_plan": {
+            "semantic_query": "repair leaking pipes",
+            "keyword_query": "repair leaking pipes",
+            "target_ad_type": "offer",
+            "inferred_categories": {
+                "main_category": None,
+                "subcategory": None,
+            },
+            "relaxed_categories": [],
+            "execution_path": "semantic",
+            "sort_order": None,
+        },
+        "resolved_filters": {"categorical": {"city_name": "Chennai"}},
+        "unresolved_filters": {},
+    }
+    monkeypatch.setattr(
+        engine,
+        "retrieve",
+        lambda *_args, **_kwargs: {
+            "vector_results": [],
+            "bm25_results": [],
+            "candidates": [plumber, appliance_tail],
+            "hybrid_tail_candidates": [plumber_tail, appliance_tail],
+            "vector_seconds": 0.0,
+            "bm25_seconds": 0.0,
+            "embedding_model_metrics": {},
+        },
+    )
+    monkeypatch.setattr(
+        engine,
+        "rank",
+        lambda *_args, **_kwargs: {
+            "results": [plumber],
+            "load_seconds": 0.0,
+            "seconds": 0.0,
+            "provider": "test",
+            "attempts": [],
+        },
+    )
+    captured = {}
+
+    def catalogue_tail(*args, **_kwargs):
+        captured["inferred_categories"] = args[2]
+        captured["limit"] = args[4]
+        return [103, 104]
+
+    monkeypatch.setattr(
+        search_engine,
+        "related_tail_product_ids",
+        catalogue_tail,
+    )
+    monkeypatch.setattr(
+        engine,
+        "_fetch_products",
+        lambda ids: [{"id": product_id} for product_id in ids],
+    )
+
+    result = engine.search(
+        "someone who can repair leaking pipes at my house",
+        limit=4,
+        planned_result=planned,
+        ranking_window=20,
+    )
+
+    assert result["product_ids"] == [101, 102, 103, 104]
+    assert 199 not in result["product_ids"]
+    assert captured["inferred_categories"] == {
+        "main_category": "Personal & Home Services",
+        "subcategory": "Plumber",
+    }
+    assert captured["limit"] == 2
+    index.close()
+
+
+def test_semantic_price_sort_keeps_ranked_results_before_related_tail(
+    tmp_path,
+    monkeypatch,
+):
+    index = build_index(tmp_path / "tier-aware-price-sort.sqlite3")
+    engine = ProductSearchEngine(
+        collection=FakeCollection(),
+        bm25_index=index,
+        semantic_related_tail_enabled=True,
+    )
+
+    def candidate(doc_id, product_id):
+        return {
+            "id": doc_id,
+            "text": f"candidate {product_id}",
+            "metadata": {
+                "source_type": "mysql",
+                "source_table": engine.search_table,
+                engine.search_id_column: product_id,
+            },
+        }
+
+    ranked_expensive = candidate("ranked-expensive", 101)
+    ranked_cheap = candidate("ranked-cheap", 102)
+    unrelated_cheapest = candidate("related-cheapest", 199)
+    planned = {
+        "query_plan": {
+            "semantic_query": "body massage",
+            "keyword_query": "body massage",
+            "target_ad_type": "offer",
+            "inferred_categories": {},
+            "relaxed_categories": [],
+            "execution_path": "semantic",
+            "sort_order": "price_asc",
+        },
+        "resolved_filters": {"categorical": {"city_name": "Chennai"}},
+        "unresolved_filters": {},
+    }
+    monkeypatch.setattr(
+        engine,
+        "retrieve",
+        lambda *_args, **_kwargs: {
+            "vector_results": [],
+            "bm25_results": [],
+            "candidates": [ranked_expensive, ranked_cheap],
+            "hybrid_tail_candidates": [unrelated_cheapest],
+            "vector_seconds": 0.0,
+            "bm25_seconds": 0.0,
+            "embedding_model_metrics": {},
+        },
+    )
+    monkeypatch.setattr(
+        engine,
+        "rank",
+        lambda *_args, **_kwargs: {
+            "results": [ranked_expensive, ranked_cheap],
+            "load_seconds": 0.0,
+            "seconds": 0.0,
+            "provider": "test",
+            "attempts": [],
+        },
+    )
+    monkeypatch.setattr(
+        engine,
+        "_fetch_products",
+        lambda ids: [
+            {"id": product_id, "rental_fee": {101: 500, 102: 100, 199: 10}[product_id]}
+            for product_id in ids
+        ],
+    )
+
+    result = engine.search(
+        "low cost body massage near me",
+        limit=3,
+        planned_result=planned,
+        ranking_window=20,
+    )
+
+    assert result["product_ids"] == [102, 101, 199]
+    assert [product["result_tier"] for product in result["products"]] == [
+        "ranked",
+        "ranked",
         "related",
     ]
     index.close()

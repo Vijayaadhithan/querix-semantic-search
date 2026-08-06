@@ -36,8 +36,8 @@ from search.planner import (
 from storage.database import fetch_product_types_by_ids, fetch_products_by_ids
 
 LOGGER = logging.getLogger("uvicorn.error")
-RESULT_CACHE_SCHEMA_VERSION = "v23"
-QUERY_PLAN_CACHE_SCHEMA_VERSION = "v11"
+RESULT_CACHE_SCHEMA_VERSION = "v24"
+QUERY_PLAN_CACHE_SCHEMA_VERSION = "v12"
 
 
 def _engine_dependency(name: str, default):
