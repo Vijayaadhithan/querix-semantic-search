@@ -33,7 +33,7 @@ Company dashboard modules:
 
 - Search Intelligence (17 curated metrics)
 - Individual Queries
-- Deep Analytics (20 curated metrics)
+- Deep Analytics (19 curated metrics)
 - Market Intelligence (9 curated metrics)
 
 Internal dashboard modules:
