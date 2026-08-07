@@ -10,14 +10,17 @@ tables in its configured company database:
 - `semantic_search_api_usage` is the operator-facing table, with one row per
   search request. It stores company, execution path, result counts, status,
   final end-to-end latency, aggregate API calls, aggregate token counts,
-  nullable plan/result cache flags, an allowlisted `timings_json` object, and
-  UTC timestamp. Planner, embedding, and reranker attempts—including
+  nullable plan/result cache flags, an allowlisted `timings_json` object,
+  an allowlisted resolved-filter `context_json` object, and UTC timestamp.
+  Planner, embedding, and reranker attempts—including
   provider, model, per-attempt tokens/duration, and failure reason—are
   preserved in `attempts_json`.
 
 The tables deliberately do not store API keys, authorization headers, IP
-addresses, user IDs, query hashes, route reasons, resolved filters, or product
-payloads. Query text can contain personal information, so database access and
+addresses, user IDs, query hashes, route reasons, arbitrary request payloads,
+or product payloads. `context_json` contains only resolved category, location,
+rental-duration, price-bound, and target-ad-type fields needed for dashboard
+filters. Query text can contain personal information, so database access and
 backups should follow the company's data retention and access policy.
 
 Both tables currently use Gainr's configured MySQL database. The
@@ -45,7 +48,7 @@ A bounded worker writes the parent and child rows in one transaction.
 Production uses `SEARCH_ANALYTICS_DELIVERY_MODE=daily_spool`. The same bounded
 request-path queue writes to `storage/search_analytics_spool.sqlite3` using
 SQLite WAL. New spool records use the same minimized field set and do not
-retain user IDs, route reasons, or resolved filters. The existing daily 03:00
+retain user IDs, route reasons, or arbitrary request fields. The existing daily 03:00
 IST ingestion job runs:
 
 ```bash

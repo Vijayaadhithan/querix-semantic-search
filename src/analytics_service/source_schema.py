@@ -80,6 +80,7 @@ DATASET_SPECS: dict[str, DatasetSpec] = {
             "plan_cache_hit",
             "result_cache_hit",
             "timings_json",
+            "context_json",
             "created_at",
         ),
         usecols=(
@@ -100,6 +101,7 @@ DATASET_SPECS: dict[str, DatasetSpec] = {
             "plan_cache_hit",
             "result_cache_hit",
             "timings_json",
+            "context_json",
             "created_at",
         ),
         numeric_columns=(

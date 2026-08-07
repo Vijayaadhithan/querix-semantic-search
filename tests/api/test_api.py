@@ -988,6 +988,15 @@ def test_search_analytics_records_route_provider_calls_and_user_context():
         "query_plan": {
             "execution_path": "semantic",
             "route_reason": "llm_required:subjective_language",
+            "target_ad_type": "offer",
+        },
+        "resolved_filters": {
+            "categorical": {
+                "main_category_name": "Vehicles",
+                "city_name": "Chennai",
+                "city_id": 456,
+            },
+            "min_rental_fee": 500,
         },
         "query_model_metrics": {
             "attempts": [
@@ -1038,6 +1047,12 @@ def test_search_analytics_records_route_provider_calls_and_user_context():
     assert event.total_tokens == 620
     assert event.plan_cache_hit is True
     assert event.result_cache_hit is False
+    assert event.context == {
+        "main_category": "Vehicles",
+        "city": "Chennai",
+        "min_rental_fee": 500,
+        "target_ad_type": "offer",
+    }
     assert event.timings_ms == {
         "planning_ms": 200.0,
         "retrieval_ms": 700.0,

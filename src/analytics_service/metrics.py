@@ -17,7 +17,11 @@ COMPANY_SEARCH_METRICS = (
     "q5_location_mentions",
     "q6_rental_duration",
     "q7_zero_results",
+    "q10_language",
+    "q11_typos",
+    "q12_query_length",
     "q15_search_volume",
+    "q16_new_subcategories",
     "q85_zero_results_cities",
     "q86_unfulfilled_brands",
     "q87_unfulfilled_duration",
@@ -30,17 +34,27 @@ COMPANY_DEEP_METRICS = (
     "q48_supply_by_city",
     "q50_low_supply_categories",
     "q51_user_growth",
+    "q52_users_by_state",
+    "q54_platform",
     "q55_ads_per_user",
     "q56_verification",
+    "q58_products_vs_services",
+    "q59_top_subcategories",
     "q60_rental_fee_distribution",
+    "q61_negotiable",
     "q62_ad_status",
     "q65_premium_adoption",
+    "q68_premium_by_category",
     "q69_contact_views",
+    "q70_photos",
+    "q71_description_length",
+    "q73_attribute_completeness",
 )
 
 COMPANY_MARKET_METRICS = (
     "q75_marketplace_overview",
     "q76_geographic_heatmap",
+    "q77_top_listings",
     "q78_pricing_benchmark",
     "q79_temporal_patterns",
     "q81_user_acquisition_by_state",
@@ -65,6 +79,7 @@ INTERNAL_API_METRICS = (
     "q41_multi_attempt",
     "q45_embedding_latency",
     "q46_query_planning_bottleneck",
+    "q93_operation_token_usage",
 )
 
 DEFAULT_COMPANY_METRIC_PROFILE = {
@@ -139,6 +154,7 @@ AVAILABLE_METRICS = {
         "q44_voyage_rate_limit",
         "q45_embedding_latency",
         "q46_query_planning_bottleneck",
+        "q93_operation_token_usage",
     ),
     "deep_analytics": (
         "q47_supply_by_category",
@@ -197,12 +213,8 @@ def validate_metric_profile(
     if raw_profile is None:
         return {}
     if not isinstance(raw_profile, Mapping):
-        raise ValueError(
-            f"Analytics {audience} metric profile must be an object"
-        )
-    allowed_modules = (
-        COMPANY_MODULES if audience == "company" else INTERNAL_MODULES
-    )
+        raise ValueError(f"Analytics {audience} metric profile must be an object")
+    allowed_modules = COMPANY_MODULES if audience == "company" else INTERNAL_MODULES
     normalized: dict[str, tuple[str, ...]] = {}
     for module, raw_names in raw_profile.items():
         module_name = str(module).strip()
@@ -215,23 +227,15 @@ def validate_metric_profile(
             raw_names,
             (list, tuple),
         ):
-            raise ValueError(
-                f"Analytics metric module {module_name!r} must be a list"
-            )
+            raise ValueError(f"Analytics metric module {module_name!r} must be a list")
         names = tuple(str(name).strip() for name in raw_names)
         if any(not name for name in names):
             raise ValueError(
                 f"Analytics metric module {module_name!r} has an empty name"
             )
         if len(names) != len(set(names)):
-            raise ValueError(
-                f"Analytics metric module {module_name!r} has duplicates"
-            )
-        unknown = [
-            name
-            for name in names
-            if name not in AVAILABLE_METRICS[module_name]
-        ]
+            raise ValueError(f"Analytics metric module {module_name!r} has duplicates")
+        unknown = [name for name in names if name not in AVAILABLE_METRICS[module_name]]
         if unknown:
             raise ValueError(
                 f"Analytics metric module {module_name!r} has unsupported "
@@ -267,8 +271,7 @@ def select_metrics(
     missing = [name for name in metric_names if name not in report]
     if missing:
         raise KeyError(
-            "Analytics report is missing curated metrics: "
-            + ", ".join(missing)
+            "Analytics report is missing curated metrics: " + ", ".join(missing)
         )
     return {name: report[name] for name in metric_names}
 

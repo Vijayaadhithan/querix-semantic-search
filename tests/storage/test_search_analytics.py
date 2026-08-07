@@ -146,6 +146,7 @@ def test_search_analytics_writer_inserts_parent_and_provider_rows(monkeypatch):
             "planning_ms": 100.25,
             "unapproved_internal_value": 999.0,
         },
+        context={"city": "Chennai", "target_ad_type": "offer"},
         created_at=datetime(2026, 7, 29, 3, 0, tzinfo=timezone.utc),
         api_usage=(
             SearchApiUsageEvent(
@@ -174,9 +175,7 @@ def test_search_analytics_writer_inserts_parent_and_provider_rows(monkeypatch):
     assert connection.begins == 1
     assert connection.commits == 1
     assert connection.rollbacks == 0
-    history_query, parent_params = (
-        connection.cursor_instance.execute_calls[0]
-    )
+    history_query, parent_params = connection.cursor_instance.execute_calls[0]
     assert parent_params[0] == "a" * 32
     assert parent_params[1] == "Family Car"
     assert "execution_path" not in history_query
@@ -199,9 +198,11 @@ def test_search_analytics_writer_inserts_parent_and_provider_rows(monkeypatch):
         "total_server_ms": 1234.5,
         "planning_ms": 100.25,
     }
-    assert "ON DUPLICATE KEY UPDATE" in (
-        connection.cursor_instance.execute_calls[0][0]
-    )
+    assert json.loads(usage_params[16]) == {
+        "city": "Chennai",
+        "target_ad_type": "offer",
+    }
+    assert "ON DUPLICATE KEY UPDATE" in (connection.cursor_instance.execute_calls[0][0])
     assert "ON DUPLICATE KEY UPDATE" in usage_query
 
 
@@ -217,6 +218,7 @@ def spool_event(request_id="b" * 32, query="family bike"):
         plan_cache_hit=True,
         result_cache_hit=False,
         timings_ms={"total_server_ms": 1234.5, "planning_ms": 100.25},
+        context={"city": "Chennai"},
         created_at=datetime(2026, 7, 29, 3, 0, tzinfo=timezone.utc),
         api_usage=(
             SearchApiUsageEvent(
@@ -236,14 +238,13 @@ def test_search_analytics_spool_round_trip_preserves_request_and_usage():
     payload_json = serialize_search_analytics_event(original)
     payload = json.loads(payload_json)
 
-    restored = deserialize_search_analytics_event(
-        payload_json
-    )
+    restored = deserialize_search_analytics_event(payload_json)
 
     assert restored == original
     assert restored.api_call_count == 1
     assert restored.total_tokens == 120
-    assert payload["schema_version"] == 3
+    assert payload["schema_version"] == 4
+    assert payload["context"] == {"city": "Chennai"}
     assert {
         "user_id",
         "route_reason",
@@ -401,7 +402,10 @@ def test_failed_daily_delivery_retains_local_rows(tmp_path, monkeypatch):
             api_usage_table="semantic_search_api_usage",
         )
 
-    assert search_analytics_spool_status(
-        path,
-        company_id="gainr",
-    )["pending"] == 1
+    assert (
+        search_analytics_spool_status(
+            path,
+            company_id="gainr",
+        )["pending"]
+        == 1
+    )

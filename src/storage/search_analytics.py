@@ -48,6 +48,36 @@ SEARCH_ANALYTICS_TIMING_FIELDS = frozenset(
         "recent_search_ms",
     }
 )
+SEARCH_ANALYTICS_CONTEXT_FIELDS = frozenset(
+    {
+        "main_category",
+        "subcategory",
+        "state",
+        "city",
+        "locality",
+        "rental_duration",
+        "min_rental_fee",
+        "max_rental_fee",
+        "target_ad_type",
+    }
+)
+
+
+def sanitize_search_analytics_context(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    sanitized = {}
+    for name in SEARCH_ANALYTICS_CONTEXT_FIELDS:
+        item = value.get(name)
+        if isinstance(item, str):
+            item = item.strip()[:191]
+            if item:
+                sanitized[name] = item
+        elif isinstance(item, bool):
+            sanitized[name] = item
+        elif isinstance(item, (int, float)) and math.isfinite(float(item)):
+            sanitized[name] = item
+    return sanitized
 
 
 def utc_now() -> datetime:
@@ -88,6 +118,7 @@ class SearchAnalyticsEvent:
     plan_cache_hit: bool | None = None
     result_cache_hit: bool | None = None
     timings_ms: dict[str, float] = field(default_factory=dict)
+    context: dict[str, Any] = field(default_factory=dict)
     request_id: str = field(default_factory=lambda: uuid.uuid4().hex)
     created_at: datetime = field(default_factory=utc_now)
 
@@ -170,6 +201,7 @@ def create_search_analytics_schema(
                     plan_cache_hit TINYINT(1) NULL,
                     result_cache_hit TINYINT(1) NULL,
                     timings_json LONGTEXT NULL,
+                    context_json LONGTEXT NULL,
                     created_at DATETIME(6) NOT NULL,
                     PRIMARY KEY (id),
                     UNIQUE KEY uq_api_usage_request (request_id),
@@ -201,9 +233,7 @@ def _table_columns(cursor, table_name: str) -> set[str]:
     )
     return {
         str(
-            row.get("column_name")
-            or row.get("COLUMN_NAME")
-            or next(iter(row.values()))
+            row.get("column_name") or row.get("COLUMN_NAME") or next(iter(row.values()))
         )
         for row in cursor.fetchall()
     }
@@ -221,16 +251,8 @@ def _table_indexes(cursor, table_name: str) -> dict[str, set[str]]:
     )
     indexes: dict[str, set[str]] = {}
     for row in cursor.fetchall():
-        index_name = str(
-            row.get("index_name")
-            or row.get("INDEX_NAME")
-            or ""
-        )
-        column_name = str(
-            row.get("column_name")
-            or row.get("COLUMN_NAME")
-            or ""
-        )
+        index_name = str(row.get("index_name") or row.get("INDEX_NAME") or "")
+        column_name = str(row.get("column_name") or row.get("COLUMN_NAME") or "")
         if index_name and column_name:
             indexes.setdefault(index_name, set()).add(column_name)
     return indexes
@@ -249,8 +271,7 @@ def _drop_indexes_for_columns(
     ).items():
         if index_name != "PRIMARY" and indexed_columns.intersection(columns):
             cursor.execute(
-                f"ALTER TABLE {table} "
-                f"DROP INDEX {quote_mysql_identifier(index_name)}"
+                f"ALTER TABLE {table} DROP INDEX {quote_mysql_identifier(index_name)}"
             )
 
 
@@ -263,10 +284,7 @@ def _add_index_if_missing(
 ) -> None:
     if index_name in _table_indexes(cursor, table_name):
         return
-    cursor.execute(
-        f"ALTER TABLE {quote_mysql_identifier(table_name)} "
-        f"ADD {definition}"
-    )
+    cursor.execute(f"ALTER TABLE {quote_mysql_identifier(table_name)} ADD {definition}")
 
 
 def _migrate_search_analytics_schema(
@@ -352,13 +370,9 @@ def _migrate_search_analytics_schema(
             or 0
         )
         if orphan_count:
-            raise RuntimeError(
-                "Cannot migrate orphaned internal API usage rows"
-            )
+            raise RuntimeError("Cannot migrate orphaned internal API usage rows")
 
-        summary_table_name = (
-            f"{api_usage_table[:42]}_request_summary_v3"
-        )
+        summary_table_name = f"{api_usage_table[:42]}_request_summary_v3"
         backup_table_name = f"{api_usage_table[:47]}_pre_v3"
         summary = quote_mysql_identifier(summary_table_name)
         backup = quote_mysql_identifier(backup_table_name)
@@ -385,6 +399,7 @@ def _migrate_search_analytics_schema(
                 plan_cache_hit TINYINT(1) NULL,
                 result_cache_hit TINYINT(1) NULL,
                 timings_json LONGTEXT NULL,
+                context_json LONGTEXT NULL,
                 created_at DATETIME(6) NOT NULL,
                 PRIMARY KEY (id),
                 UNIQUE KEY uq_api_usage_request (request_id),
@@ -415,6 +430,7 @@ def _migrate_search_analytics_schema(
                 plan_cache_hit,
                 result_cache_hit,
                 timings_json,
+                context_json,
                 created_at
             )
             SELECT
@@ -460,6 +476,7 @@ def _migrate_search_analytics_schema(
                 NULL,
                 NULL,
                 NULL,
+                NULL,
                 search_history.created_at
             FROM {history} AS search_history
             LEFT JOIN {usage} AS api_usage
@@ -489,16 +506,8 @@ def _migrate_search_analytics_schema(
             """
         )
         row = cursor.fetchone()
-        history_count = int(
-            row.get("history_count")
-            or row.get("HISTORY_COUNT")
-            or 0
-        )
-        summary_count = int(
-            row.get("summary_count")
-            or row.get("SUMMARY_COUNT")
-            or 0
-        )
+        history_count = int(row.get("history_count") or row.get("HISTORY_COUNT") or 0)
+        summary_count = int(row.get("summary_count") or row.get("SUMMARY_COUNT") or 0)
         if summary_count != history_count:
             raise RuntimeError(
                 "Internal API usage summary count does not match history"
@@ -512,13 +521,15 @@ def _migrate_search_analytics_schema(
         )
         cursor.execute(f"DROP TABLE {backup}")
 
-    # Version 4 adds extensible operational timings and explicit cache state.
+    # Versions 4 and 5 add extensible operational timings, explicit cache
+    # state, and an allowlisted request-filter context.
     # Columns are nullable so pre-migration rows correctly mean "unknown".
     usage_columns = _table_columns(cursor, api_usage_table)
     for column_name, definition in (
         ("plan_cache_hit", "TINYINT(1) NULL"),
         ("result_cache_hit", "TINYINT(1) NULL"),
         ("timings_json", "LONGTEXT NULL"),
+        ("context_json", "LONGTEXT NULL"),
     ):
         if column_name not in usage_columns:
             cursor.execute(
@@ -584,6 +595,7 @@ def search_analytics_schema_status(
             "plan_cache_hit",
             "result_cache_hit",
             "timings_json",
+            "context_json",
             "created_at",
         },
     }
@@ -604,9 +616,7 @@ def search_analytics_schema_status(
             )
             present: dict[str, set[str]] = {}
             for row in cursor.fetchall():
-                table_name = str(
-                    row.get("table_name") or row.get("TABLE_NAME") or ""
-                )
+                table_name = str(row.get("table_name") or row.get("TABLE_NAME") or "")
                 column_name = str(
                     row.get("column_name") or row.get("COLUMN_NAME") or ""
                 )
@@ -698,6 +708,12 @@ def write_search_analytics_events(
                     separators=(",", ":"),
                     ensure_ascii=False,
                 )
+                context_json = json.dumps(
+                    sanitize_search_analytics_context(event.context),
+                    separators=(",", ":"),
+                    ensure_ascii=False,
+                    default=str,
+                )
                 cursor.execute(
                     f"""
                     INSERT INTO {usage} (
@@ -717,12 +733,13 @@ def write_search_analytics_events(
                         plan_cache_hit,
                         result_cache_hit,
                         timings_json,
+                        context_json,
                         created_at
                     )
                     VALUES (
                         %s, %s, %s, %s, %s, %s, %s,
                         %s, %s, %s, %s, %s, %s, %s,
-                        %s, %s, %s
+                        %s, %s, %s, %s
                     )
                     ON DUPLICATE KEY UPDATE
                         company_id = VALUES(company_id),
@@ -740,6 +757,7 @@ def write_search_analytics_events(
                         plan_cache_hit = VALUES(plan_cache_hit),
                         result_cache_hit = VALUES(result_cache_hit),
                         timings_json = VALUES(timings_json),
+                        context_json = VALUES(context_json),
                         created_at = VALUES(created_at)
                     """,
                     (
@@ -759,6 +777,7 @@ def write_search_analytics_events(
                         event.plan_cache_hit,
                         event.result_cache_hit,
                         timings_json,
+                        context_json,
                         created_at,
                     ),
                 )
@@ -868,8 +887,7 @@ class MySQLSearchAnalyticsStore:
                         with self._lock:
                             self._failed += 1
                         LOGGER.error(
-                            "Search analytics write failed company=%s "
-                            "error_type=%s",
+                            "Search analytics write failed company=%s error_type=%s",
                             self.company_id,
                             type(exc).__name__,
                         )

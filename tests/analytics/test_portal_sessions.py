@@ -62,6 +62,9 @@ class StubSnapshotStore:
             }
         }
 
+    def dashboard_activity_records(self, company_id: str, *, internal: bool):
+        return ()
+
     def query_records(self, company_id: str, **kwargs):
         self.last_query_kwargs = kwargs
         return {
@@ -118,13 +121,9 @@ def portal_app(tmp_path):
         settings.snapshot_db_path,
         session_ttl_seconds=settings.session_ttl_seconds,
         company_session_idle_seconds=settings.company_session_idle_seconds,
-        company_session_absolute_seconds=(
-            settings.company_session_absolute_seconds
-        ),
+        company_session_absolute_seconds=(settings.company_session_absolute_seconds),
         internal_session_idle_seconds=settings.internal_session_idle_seconds,
-        internal_session_absolute_seconds=(
-            settings.internal_session_absolute_seconds
-        ),
+        internal_session_absolute_seconds=(settings.internal_session_absolute_seconds),
         password_min_length=settings.password_min_length,
         clock=clock,
     )
@@ -313,110 +312,110 @@ def test_role_mismatch_invalid_credentials_origin_and_preflight(portal_app):
 def test_both_sessions_coexist_and_logout_is_portal_specific(portal_app):
     app, _, _ = portal_app
     with TestClient(app, base_url="https://api.test") as client:
-        assert login(
-            client,
-            "company",
-            "test-company-user",
-            COMPANY_PASSWORD,
-        ).status_code == 200
-        assert login(
-            client,
-            "internal",
-            "test-internal-user",
-            INTERNAL_PASSWORD,
-        ).status_code == 200
+        assert (
+            login(
+                client,
+                "company",
+                "test-company-user",
+                COMPANY_PASSWORD,
+            ).status_code
+            == 200
+        )
+        assert (
+            login(
+                client,
+                "internal",
+                "test-internal-user",
+                INTERNAL_PASSWORD,
+            ).status_code
+            == 200
+        )
         assert client.cookies.get(COMPANY_COOKIE)
         assert client.cookies.get(INTERNAL_COOKIE)
 
-        assert client.get(
-            "/api/v1/analytics/company/auth/me"
-        ).status_code == 200
-        assert client.get(
-            "/api/v1/analytics/internal/auth/me"
-        ).status_code == 200
-        assert client.get(
-            "/api/v1/gainr/analytics/dashboard"
-        ).status_code == 200
-        assert client.get(
-            "/api/v1/admin/analytics/gainr/dashboard"
-        ).status_code == 200
+        assert client.get("/api/v1/analytics/company/auth/me").status_code == 200
+        assert client.get("/api/v1/analytics/internal/auth/me").status_code == 200
+        assert client.get("/api/v1/gainr/analytics/dashboard").status_code == 200
+        assert client.get("/api/v1/admin/analytics/gainr/dashboard").status_code == 200
 
         company_logout = client.post(
             "/api/v1/analytics/company/auth/logout",
             headers={"Origin": ALLOWED_ORIGIN},
         )
         assert company_logout.status_code == 200
-        assert client.get(
-            "/api/v1/analytics/company/auth/me"
-        ).status_code == 401
-        assert client.get(
-            "/api/v1/analytics/internal/auth/me"
-        ).status_code == 200
-        assert client.post(
-            "/api/v1/analytics/company/auth/logout",
-            headers={"Origin": ALLOWED_ORIGIN},
-        ).status_code == 200
+        assert client.get("/api/v1/analytics/company/auth/me").status_code == 401
+        assert client.get("/api/v1/analytics/internal/auth/me").status_code == 200
+        assert (
+            client.post(
+                "/api/v1/analytics/company/auth/logout",
+                headers={"Origin": ALLOWED_ORIGIN},
+            ).status_code
+            == 200
+        )
 
-        assert login(
-            client,
-            "company",
-            "test-company-user",
-            COMPANY_PASSWORD,
-        ).status_code == 200
-        assert client.get(
-            "/api/v1/analytics/internal/auth/me"
-        ).status_code == 200
+        assert (
+            login(
+                client,
+                "company",
+                "test-company-user",
+                COMPANY_PASSWORD,
+            ).status_code
+            == 200
+        )
+        assert client.get("/api/v1/analytics/internal/auth/me").status_code == 200
         internal_logout = client.post(
             "/api/v1/analytics/internal/auth/logout",
             headers={"Origin": ALLOWED_ORIGIN},
         )
         assert internal_logout.status_code == 200
-        assert client.get(
-            "/api/v1/analytics/company/auth/me"
-        ).status_code == 200
-        assert client.get(
-            "/api/v1/analytics/internal/auth/me"
-        ).status_code == 401
+        assert client.get("/api/v1/analytics/company/auth/me").status_code == 200
+        assert client.get("/api/v1/analytics/internal/auth/me").status_code == 401
 
 
 def test_each_route_reads_only_its_portal_cookie_and_enforces_tenant(portal_app):
     app, _, snapshot_store = portal_app
     with TestClient(app, base_url="https://api.test") as company_client:
-        assert login(
-            company_client,
-            "company",
-            "test-company-user",
-            COMPANY_PASSWORD,
-        ).status_code == 200
+        assert (
+            login(
+                company_client,
+                "company",
+                "test-company-user",
+                COMPANY_PASSWORD,
+            ).status_code
+            == 200
+        )
         company_token = company_client.cookies.get(COMPANY_COOKIE)
-        assert company_client.get(
-            "/api/v1/acme/analytics/dashboard"
-        ).status_code == 403
-        assert company_client.get(
-            "/api/v1/admin/analytics/gainr/dashboard"
-        ).status_code == 401
+        assert company_client.get("/api/v1/acme/analytics/dashboard").status_code == 403
+        assert (
+            company_client.get("/api/v1/admin/analytics/gainr/dashboard").status_code
+            == 401
+        )
 
     with TestClient(app, base_url="https://api.test") as internal_client:
-        assert login(
-            internal_client,
-            "internal",
-            "test-internal-user",
-            INTERNAL_PASSWORD,
-        ).status_code == 200
+        assert (
+            login(
+                internal_client,
+                "internal",
+                "test-internal-user",
+                INTERNAL_PASSWORD,
+            ).status_code
+            == 200
+        )
         internal_token = internal_client.cookies.get(INTERNAL_COOKIE)
-        assert internal_client.get(
-            "/api/v1/admin/analytics/companies"
-        ).status_code == 200
-        assert internal_client.get(
-            "/api/v1/admin/analytics/gainr/queries",
-            params={"execution_path": "direct_semantic"},
-        ).status_code == 200
-        assert snapshot_store.last_query_kwargs[
-            "execution_path"
-        ] == "direct_semantic"
-        assert internal_client.get(
-            "/api/v1/gainr/analytics/dashboard"
-        ).status_code == 401
+        assert (
+            internal_client.get("/api/v1/admin/analytics/companies").status_code == 200
+        )
+        assert (
+            internal_client.get(
+                "/api/v1/admin/analytics/gainr/queries",
+                params={"execution_path": "direct_semantic"},
+            ).status_code
+            == 200
+        )
+        assert snapshot_store.last_query_kwargs["execution_path"] == "direct_semantic"
+        assert (
+            internal_client.get("/api/v1/gainr/analytics/dashboard").status_code == 401
+        )
 
     with TestClient(app, base_url="https://api.test") as isolated_client:
         internal_only = isolated_client.get(
@@ -454,9 +453,10 @@ def test_idle_expiration_slides_but_never_past_absolute_timeout(tmp_path):
         required_role=COMPANY_USER,
     )
     assert authenticated is not None
-    assert authenticated.principal.session_expires_at == (
-        clock.value + timedelta(seconds=100)
-    ).isoformat()
+    assert (
+        authenticated.principal.session_expires_at
+        == (clock.value + timedelta(seconds=100)).isoformat()
+    )
 
     clock.advance(50)
     first_slide = store.resolve_session(
@@ -464,9 +464,10 @@ def test_idle_expiration_slides_but_never_past_absolute_timeout(tmp_path):
         portal_type=COMPANY_PORTAL,
     )
     assert first_slide is not None
-    assert first_slide.session_expires_at == (
-        clock.value + timedelta(seconds=100)
-    ).isoformat()
+    assert (
+        first_slide.session_expires_at
+        == (clock.value + timedelta(seconds=100)).isoformat()
+    )
 
     clock.advance(99)
     second_slide = store.resolve_session(
@@ -487,9 +488,7 @@ def test_idle_expiration_slides_but_never_past_absolute_timeout(tmp_path):
 
     with sqlite3.connect(store.path) as connection:
         connection.row_factory = sqlite3.Row
-        row = connection.execute(
-            "SELECT * FROM analytics_sessions"
-        ).fetchone()
+        row = connection.execute("SELECT * FROM analytics_sessions").fetchone()
     assert row is not None
     assert row["portal_type"] == COMPANY_PORTAL
     assert row["role"] == COMPANY_USER
@@ -501,10 +500,13 @@ def test_idle_expiration_slides_but_never_past_absolute_timeout(tmp_path):
     assert authenticated.token not in tuple(str(value) for value in row)
 
     clock.advance(3)
-    assert store.resolve_session(
-        authenticated.token,
-        portal_type=COMPANY_PORTAL,
-    ) is None
+    assert (
+        store.resolve_session(
+            authenticated.token,
+            portal_type=COMPANY_PORTAL,
+        )
+        is None
+    )
 
     revoked = store.authenticate(
         username="sliding-test-user",
@@ -513,10 +515,13 @@ def test_idle_expiration_slides_but_never_past_absolute_timeout(tmp_path):
     )
     assert revoked is not None
     store.revoke_session(revoked.token, portal_type=COMPANY_PORTAL)
-    assert store.resolve_session(
-        revoked.token,
-        portal_type=COMPANY_PORTAL,
-    ) is None
+    assert (
+        store.resolve_session(
+            revoked.token,
+            portal_type=COMPANY_PORTAL,
+        )
+        is None
+    )
 
 
 def test_existing_session_table_is_migrated_additively(tmp_path):
@@ -589,13 +594,9 @@ def test_existing_session_table_is_migrated_additively(tmp_path):
         connection.row_factory = sqlite3.Row
         columns = {
             row["name"]
-            for row in connection.execute(
-                "PRAGMA table_info(analytics_sessions)"
-            )
+            for row in connection.execute("PRAGMA table_info(analytics_sessions)")
         }
-        row = connection.execute(
-            "SELECT * FROM analytics_sessions"
-        ).fetchone()
+        row = connection.execute("SELECT * FROM analytics_sessions").fetchone()
     assert {
         "portal_type",
         "role",
@@ -665,14 +666,13 @@ def test_legacy_auth_endpoints_remain_compatible(portal_app):
         assert any(value.startswith(f"{LEGACY_COOKIE}=") for value in cookies)
         assert any(value.startswith(f"{COMPANY_COOKIE}=") for value in cookies)
         assert client.get("/api/v1/analytics/auth/me").status_code == 200
-        assert client.get(
-            "/api/v1/gainr/analytics/dashboard"
-        ).status_code == 200
-        assert client.post(
-            "/api/v1/analytics/auth/logout",
-            headers={"Origin": ALLOWED_ORIGIN},
-        ).status_code == 200
+        assert client.get("/api/v1/gainr/analytics/dashboard").status_code == 200
+        assert (
+            client.post(
+                "/api/v1/analytics/auth/logout",
+                headers={"Origin": ALLOWED_ORIGIN},
+            ).status_code
+            == 200
+        )
         assert client.get("/api/v1/analytics/auth/me").status_code == 401
-        assert client.get(
-            "/api/v1/gainr/analytics/dashboard"
-        ).status_code == 401
+        assert client.get("/api/v1/gainr/analytics/dashboard").status_code == 401

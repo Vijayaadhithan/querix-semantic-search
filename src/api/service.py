@@ -84,9 +84,7 @@ class ProductSearchService:
         self.analytics_store = analytics_store
         self.search_slot_timeout_seconds = search_slot_timeout_seconds
         self._engine_lock = threading.Lock()
-        self._search_slots = threading.BoundedSemaphore(
-            max_concurrent_searches
-        )
+        self._search_slots = threading.BoundedSemaphore(max_concurrent_searches)
         self.reranker_load_ms = 0.0
         self.embedding_warmup: dict[str, Any] = {}
         self._monitor_lock = threading.Lock()
@@ -211,11 +209,7 @@ class ProductSearchService:
             events = list(self._monitor_events)
             active = self._monitor_active
         if event_status is not None:
-            events = [
-                event
-                for event in events
-                if event.get("status") == event_status
-            ]
+            events = [event for event in events if event.get("status") == event_status]
         return {
             "active": active,
             "retained": len(events),
@@ -234,23 +228,15 @@ class ProductSearchService:
         timeline: list[dict[str, Any]] = [
             {
                 "step": "plan",
-                "status": (
-                    "cache_hit"
-                    if result.get("plan_cache_hit")
-                    else "complete"
-                ),
+                "status": ("cache_hit" if result.get("plan_cache_hit") else "complete"),
                 "duration_ms": round(
                     float(result.get("seconds", 0.0)) * 1000,
                     3,
                 ),
                 "execution_path": execution_path,
                 "model": query_metrics.get("model") or "none",
-                "resolved_filter_groups": len(
-                    result.get("resolved_filters") or {}
-                ),
-                "unresolved_filters": len(
-                    result.get("unresolved_filters") or {}
-                ),
+                "resolved_filter_groups": len(result.get("resolved_filters") or {}),
+                "unresolved_filters": len(result.get("unresolved_filters") or {}),
             }
         ]
         if result.get("result_cache_hit"):
@@ -259,10 +245,7 @@ class ProductSearchService:
                     "step": "result_cache",
                     "status": "hit",
                     "duration_ms": round(
-                        float(
-                            result.get("result_cache_seconds", 0.0)
-                        )
-                        * 1000,
+                        float(result.get("result_cache_seconds", 0.0)) * 1000,
                         3,
                     ),
                     "products": len(result.get("products") or []),
@@ -274,10 +257,7 @@ class ProductSearchService:
                     "step": "fast_filter",
                     "status": "complete",
                     "duration_ms": round(
-                        float(
-                            result.get("related_tail_seconds", 0.0)
-                        )
-                        * 1000,
+                        float(result.get("related_tail_seconds", 0.0)) * 1000,
                         3,
                     ),
                     "products": len(result.get("products") or []),
@@ -320,17 +300,11 @@ class ProductSearchService:
                             3,
                         ),
                         "vector_ms": round(
-                            float(
-                                result.get("vector_seconds", 0.0)
-                            )
-                            * 1000,
+                            float(result.get("vector_seconds", 0.0)) * 1000,
                             3,
                         ),
                         "bm25_ms": round(
-                            float(
-                                result.get("bm25_seconds", 0.0)
-                            )
-                            * 1000,
+                            float(result.get("bm25_seconds", 0.0)) * 1000,
                             3,
                         ),
                         "embedding_total_ms": round(
@@ -352,15 +326,11 @@ class ProductSearchService:
                             3,
                         ),
                         "fusion_ms": round(
-                            float(result.get("fusion_seconds", 0.0))
-                            * 1000,
+                            float(result.get("fusion_seconds", 0.0)) * 1000,
                             3,
                         ),
                         "type_lookup_ms": round(
-                            float(
-                                result.get("type_lookup_seconds", 0.0)
-                            )
-                            * 1000,
+                            float(result.get("type_lookup_seconds", 0.0)) * 1000,
                             3,
                         ),
                         "vector_query_metrics": result.get(
@@ -386,10 +356,7 @@ class ProductSearchService:
                             else "skipped"
                         ),
                         "duration_ms": round(
-                            float(
-                                result.get("reranker_seconds", 0.0)
-                            )
-                            * 1000,
+                            float(result.get("reranker_seconds", 0.0)) * 1000,
                             3,
                         ),
                         "provider": result.get(
@@ -412,12 +379,8 @@ class ProductSearchService:
                             * 1000,
                             3,
                         ),
-                        "primary": len(
-                            result.get("primary_product_ids") or []
-                        ),
-                        "related": len(
-                            result.get("related_product_ids") or []
-                        ),
+                        "primary": len(result.get("primary_product_ids") or []),
+                        "related": len(result.get("related_product_ids") or []),
                     },
                     {
                         "step": "database_map",
@@ -476,9 +439,7 @@ class ProductSearchService:
             if not acquired:
                 with self._monitor_lock:
                     self._monitor_rejected += 1
-                raise SearchCapacityError(
-                    "Search capacity is busy; retry shortly."
-                )
+                raise SearchCapacityError("Search capacity is busy; retry shortly.")
             try:
                 result = self.engine.search(query, **kwargs)
             finally:
@@ -551,13 +512,11 @@ class ProductSearchService:
                         3,
                     ),
                     "related_tail": round(
-                        float(result.get("related_tail_seconds", 0.0))
-                        * 1000,
+                        float(result.get("related_tail_seconds", 0.0)) * 1000,
                         3,
                     ),
                     "result_cache": round(
-                        float(result.get("result_cache_seconds", 0.0))
-                        * 1000,
+                        float(result.get("result_cache_seconds", 0.0)) * 1000,
                         3,
                     ),
                 },
@@ -569,9 +528,7 @@ class ProductSearchService:
             result["_service_total_ms"] = duration_ms
             with self._monitor_lock:
                 self._monitor_completed += 1
-                if result.get("retrieval_degraded") or result.get(
-                    "reranker_degraded"
-                ):
+                if result.get("retrieval_degraded") or result.get("reranker_degraded"):
                     self._monitor_degraded += 1
                 self._monitor_events.appendleft(event)
             return result
@@ -644,9 +601,7 @@ class ProductSearchService:
         if request.query is not None:
             session = self._start_search(request.query)
             offset = 0
-            cached = bool(
-                session.interpreted_query.get("result_cache_hit")
-            )
+            cached = bool(session.interpreted_query.get("result_cache_hit"))
         else:
             search_id, offset = decode_cursor(request.cursor or "")
             session = self.sessions.get(search_id)
@@ -686,9 +641,7 @@ class ProductSearchService:
                     "reranker_provider",
                     "none",
                 ),
-                "retrieval_degraded": bool(
-                    result.get("retrieval_degraded")
-                ),
+                "retrieval_degraded": bool(result.get("retrieval_degraded")),
                 "degraded_stages": result.get("degraded_stages", []),
             }
         )
@@ -726,9 +679,7 @@ class ProductSearchService:
             for product in result["products"]
             if product_is_visible(product)
         ]
-        response_mapping_ms = (
-            time.perf_counter() - response_mapping_started
-        ) * 1000
+        response_mapping_ms = (time.perf_counter() - response_mapping_started) * 1000
         session_storage_started = time.perf_counter()
         session = self.sessions.create(
             query=query,
@@ -740,9 +691,7 @@ class ProductSearchService:
             usage=usage,
             company_id=self.company_id,
         )
-        session_storage_ms = (
-            time.perf_counter() - session_storage_started
-        ) * 1000
+        session_storage_ms = (time.perf_counter() - session_storage_started) * 1000
         total_server_ms = (time.perf_counter() - request_started) * 1000
         timings_ms["total"] = total_server_ms
         result["_analytics_timings_ms"] = {
@@ -776,33 +725,19 @@ class ProductSearchService:
                     "provider": (
                         str(attempt.get("provider"))
                         if attempt.get("provider")
-                        else (
-                            "groq"
-                            if model.startswith("groq:")
-                            else "google"
-                        )
+                        else ("groq" if model.startswith("groq:") else "google")
                     ),
                     "model": model,
                     "operation": "query_planning",
                     "status": str(attempt.get("status") or "success"),
-                    "input_tokens": int(
-                        attempt.get("input_tokens", 0) or 0
-                    ),
-                    "output_tokens": int(
-                        attempt.get("output_tokens", 0) or 0
-                    ),
-                    "total_tokens": int(
-                        attempt.get("total_tokens", 0) or 0
-                    ),
+                    "input_tokens": int(attempt.get("input_tokens", 0) or 0),
+                    "output_tokens": int(attempt.get("output_tokens", 0) or 0),
+                    "total_tokens": int(attempt.get("total_tokens", 0) or 0),
                 }
             )
         for attempt in result.get("reranker_attempts") or []:
             provider_name = str(attempt.get("provider") or "")
-            provider = (
-                "voyage"
-                if provider_name.startswith("voyage")
-                else provider_name
-            )
+            provider = "voyage" if provider_name.startswith("voyage") else provider_name
             usage = attempt.get("usage") or {}
             events.append(
                 {
@@ -810,15 +745,9 @@ class ProductSearchService:
                     "model": str(attempt.get("model") or provider_name),
                     "operation": "reranking",
                     "status": str(attempt.get("status") or "success"),
-                    "input_tokens": int(
-                        usage.get("input_tokens", 0) or 0
-                    ),
-                    "output_tokens": int(
-                        usage.get("output_tokens", 0) or 0
-                    ),
-                    "total_tokens": int(
-                        usage.get("total_tokens", 0) or 0
-                    ),
+                    "input_tokens": int(usage.get("input_tokens", 0) or 0),
+                    "output_tokens": int(usage.get("output_tokens", 0) or 0),
+                    "total_tokens": int(usage.get("total_tokens", 0) or 0),
                 }
             )
         execution_path = str(
@@ -830,26 +759,16 @@ class ProductSearchService:
                 provider="internal",
                 model=execution_path,
                 operation="search",
-                status=(
-                    "cache_hit"
-                    if result.get("result_cache_hit")
-                    else "success"
-                ),
+                status=("cache_hit" if result.get("result_cache_hit") else "success"),
             )
             for event in events:
                 self.usage_store.record(company_id=company_id, **event)
         return {
             "tracked": self.usage_store is not None,
             "model_requests": len(events),
-            "input_tokens": sum(
-                event["input_tokens"] for event in events
-            ),
-            "output_tokens": sum(
-                event["output_tokens"] for event in events
-            ),
-            "total_tokens": sum(
-                event["total_tokens"] for event in events
-            ),
+            "input_tokens": sum(event["input_tokens"] for event in events),
+            "output_tokens": sum(event["output_tokens"] for event in events),
+            "total_tokens": sum(event["total_tokens"] for event in events),
             "breakdown": events,
         }
 
@@ -877,21 +796,11 @@ class ProductSearchService:
                     operation="query_planning",
                     status=str(attempt.get("status") or "success"),
                     api_calls=0 if reason == "missing_api_key" else 1,
-                    input_tokens=int(
-                        attempt.get("input_tokens", 0) or 0
-                    ),
-                    output_tokens=int(
-                        attempt.get("output_tokens", 0) or 0
-                    ),
-                    thought_tokens=int(
-                        attempt.get("thought_tokens", 0) or 0
-                    ),
-                    total_tokens=int(
-                        attempt.get("total_tokens", 0) or 0
-                    ),
-                    duration_ms=float(
-                        attempt.get("total_ms", 0.0) or 0.0
-                    ),
+                    input_tokens=int(attempt.get("input_tokens", 0) or 0),
+                    output_tokens=int(attempt.get("output_tokens", 0) or 0),
+                    thought_tokens=int(attempt.get("thought_tokens", 0) or 0),
+                    total_tokens=int(attempt.get("total_tokens", 0) or 0),
+                    duration_ms=float(attempt.get("total_ms", 0.0) or 0.0),
                     failure_reason=reason,
                 )
             )
@@ -905,9 +814,7 @@ class ProductSearchService:
                     operation="embedding",
                     status="success",
                     api_calls=1,
-                    duration_ms=float(
-                        embedding.get("total_ms", 0.0) or 0.0
-                    ),
+                    duration_ms=float(embedding.get("total_ms", 0.0) or 0.0),
                 )
             )
 
@@ -925,21 +832,11 @@ class ProductSearchService:
                     operation="reranking",
                     status=str(attempt.get("status") or "success"),
                     api_calls=0 if local_rejection else 1,
-                    input_tokens=int(
-                        usage.get("input_tokens", 0) or 0
-                    ),
-                    output_tokens=int(
-                        usage.get("output_tokens", 0) or 0
-                    ),
-                    thought_tokens=int(
-                        usage.get("thought_tokens", 0) or 0
-                    ),
-                    total_tokens=int(
-                        usage.get("total_tokens", 0) or 0
-                    ),
-                    duration_ms=float(
-                        attempt.get("duration_ms", 0.0) or 0.0
-                    ),
+                    input_tokens=int(usage.get("input_tokens", 0) or 0),
+                    output_tokens=int(usage.get("output_tokens", 0) or 0),
+                    thought_tokens=int(usage.get("thought_tokens", 0) or 0),
+                    total_tokens=int(usage.get("total_tokens", 0) or 0),
+                    duration_ms=float(attempt.get("duration_ms", 0.0) or 0.0),
                     failure_reason=reason,
                 )
             )
@@ -961,9 +858,7 @@ class ProductSearchService:
         event = SearchAnalyticsEvent(
             company_id=self.company_id or "legacy",
             query_text=query,
-            execution_path=str(
-                query_plan.get("execution_path") or "unknown"
-            ),
+            execution_path=str(query_plan.get("execution_path") or "unknown"),
             result_count=result_count,
             total_results=total_results,
             status="success",
@@ -972,8 +867,37 @@ class ProductSearchService:
             plan_cache_hit=bool(result.get("plan_cache_hit")),
             result_cache_hit=bool(result.get("result_cache_hit")),
             timings_ms=timings_ms,
+            context=self._analytics_filter_context(result),
         )
         return self.analytics_store.submit(event)
+
+    @staticmethod
+    def _analytics_filter_context(result: dict[str, Any]) -> dict[str, Any]:
+        """Project only resolved, non-sensitive request filters to analytics."""
+        resolved = dict(result.get("resolved_filters") or {})
+        categorical = dict(resolved.get("categorical") or {})
+        context = {}
+        for source, target in (
+            ("main_category_name", "main_category"),
+            ("subcategory_name", "subcategory"),
+            ("state_name", "state"),
+            ("city_name", "city"),
+            ("locality_name", "locality"),
+            ("rental_duration", "rental_duration"),
+        ):
+            value = categorical.get(source)
+            if isinstance(value, (str, int, float, bool)) and value != "":
+                context[target] = value
+        for name in ("min_rental_fee", "max_rental_fee"):
+            value = resolved.get(name)
+            if isinstance(value, (int, float)):
+                context[name] = value
+        target_ad_type = dict(result.get("query_plan") or {}).get("target_ad_type")
+        if isinstance(target_ad_type, (str, int, float, bool)) and (
+            target_ad_type != ""
+        ):
+            context["target_ad_type"] = target_ad_type
+        return context
 
     @classmethod
     def _search_timings_ms(
@@ -1050,9 +974,7 @@ class ProductSearchService:
             total_results=0,
             status="failure",
             duration_ms=max(float(duration_ms), 0.0),
-            timings_ms={
-                "total_server_ms": round(max(float(duration_ms), 0.0), 3)
-            },
+            timings_ms={"total_server_ms": round(max(float(duration_ms), 0.0), 3)},
             api_usage=(
                 SearchApiUsageEvent(
                     provider="internal",
@@ -1096,11 +1018,7 @@ class ProductSearchService:
         end = min(offset + page_size, len(session.items))
         items = session.items[offset:end]
         has_more = end < len(session.items)
-        next_cursor = (
-            encode_cursor(session.search_id, end)
-            if has_more
-            else None
-        )
+        next_cursor = encode_cursor(session.search_id, end) if has_more else None
         return SearchResponse(
             company_id=session.company_id,
             search_id=session.search_id,

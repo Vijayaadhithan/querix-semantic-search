@@ -36,6 +36,7 @@ from .config import (
     CompanyAnalyticsConfig,
     load_analytics_registry,
 )
+from .dashboard_filters import DashboardFilters, build_dashboard_overview
 from .store import AnalyticsSnapshotStore
 
 
@@ -56,21 +57,15 @@ def create_app(
     active_registry = registry or load_analytics_registry(
         active_settings.tenant_config_dir
     )
-    active_store = store or AnalyticsSnapshotStore(
-        active_settings.snapshot_db_path
-    )
+    active_store = store or AnalyticsSnapshotStore(active_settings.snapshot_db_path)
     active_auth_store = auth_store or AnalyticsAuthStore(
         active_settings.snapshot_db_path,
         session_ttl_seconds=active_settings.session_ttl_seconds,
-        company_session_idle_seconds=(
-            active_settings.company_session_idle_seconds
-        ),
+        company_session_idle_seconds=(active_settings.company_session_idle_seconds),
         company_session_absolute_seconds=(
             active_settings.company_session_absolute_seconds
         ),
-        internal_session_idle_seconds=(
-            active_settings.internal_session_idle_seconds
-        ),
+        internal_session_idle_seconds=(active_settings.internal_session_idle_seconds),
         internal_session_absolute_seconds=(
             active_settings.internal_session_absolute_seconds
         ),
@@ -89,9 +84,7 @@ def create_app(
     application = FastAPI(
         title="Company Analytics API",
         version="1.0.0",
-        description=(
-            "Daily company dashboards and internal operational analytics."
-        ),
+        description=("Daily company dashboards and internal operational analytics."),
     )
     application.state.settings = active_settings
     application.state.registry = active_registry
@@ -285,10 +278,7 @@ def create_app(
             portal_type=COMPANY_PORTAL,
         )
         if principal is not None:
-            if (
-                principal.internal
-                or principal.company_id != company.company_id
-            ):
+            if principal.internal or principal.company_id != company.company_id:
                 raise HTTPException(
                     status_code=403,
                     detail="Session is not authorized for this company.",
@@ -346,6 +336,7 @@ def create_app(
         company: CompanyAnalyticsConfig,
         *,
         internal: bool,
+        filters: DashboardFilters,
     ) -> dict[str, Any]:
         dashboard = active_store.dashboard(
             company.company_id,
@@ -359,7 +350,21 @@ def create_app(
                     "Run the daily analytics refresh."
                 ),
             )
-        return dashboard
+        try:
+            activity = build_dashboard_overview(
+                list(
+                    active_store.dashboard_activity_records(
+                        company.company_id,
+                        internal=internal,
+                    )
+                ),
+                internal=internal,
+                filters=filters,
+                timezone_name=company.timezone,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return {**dashboard, **activity}
 
     def get_queries(
         company: CompanyAnalyticsConfig,
@@ -394,9 +399,7 @@ def create_app(
                 category=category,
                 execution_path=execution_path if internal else None,
                 language=language,
-                created_from=(
-                    created_from.isoformat() if created_from else None
-                ),
+                created_from=(created_from.isoformat() if created_from else None),
                 created_to=created_to.isoformat() if created_to else None,
             )
         except ValueError as exc:
@@ -685,6 +688,23 @@ def create_app(
     def admin_dashboard(
         company_endpoint: str,
         response: Response,
+        period: str = Query(
+            default="all",
+            pattern="^(24h|7d|30d|90d|all|custom)$",
+        ),
+        outcome: str | None = Query(
+            default=None,
+            pattern="^(fulfilled|zero_result|failure|telemetry_missing)$",
+        ),
+        category: str | None = Query(default=None, max_length=191),
+        language: str | None = Query(default=None, max_length=64),
+        city: str | None = Query(default=None, max_length=191),
+        ad_type: str | None = Query(default=None, max_length=64),
+        execution_path: str | None = Query(default=None, max_length=128),
+        provider: str | None = Query(default=None, max_length=128),
+        operation: str | None = Query(default=None, max_length=128),
+        created_from: datetime | None = Query(default=None, alias="from"),
+        created_to: datetime | None = Query(default=None, alias="to"),
         analytics_session: str | None = Cookie(
             default=None,
             alias=active_settings.internal_session_cookie_name,
@@ -695,7 +715,23 @@ def create_app(
             analytics_session,
             response,
         )
-        return get_dashboard(company, internal=True)
+        return get_dashboard(
+            company,
+            internal=True,
+            filters=DashboardFilters(
+                period=period,
+                created_from=created_from,
+                created_to=created_to,
+                outcome=outcome,
+                category=category,
+                language=language,
+                city=city,
+                ad_type=ad_type,
+                execution_path=execution_path,
+                provider=provider,
+                operation=operation,
+            ),
+        )
 
     @application.get(
         "/api/v1/admin/analytics/{company_endpoint}/queries",
@@ -751,6 +787,20 @@ def create_app(
     def company_dashboard(
         company_endpoint: str,
         response: Response,
+        period: str = Query(
+            default="all",
+            pattern="^(24h|7d|30d|90d|all|custom)$",
+        ),
+        outcome: str | None = Query(
+            default=None,
+            pattern="^(fulfilled|zero_result|failure|telemetry_missing)$",
+        ),
+        category: str | None = Query(default=None, max_length=191),
+        language: str | None = Query(default=None, max_length=64),
+        city: str | None = Query(default=None, max_length=191),
+        ad_type: str | None = Query(default=None, max_length=64),
+        created_from: datetime | None = Query(default=None, alias="from"),
+        created_to: datetime | None = Query(default=None, alias="to"),
         x_api_key: str | None = Header(default=None, alias="X-API-Key"),
         analytics_session: str | None = Cookie(
             default=None,
@@ -764,7 +814,20 @@ def create_app(
             response,
         )
         return company_adapter(company).dashboard_response(
-            get_dashboard(company, internal=False)
+            get_dashboard(
+                company,
+                internal=False,
+                filters=DashboardFilters(
+                    period=period,
+                    created_from=created_from,
+                    created_to=created_to,
+                    outcome=outcome,
+                    category=category,
+                    language=language,
+                    city=city,
+                    ad_type=ad_type,
+                ),
+            )
         )
 
     @application.get(

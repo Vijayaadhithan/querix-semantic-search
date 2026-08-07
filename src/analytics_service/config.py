@@ -7,6 +7,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import yaml
 from dotenv import load_dotenv
@@ -52,12 +53,8 @@ class AnalyticsSettings:
     query_max_page_size: int
     session_cookie_name: str = "querix_analytics_session"
     session_ttl_seconds: int = 28_800
-    company_session_cookie_name: str = (
-        "__Host-querix_company_analytics"
-    )
-    internal_session_cookie_name: str = (
-        "__Host-querix_internal_analytics"
-    )
+    company_session_cookie_name: str = "__Host-querix_company_analytics"
+    internal_session_cookie_name: str = "__Host-querix_internal_analytics"
     company_session_idle_seconds: int = 86_400
     company_session_absolute_seconds: int = 604_800
     internal_session_idle_seconds: int = 28_800
@@ -76,9 +73,7 @@ class AnalyticsSettings:
             )
         )
         snapshot_db_path = (
-            raw_db_path
-            if raw_db_path.is_absolute()
-            else PROJECT_ROOT / raw_db_path
+            raw_db_path if raw_db_path.is_absolute() else PROJECT_ROOT / raw_db_path
         )
         raw_config_dir = Path(
             os.getenv("ANALYTICS_TENANT_CONFIG_DIR", "configs/tenants")
@@ -127,12 +122,9 @@ class AnalyticsSettings:
                 raise ValueError(f"{field_name} is invalid")
         if len(set(cookie_names.values())) != len(cookie_names):
             raise ValueError(
-                "Analytics legacy, company, and internal cookie names "
-                "must be distinct"
+                "Analytics legacy, company, and internal cookie names must be distinct"
             )
-        session_ttl = int(
-            os.getenv("ANALYTICS_SESSION_TTL_SECONDS", "28800")
-        )
+        session_ttl = int(os.getenv("ANALYTICS_SESSION_TTL_SECONDS", "28800"))
         company_idle = int(
             os.getenv(
                 "ANALYTICS_COMPANY_SESSION_IDLE_SECONDS",
@@ -157,15 +149,9 @@ class AnalyticsSettings:
                 "43200",
             )
         )
-        login_max_attempts = int(
-            os.getenv("ANALYTICS_LOGIN_MAX_ATTEMPTS", "5")
-        )
-        login_lock_seconds = int(
-            os.getenv("ANALYTICS_LOGIN_LOCK_SECONDS", "900")
-        )
-        password_min_length = int(
-            os.getenv("ANALYTICS_PASSWORD_MIN_LENGTH", "15")
-        )
+        login_max_attempts = int(os.getenv("ANALYTICS_LOGIN_MAX_ATTEMPTS", "5"))
+        login_lock_seconds = int(os.getenv("ANALYTICS_LOGIN_LOCK_SECONDS", "900"))
+        password_min_length = int(os.getenv("ANALYTICS_PASSWORD_MIN_LENGTH", "15"))
         if not 300 <= session_ttl <= 86_400:
             raise ValueError(
                 "ANALYTICS_SESSION_TTL_SECONDS must be between 300 and 86400"
@@ -175,25 +161,17 @@ class AnalyticsSettings:
             ("internal", internal_idle, internal_absolute),
         ):
             if not 300 <= idle_seconds <= 2_592_000:
-                raise ValueError(
-                    f"Invalid {portal} analytics idle expiration"
-                )
+                raise ValueError(f"Invalid {portal} analytics idle expiration")
             if not idle_seconds <= absolute_seconds <= 31_536_000:
-                raise ValueError(
-                    f"Invalid {portal} analytics absolute expiration"
-                )
+                raise ValueError(f"Invalid {portal} analytics absolute expiration")
         if not 3 <= login_max_attempts <= 20:
-            raise ValueError(
-                "ANALYTICS_LOGIN_MAX_ATTEMPTS must be between 3 and 20"
-            )
+            raise ValueError("ANALYTICS_LOGIN_MAX_ATTEMPTS must be between 3 and 20")
         if not 60 <= login_lock_seconds <= 86_400:
             raise ValueError(
                 "ANALYTICS_LOGIN_LOCK_SECONDS must be between 60 and 86400"
             )
         if not 12 <= password_min_length <= 128:
-            raise ValueError(
-                "ANALYTICS_PASSWORD_MIN_LENGTH must be between 12 and 128"
-            )
+            raise ValueError("ANALYTICS_PASSWORD_MIN_LENGTH must be between 12 and 128")
         return cls(
             host=os.getenv("ANALYTICS_API_HOST", "0.0.0.0"),
             port=port,
@@ -204,12 +182,8 @@ class AnalyticsSettings:
             query_max_page_size=max_page_size,
             session_cookie_name=cookie_names["session_cookie_name"],
             session_ttl_seconds=session_ttl,
-            company_session_cookie_name=cookie_names[
-                "company_session_cookie_name"
-            ],
-            internal_session_cookie_name=cookie_names[
-                "internal_session_cookie_name"
-            ],
+            company_session_cookie_name=cookie_names["company_session_cookie_name"],
+            internal_session_cookie_name=cookie_names["internal_session_cookie_name"],
             company_session_idle_seconds=company_idle,
             company_session_absolute_seconds=company_absolute,
             internal_session_idle_seconds=internal_idle,
@@ -261,9 +235,7 @@ class DatabaseTarget:
             }
         )
         if self.tls_mode not in allowed_tls_modes:
-            raise ValueError(
-                f"Unsupported {self.backend} TLS mode {self.tls_mode!r}"
-            )
+            raise ValueError(f"Unsupported {self.backend} TLS mode {self.tls_mode!r}")
 
     @property
     def configured(self) -> bool:
@@ -293,12 +265,9 @@ class CompanyAnalyticsConfig:
     config_path: Path
     adapter: str = "default"
     history_days: int = 90
-    company_metric_profile: dict[str, tuple[str, ...]] = field(
-        default_factory=dict
-    )
-    internal_metric_profile: dict[str, tuple[str, ...]] = field(
-        default_factory=dict
-    )
+    timezone: str = "UTC"
+    company_metric_profile: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    internal_metric_profile: dict[str, tuple[str, ...]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not TENANT_ID_RE.fullmatch(self.company_id):
@@ -306,9 +275,11 @@ class CompanyAnalyticsConfig:
         if not TENANT_ID_RE.fullmatch(self.endpoint_slug):
             raise ValueError(f"Unsafe endpoint slug {self.endpoint_slug!r}")
         if not 1 <= self.history_days <= 3650:
-            raise ValueError(
-                "Analytics history_days must be between 1 and 3650"
-            )
+            raise ValueError("Analytics history_days must be between 1 and 3650")
+        try:
+            ZoneInfo(self.timezone)
+        except ZoneInfoNotFoundError as exc:
+            raise ValueError(f"Unknown analytics timezone {self.timezone!r}") from exc
         if self.adapter not in supported_analytics_adapters():
             supported = ", ".join(supported_analytics_adapters())
             raise ValueError(
@@ -405,9 +376,7 @@ def load_company_analytics_config(path: Path) -> CompanyAnalyticsConfig | None:
         return None
     company = dict(raw.get("company", {}))
     company_id = str(company.get("id", path.stem)).strip().casefold()
-    endpoint_slug = str(
-        analytics.get("endpoint_slug", company_id)
-    ).strip().casefold()
+    endpoint_slug = str(analytics.get("endpoint_slug", company_id)).strip().casefold()
     api_key_envs = tuple(
         str(name).strip()
         for name in analytics.get("api_key_envs", ())
@@ -417,9 +386,7 @@ def load_company_analytics_config(path: Path) -> CompanyAnalyticsConfig | None:
     database = _database_target(database_section, prefix=company_id.upper())
 
     telemetry = dict(analytics.get("telemetry", {}))
-    use_company_database = bool(
-        telemetry.get("use_company_database", True)
-    )
+    use_company_database = bool(telemetry.get("use_company_database", True))
     telemetry_database = (
         database
         if use_company_database
@@ -471,9 +438,7 @@ def load_company_analytics_config(path: Path) -> CompanyAnalyticsConfig | None:
             table=_safe_identifier(table, label=f"Analytics table {name}"),
             columns={
                 str(canonical): str(source)
-                for canonical, source in dict(
-                    raw_columns.get(name, {})
-                ).items()
+                for canonical, source in dict(raw_columns.get(name, {})).items()
             },
         )
         for name, table in tables.items()
@@ -488,6 +453,7 @@ def load_company_analytics_config(path: Path) -> CompanyAnalyticsConfig | None:
         config_path=path,
         adapter=str(analytics.get("adapter", "default")).strip().casefold(),
         history_days=int(analytics.get("history_days", 90)),
+        timezone=str(analytics.get("timezone", "UTC")).strip() or "UTC",
         company_metric_profile=company_metric_profile,
         internal_metric_profile=internal_metric_profile,
     )
@@ -497,8 +463,7 @@ class AnalyticsRegistry:
     def __init__(self, companies: dict[str, CompanyAnalyticsConfig]):
         self._companies = dict(companies)
         self._endpoints = {
-            company.endpoint_slug: company
-            for company in self._companies.values()
+            company.endpoint_slug: company for company in self._companies.values()
         }
         if len(self._endpoints) != len(self._companies):
             raise ValueError("Analytics company endpoint slugs must be unique")
@@ -535,9 +500,7 @@ class AnalyticsRegistry:
         company = self.resolve_endpoint(endpoint_slug)
         if company is None or not api_key:
             return None
-        owner = self._key_owners.get(
-            hashlib.sha256(api_key.encode()).hexdigest()
-        )
+        owner = self._key_owners.get(hashlib.sha256(api_key.encode()).hexdigest())
         if owner is None or not hmac.compare_digest(owner, company.company_id):
             return None
         return company
@@ -552,8 +515,6 @@ def load_analytics_registry(directory: Path) -> AnalyticsRegistry:
         if config is None:
             continue
         if config.company_id in companies:
-            raise ValueError(
-                f"Duplicate analytics company {config.company_id!r}"
-            )
+            raise ValueError(f"Duplicate analytics company {config.company_id!r}")
         companies[config.company_id] = config
     return AnalyticsRegistry(companies)

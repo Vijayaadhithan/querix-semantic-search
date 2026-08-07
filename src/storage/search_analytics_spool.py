@@ -17,12 +17,13 @@ from storage.search_analytics import (
     SEARCH_ANALYTICS_TIMING_FIELDS,
     SearchAnalyticsEvent,
     SearchApiUsageEvent,
+    sanitize_search_analytics_context,
     write_search_analytics_events,
 )
 
 LOGGER = logging.getLogger("uvicorn.error")
 _STOP = object()
-_SCHEMA_VERSION = 3
+_SCHEMA_VERSION = 4
 
 
 def _utc_iso(value: datetime) -> str:
@@ -49,6 +50,7 @@ def serialize_search_analytics_event(event: SearchAnalyticsEvent) -> str:
             for name, value in event.timings_ms.items()
             if name in SEARCH_ANALYTICS_TIMING_FIELDS
         },
+        "context": sanitize_search_analytics_context(event.context),
         "created_at": _utc_iso(event.created_at),
         "api_usage": [
             {
@@ -79,7 +81,7 @@ def deserialize_search_analytics_event(
     payload_json: str,
 ) -> SearchAnalyticsEvent:
     payload = json.loads(payload_json)
-    if int(payload.get("schema_version", 0)) not in {1, 2, _SCHEMA_VERSION}:
+    if int(payload.get("schema_version", 0)) not in {1, 2, 3, _SCHEMA_VERSION}:
         raise ValueError("Unsupported search analytics spool schema")
     return SearchAnalyticsEvent(
         request_id=str(payload["request_id"]),
@@ -96,6 +98,7 @@ def deserialize_search_analytics_event(
             str(name): float(value)
             for name, value in (payload.get("timings_ms") or {}).items()
         },
+        context=sanitize_search_analytics_context(payload.get("context")),
         created_at=datetime.fromisoformat(str(payload["created_at"])),
         api_usage=tuple(
             SearchApiUsageEvent(
@@ -244,8 +247,7 @@ class SQLiteSearchAnalyticsSpoolStore:
             with self._lock:
                 self._dropped += 1
             LOGGER.warning(
-                "Search analytics spool queue full company=%s; "
-                "dropping event",
+                "Search analytics spool queue full company=%s; dropping event",
                 self.company_id,
             )
             return False
@@ -414,13 +416,10 @@ def deliver_search_analytics_spool(
             if not rows:
                 break
             events = [
-                deserialize_search_analytics_event(row["payload_json"])
-                for row in rows
+                deserialize_search_analytics_event(row["payload_json"]) for row in rows
             ]
             if any(event.company_id != company_id for event in events):
-                raise ValueError(
-                    "Search analytics spool contains a tenant mismatch"
-                )
+                raise ValueError("Search analytics spool contains a tenant mismatch")
             write_search_analytics_events(
                 destination,
                 events,

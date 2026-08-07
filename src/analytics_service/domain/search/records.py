@@ -112,13 +112,41 @@ def merge_search_api(data: dict[str, pd.DataFrame]) -> pd.DataFrame:
 
 def _sanitize_attempts(value: Any) -> list[dict[str, Any]]:
     return [
-        {
-            key: _json_value(attempt.get(key))
-            for key in ATTEMPT_FIELDS
-            if key in attempt
-        }
+        {key: _json_value(attempt.get(key)) for key in ATTEMPT_FIELDS if key in attempt}
         for attempt in parse_attempts_json(value)
     ]
+
+
+def _sanitize_filter_context(value: Any) -> dict[str, Any]:
+    normalized = _json_value(value, {})
+    if isinstance(normalized, str) and normalized.strip():
+        try:
+            normalized = json.loads(normalized)
+        except (TypeError, ValueError):
+            normalized = {}
+    if not isinstance(normalized, dict):
+        return {}
+    allowed = (
+        "main_category",
+        "subcategory",
+        "state",
+        "city",
+        "locality",
+        "rental_duration",
+        "min_rental_fee",
+        "max_rental_fee",
+        "target_ad_type",
+    )
+    sanitized = {}
+    for name in allowed:
+        item = _json_value(normalized.get(name))
+        if (
+            item is not None
+            and item != ""
+            and isinstance(item, (str, int, float, bool))
+        ):
+            sanitized[name] = item
+    return sanitized
 
 
 def _cache_value(value: Any) -> bool | None:
@@ -174,7 +202,9 @@ def _outcome(row: pd.Series) -> str:
     status = str(_json_value(row.get("status"), "missing")).casefold()
     if status not in {"success", "successful", "ok"}:
         return "failure" if status != "missing" else "telemetry_missing"
-    return "zero_result" if _json_value(row.get("total_results"), 0) == 0 else "fulfilled"
+    return (
+        "zero_result" if _json_value(row.get("total_results"), 0) == 0 else "fulfilled"
+    )
 
 
 def _build_record(
@@ -187,15 +217,14 @@ def _build_record(
     total_results = int(_json_value(row.get("total_results"), 0) or 0)
     total_tokens = int(_json_value(row.get("total_tokens"), 0) or 0)
     duration_value = _json_value(row.get("duration_ms"))
-    duration_ms = (
-        float(duration_value) if duration_value is not None else None
-    )
+    duration_ms = float(duration_value) if duration_value is not None else None
     api_call_count = int(_json_value(row.get("api_call_count"), 0) or 0)
     input_tokens = int(_json_value(row.get("input_tokens"), 0) or 0)
     output_tokens = int(_json_value(row.get("output_tokens"), 0) or 0)
     thought_tokens = int(_json_value(row.get("thought_tokens"), 0) or 0)
     execution_path = _json_value(row.get("execution_path"), "missing")
     attempts = _sanitize_attempts(row.get("attempts_json"))
+    filter_context = _sanitize_filter_context(row.get("context_json"))
     stage_timings = _sanitize_timings(row.get("timings_json"), duration_ms)
     successful_attempts = sum(
         str(attempt.get("status") or "").casefold()
@@ -213,7 +242,9 @@ def _build_record(
         "query": query,
         "normalized_query": normalized,
         "created_at": str(
-            _json_value(row.get("created_at_query"), _json_value(row.get("created_at"), ""))
+            _json_value(
+                row.get("created_at_query"), _json_value(row.get("created_at"), "")
+            )
         ),
         "word_count": len(normalized.split()),
         "categories": categories,
@@ -229,6 +260,7 @@ def _build_record(
             "is_uncategorized": categories == ["Other / Uncategorized"],
         },
         "outcome": _outcome(row),
+        "filters": filter_context,
         # Stable, explicitly named internal projections. ``api`` below stays
         # available for the deployed frontend during the additive rollout.
         # The duration is measured with time.perf_counter around server-side
@@ -265,9 +297,7 @@ def _build_record(
             "execution_path": execution_path,
             "result_count": int(_json_value(row.get("result_count"), 0) or 0),
             "total_results": total_results,
-            "duration_ms": (
-                round(duration_ms, 3) if duration_ms is not None else None
-            ),
+            "duration_ms": (round(duration_ms, 3) if duration_ms is not None else None),
             "api_call_count": api_call_count,
             "input_tokens": input_tokens,
             "output_tokens": output_tokens,

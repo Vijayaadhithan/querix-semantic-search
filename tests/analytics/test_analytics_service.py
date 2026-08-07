@@ -53,8 +53,7 @@ def analytics_company(tmp_path: Path, company_id: str = "gainr"):
         database=database,
         telemetry_database=database,
         datasets={
-            name: DatasetMapping(table=table)
-            for name, table in DEFAULT_TABLES.items()
+            name: DatasetMapping(table=table) for name, table in DEFAULT_TABLES.items()
         },
         config_path=tmp_path / f"{company_id}.yaml",
     )
@@ -99,6 +98,10 @@ def analytics_data() -> dict[str, pd.DataFrame]:
                     '{"total_server_ms":500.0,"planning_ms":200.0,'
                     '"retrieval_ms":180.0,"reranking_ms":90.0}'
                 ),
+                "context_json": (
+                    '{"main_category":"Vehicles","city":"Chennai",'
+                    '"target_ad_type":"offer"}'
+                ),
                 "attempts_json": (
                     '[{"attempt_number":1,"provider":"groq",'
                     '"model":"planner","operation":"query_planning",'
@@ -126,6 +129,10 @@ def analytics_data() -> dict[str, pd.DataFrame]:
                 "timings_json": (
                     '{"total_server_ms":100.0,"planning_ms":5.0,'
                     '"database_filter_ms":80.0}'
+                ),
+                "context_json": (
+                    '{"main_category":"Electronics","city":"Chennai",'
+                    '"target_ad_type":"offer"}'
                 ),
                 "attempts_json": "[]",
                 "created_at": "2026-07-29 11:00:00",
@@ -263,9 +270,7 @@ def analytics_data() -> dict[str, pd.DataFrame]:
                 },
             ]
         ),
-        "attributes": pd.DataFrame(
-            [{"id": 601, "name": "Brand"}]
-        ),
+        "attributes": pd.DataFrame([{"id": 601, "name": "Brand"}]),
         "attribute_values": pd.DataFrame(
             [{"id": 701, "attributeId": 601, "value": "Tata"}]
         ),
@@ -285,9 +290,7 @@ class FakeSource:
         del company
         if isinstance(self.data, Exception):
             raise self.data
-        return {
-            name: frame.copy() for name, frame in self.data.items()
-        }
+        return {name: frame.copy() for name, frame in self.data.items()}
 
 
 class WrappedAnalyticsAdapter:
@@ -407,10 +410,7 @@ analytics:
         DATASET_SPECS["search_history"],
         history_days=config.history_days,
     )
-    assert (
-        "`created_at` >= CURRENT_TIMESTAMP - INTERVAL 120 DAY"
-        in history_sql
-    )
+    assert "`created_at` >= CURRENT_TIMESTAMP - INTERVAL 120 DAY" in history_sql
 
 
 def test_unknown_company_analytics_adapter_is_rejected(tmp_path):
@@ -462,19 +462,11 @@ def test_daily_refresh_publishes_both_audiences_and_queries(tmp_path):
         "market_intelligence",
     }
     assert "api_performance" not in company_dashboard
-    assert tuple(company_dashboard["search_intelligence"]) == (
-        COMPANY_SEARCH_METRICS
-    )
-    assert tuple(company_dashboard["deep_analytics"]) == (
-        COMPANY_DEEP_METRICS
-    )
-    assert tuple(company_dashboard["market_intelligence"]) == (
-        COMPANY_MARKET_METRICS
-    )
+    assert tuple(company_dashboard["search_intelligence"]) == (COMPANY_SEARCH_METRICS)
+    assert tuple(company_dashboard["deep_analytics"]) == (COMPANY_DEEP_METRICS)
+    assert tuple(company_dashboard["market_intelligence"]) == (COMPANY_MARKET_METRICS)
     assert "api_performance" in internal_dashboard
-    assert tuple(internal_dashboard["api_performance"]) == (
-        INTERNAL_API_METRICS
-    )
+    assert tuple(internal_dashboard["api_performance"]) == (INTERNAL_API_METRICS)
     assert internal_dashboard["metadata"]["modules"] == [
         "individual_queries",
         "api_performance",
@@ -498,8 +490,9 @@ def test_daily_refresh_publishes_both_audiences_and_queries(tmp_path):
         limit=1,
         cursor=company_queries["next_cursor"],
     )
-    assert second_page["items"][0]["request_id"] != (
-        company_queries["items"][0]["request_id"]
+    assert (
+        second_page["items"][0]["request_id"]
+        != (company_queries["items"][0]["request_id"])
     )
 
     internal_queries = store.query_records(
@@ -508,9 +501,7 @@ def test_daily_refresh_publishes_both_audiences_and_queries(tmp_path):
         limit=10,
     )
     detailed = next(
-        item
-        for item in internal_queries["items"]
-        if item["request_id"] == "req-1"
+        item for item in internal_queries["items"] if item["request_id"] == "req-1"
     )
     assert detailed["performance"] == {
         "server_duration_ms": 500.0,
@@ -566,9 +557,7 @@ def test_daily_refresh_publishes_both_audiences_and_queries(tmp_path):
         execution_path="SEMANTIC",
     )
     assert semantic_queries["returned"] == 1
-    assert semantic_queries["items"][0]["performance"][
-        "execution_path"
-    ] == "semantic"
+    assert semantic_queries["items"][0]["performance"]["execution_path"] == "semantic"
     assert "performance" not in company_queries["items"][0]
     assert "token_usage" not in company_queries["items"][0]
 
@@ -589,20 +578,19 @@ def test_daily_refresh_supports_empty_search_telemetry(tmp_path):
     assert result["query_records"] == 0
     company_dashboard = store.dashboard("gainr", internal=False)
     internal_dashboard = store.dashboard("gainr", internal=True)
-    assert company_dashboard["search_intelligence"][
-        "q7_zero_results"
-    ]["percentage"] == 0
-    assert internal_dashboard["api_performance"][
-        "q23_latency_stats"
-    ]["avg"] == 0
-    assert internal_dashboard["api_performance"][
-        "q40_avg_api_calls"
-    ]["avg"] == 0
-    assert store.query_records(
-        "gainr",
-        internal=False,
-        limit=10,
-    )["items"] == []
+    assert (
+        company_dashboard["search_intelligence"]["q7_zero_results"]["percentage"] == 0
+    )
+    assert internal_dashboard["api_performance"]["q23_latency_stats"]["avg"] == 0
+    assert internal_dashboard["api_performance"]["q40_avg_api_calls"]["avg"] == 0
+    assert (
+        store.query_records(
+            "gainr",
+            internal=False,
+            limit=10,
+        )["items"]
+        == []
+    )
 
 
 def test_internal_query_marks_missing_operational_telemetry_as_unavailable():
@@ -617,10 +605,7 @@ def test_internal_query_marks_missing_operational_telemetry_as_unavailable():
         "plan_hit": None,
         "result_hit": None,
     }
-    assert all(
-        value is None
-        for value in record["performance"]["stages_ms"].values()
-    )
+    assert all(value is None for value in record["performance"]["stages_ms"].values())
 
 
 def test_refresh_applies_separate_company_and_internal_metric_profiles(
@@ -663,9 +648,7 @@ def test_refresh_applies_separate_company_and_internal_metric_profiles(
     )
     assert "market_intelligence" not in external
     assert "market_intelligence" not in external["metadata"]["modules"]
-    assert external["metadata"]["metric_counts"][
-        "market_intelligence"
-    ] == 0
+    assert external["metadata"]["metric_counts"]["market_intelligence"] == 0
     assert "search_intelligence" not in internal
     assert tuple(internal["api_performance"]) == (
         "q21_success_rate",
@@ -714,9 +697,7 @@ def test_failed_refresh_keeps_last_completed_snapshot(tmp_path):
         FakeSource(analytics_data()),
         store,
     ).refresh(company)
-    generated_at = store.dashboard("gainr", internal=False)["metadata"][
-        "generated_at"
-    ]
+    generated_at = store.dashboard("gainr", internal=False)["metadata"]["generated_at"]
 
     with pytest.raises(RuntimeError):
         AnalyticsRefreshService(
@@ -724,9 +705,10 @@ def test_failed_refresh_keeps_last_completed_snapshot(tmp_path):
             store,
         ).refresh(company)
 
-    assert store.dashboard("gainr", internal=False)["metadata"][
-        "generated_at"
-    ] == generated_at
+    assert (
+        store.dashboard("gainr", internal=False)["metadata"]["generated_at"]
+        == generated_at
+    )
     assert store.company_status("gainr")["latest_run"]["status"] == "failed"
 
 
@@ -741,9 +723,7 @@ def test_api_enforces_company_and_internal_field_boundaries(
     monkeypatch.setenv("GAINR_API_KEY", "gainr-search-secret")
     company = analytics_company(tmp_path)
     other_company = analytics_company(tmp_path, company_id="acme")
-    registry = AnalyticsRegistry(
-        {"gainr": company, "acme": other_company}
-    )
+    registry = AnalyticsRegistry({"gainr": company, "acme": other_company})
     settings = AnalyticsSettings(
         host="127.0.0.1",
         port=8010,
@@ -810,20 +790,14 @@ def test_api_enforces_company_and_internal_field_boundaries(
                 "password": "company-password-2026",
             },
         )
-        session_company = company_client.get(
-            "/api/v1/gainr/analytics/dashboard"
-        )
-        forbidden_other_company = company_client.get(
-            "/api/v1/acme/analytics/dashboard"
-        )
+        session_company = company_client.get("/api/v1/gainr/analytics/dashboard")
+        forbidden_other_company = company_client.get("/api/v1/acme/analytics/dashboard")
         forbidden_internal = company_client.get(
             "/api/v1/admin/analytics/gainr/queries",
         )
         me = company_client.get("/api/v1/analytics/auth/me")
         logout = company_client.post("/api/v1/analytics/auth/logout")
-        after_logout = company_client.get(
-            "/api/v1/gainr/analytics/dashboard"
-        )
+        after_logout = company_client.get("/api/v1/gainr/analytics/dashboard")
 
     with TestClient(app) as internal_client:
         internal_login = internal_client.post(
@@ -833,18 +807,10 @@ def test_api_enforces_company_and_internal_field_boundaries(
                 "password": "internal-password-2026",
             },
         )
-        companies = internal_client.get(
-            "/api/v1/admin/analytics/companies"
-        )
-        internal = internal_client.get(
-            "/api/v1/admin/analytics/gainr/dashboard"
-        )
-        overview = internal_client.get(
-            "/api/v1/admin/analytics/overview"
-        )
-        internal_queries = internal_client.get(
-            "/api/v1/admin/analytics/gainr/queries"
-        )
+        companies = internal_client.get("/api/v1/admin/analytics/companies")
+        internal = internal_client.get("/api/v1/admin/analytics/gainr/dashboard")
+        overview = internal_client.get("/api/v1/admin/analytics/overview")
+        internal_queries = internal_client.get("/api/v1/admin/analytics/gainr/queries")
 
     assert missing.status_code == 401
     assert wrong.status_code == 403
@@ -903,8 +869,8 @@ def test_company_analytics_routes_apply_tenant_response_adapter(
         settings=settings,
         registry=registry,
         store=store,
-        analytics_adapter_factory=lambda active_company: (
-            WrappedAnalyticsAdapter(active_company.company_id)
+        analytics_adapter_factory=lambda active_company: WrappedAnalyticsAdapter(
+            active_company.company_id
         ),
     )
     headers = {"X-API-Key": "gainr-analytics-secret"}

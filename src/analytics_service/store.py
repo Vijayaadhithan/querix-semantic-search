@@ -61,6 +61,9 @@ class AnalyticsSnapshotStore:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
+        self._activity_cache: dict[
+            tuple[str, str, bool], tuple[dict[str, Any], ...]
+        ] = {}
         self._initialize()
 
     @contextmanager
@@ -305,6 +308,12 @@ class AnalyticsSnapshotStore:
             except Exception:
                 connection.rollback()
                 raise
+        with self._lock:
+            self._activity_cache = {
+                key: value
+                for key, value in self._activity_cache.items()
+                if key[0] != company_id
+            }
         return version
 
     def dashboard(
@@ -337,6 +346,45 @@ class AnalyticsSnapshotStore:
             "refresh_schedule": "daily at 03:00 Asia/Kolkata",
         }
         return payload
+
+    def dashboard_activity_records(
+        self,
+        company_id: str,
+        *,
+        internal: bool,
+    ) -> tuple[dict[str, Any], ...]:
+        field = "internal_json" if internal else "company_json"
+        with self._connection() as connection:
+            snapshot = connection.execute(
+                """
+                SELECT active_version
+                FROM analytics_snapshots
+                WHERE company_id = ?
+                """,
+                (company_id,),
+            ).fetchone()
+            if snapshot is None:
+                return ()
+            version = str(snapshot["active_version"])
+            cache_key = (company_id, version, internal)
+            with self._lock:
+                cached = self._activity_cache.get(cache_key)
+            if cached is not None:
+                return cached
+            rows = connection.execute(
+                f"""
+                SELECT records.{field} AS payload_json
+                FROM analytics_query_records AS records
+                WHERE records.company_id = ?
+                  AND records.snapshot_version = ?
+                ORDER BY records.created_at ASC, records.request_id ASC
+                """,
+                (company_id, version),
+            ).fetchall()
+        records = tuple(json.loads(row["payload_json"]) for row in rows)
+        with self._lock:
+            self._activity_cache[cache_key] = records
+        return records
 
     def query_records(
         self,

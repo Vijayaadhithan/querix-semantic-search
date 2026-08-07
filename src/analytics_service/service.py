@@ -54,6 +54,7 @@ def _company_query_record(record: dict[str, Any]) -> dict[str, Any]:
         "rental_duration": record.get("rental_duration"),
         "flags": dict(record.get("flags") or {}),
         "outcome": record.get("outcome"),
+        "filters": dict(record.get("filters") or {}),
         "search": {
             "status": api.get("status"),
             "result_count": api.get("result_count"),

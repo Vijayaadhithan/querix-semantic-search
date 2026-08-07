@@ -31,14 +31,14 @@ failed run but does not replace or delete the last completed dashboard.
 
 Company dashboard modules:
 
-- Search Intelligence (13 curated metrics)
+- Search Intelligence (17 curated metrics)
 - Individual Queries
-- Deep Analytics (10 curated metrics)
-- Market Intelligence (8 curated metrics)
+- Deep Analytics (20 curated metrics)
+- Market Intelligence (9 curated metrics)
 
 Internal dashboard modules:
 
-- API Performance (15 curated metrics);
+- API Performance (16 curated metrics);
 - Individual Query History for the explicitly selected company;
 - provider and model attempts;
 - token usage, result counts, and cache state;
@@ -240,6 +240,35 @@ GET /api/v1/admin/analytics/companies
 GET /api/v1/admin/analytics/{company}/dashboard
 GET /api/v1/admin/analytics/{company}/queries
 ```
+
+Dashboard activity filters:
+
+```text
+period (24h, 7d, 30d, 90d, all, or custom)
+from / to (custom period boundaries)
+outcome
+category
+language
+city
+ad_type
+execution_path (internal dashboard only)
+provider (internal dashboard only)
+operation (internal dashboard only)
+```
+
+Dashboard filters apply to the `filtered_overview` search/API activity data,
+including its main time-series graph. Catalogue, user, supply, and market
+questions are daily snapshot metrics and are intentionally not rewritten by a
+search time filter. Graph buckets and naive custom boundaries use the tenant's
+configured `analytics.timezone` (Gainr uses `Asia/Kolkata`). City is the actual
+resolved request filter captured by the search API; it is never inferred from
+query text. Records written before filter-context capture are excluded when a
+city is selected.
+
+The internal filtered overview reports provider/operation attempts, measured
+stage latency, and separate provider-reported token totals for LLM planning and
+reranking. A zero token total can mean either no usage or unavailable provider
+telemetry, so the response also includes attempt and API-call counts.
 
 Individual-query filters:
 
