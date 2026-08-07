@@ -879,9 +879,12 @@ class ProductSearchService:
         context = {}
         for source, target in (
             ("main_category_name", "main_category"),
+            ("subcategory_id", "subcategory_id"),
             ("subcategory_name", "subcategory"),
             ("state_name", "state"),
+            ("city_id", "city_id"),
             ("city_name", "city"),
+            ("locality_id", "locality_id"),
             ("locality_name", "locality"),
             ("rental_duration", "rental_duration"),
         ):
@@ -892,7 +895,9 @@ class ProductSearchService:
             value = resolved.get(name)
             if isinstance(value, (int, float)):
                 context[name] = value
-        target_ad_type = dict(result.get("query_plan") or {}).get("target_ad_type")
+        target_ad_type = result.get("_analytics_target_ad_type") or dict(
+            result.get("query_plan") or {}
+        ).get("target_ad_type")
         if isinstance(target_ad_type, (str, int, float, bool)) and (
             target_ad_type != ""
         ):

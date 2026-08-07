@@ -24,7 +24,11 @@ def _record(
         "outcome": outcome,
         "language": "English",
         "categories": [category],
-        "filters": {"city": city, "target_ad_type": "offer"},
+        "filters": {
+            "city": city,
+            "city_id": 456 if city == "Chennai" else 789,
+            "target_ad_type": "offer",
+        },
         "search": {"result_count": 20, "total_results": 50},
         "performance": {
             "execution_path": path,
@@ -51,12 +55,16 @@ def test_company_dashboard_filters_actual_city_and_period():
     payload = build_dashboard_overview(
         records,
         internal=False,
-        filters=DashboardFilters(period="24h", city="Chennai"),
+        filters=DashboardFilters(period="24h", city_id=456),
         timezone_name="Asia/Kolkata",
         now=datetime(2026, 8, 7, 12, tzinfo=UTC),
     )
 
     assert payload["filtering"]["matched_records"] == 1
+    assert payload["filtering"]["available"]["city_options"] == [
+        {"id": 456, "label": "Chennai"},
+        {"id": 789, "label": "Coimbatore"},
+    ]
     assert payload["filtered_overview"]["summary"]["searches"] == 1
     assert payload["filtered_overview"]["main_graph"]["timezone"] == ("Asia/Kolkata")
 

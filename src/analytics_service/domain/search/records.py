@@ -128,9 +128,12 @@ def _sanitize_filter_context(value: Any) -> dict[str, Any]:
         return {}
     allowed = (
         "main_category",
+        "subcategory_id",
         "subcategory",
         "state",
+        "city_id",
         "city",
+        "locality_id",
         "locality",
         "rental_duration",
         "min_rental_fee",
@@ -320,6 +323,31 @@ def build_query_records(
     merged = merge_search_api(data)
     enrichment_map = enrichments or {}
     records = [_build_record(row, enrichment_map) for _, row in merged.iterrows()]
+    city_names = {
+        int(row["id"]): str(row["city"])
+        for _, row in data.get("location", pd.DataFrame()).iterrows()
+        if _json_value(row.get("id")) is not None
+        and str(_json_value(row.get("city"), "")).strip()
+    }
+    subcategory_names = {
+        int(row["id"]): str(row["name"])
+        for _, row in data.get("sub_categories", pd.DataFrame()).iterrows()
+        if _json_value(row.get("id")) is not None
+        and str(_json_value(row.get("name"), "")).strip()
+    }
+    for record in records:
+        filters = record["filters"]
+        city_id = filters.get("city_id")
+        subcategory_id = filters.get("subcategory_id")
+        if city_id is not None and not filters.get("city"):
+            filters["city"] = city_names.get(int(city_id))
+        if subcategory_id is not None and not filters.get("subcategory"):
+            filters["subcategory"] = subcategory_names.get(int(subcategory_id))
+        record["filters"] = {
+            name: value
+            for name, value in filters.items()
+            if value is not None and value != ""
+        }
     return {
         "metadata": {
             "schema_version": "2.0",

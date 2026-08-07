@@ -1049,6 +1049,7 @@ def test_search_analytics_records_route_provider_calls_and_user_context():
     assert event.result_cache_hit is False
     assert event.context == {
         "main_category": "Vehicles",
+        "city_id": 456,
         "city": "Chennai",
         "min_rental_fee": 500,
         "target_ad_type": "offer",

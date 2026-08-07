@@ -27,6 +27,7 @@ class DashboardFilters:
     category: str | None = None
     language: str | None = None
     city: str | None = None
+    city_id: int | None = None
     ad_type: str | None = None
     execution_path: str | None = None
     provider: str | None = None
@@ -160,6 +161,14 @@ def _matches(
         ):
             return False
 
+    if filters.city_id is not None:
+        try:
+            record_city_id = int(applied.get("city_id"))
+        except (TypeError, ValueError):
+            return False
+        if record_city_id != filters.city_id:
+            return False
+
     if not internal:
         return True
 
@@ -201,6 +210,7 @@ def _available_filters(
 ) -> dict[str, Any]:
     categories: set[str] = set()
     cities = []
+    city_options = {}
     ad_types = []
     providers = []
     operations = []
@@ -209,6 +219,13 @@ def _available_filters(
         categories.update(_record_categories(record))
         applied = dict(record.get("filters") or {})
         cities.append(applied.get("city"))
+        city_id = applied.get("city_id")
+        city_label = str(applied.get("city") or "").strip()
+        if city_id is not None:
+            try:
+                city_options[int(city_id)] = city_label or str(city_id)
+            except (TypeError, ValueError):
+                pass
         ad_types.append(applied.get("target_ad_type"))
         if internal:
             performance = dict(record.get("performance") or {})
@@ -222,6 +239,13 @@ def _available_filters(
         "categories": _sorted_values(categories),
         "languages": _sorted_values(record.get("language") for record in records),
         "cities": _sorted_values(cities),
+        "city_options": [
+            {"id": city_id, "label": label}
+            for city_id, label in sorted(
+                city_options.items(),
+                key=lambda item: item[1].casefold(),
+            )
+        ],
         "ad_types": _sorted_values(ad_types),
     }
     if internal:
@@ -595,6 +619,7 @@ def build_dashboard_overview(
                 "category": _normalized_choice(filters.category),
                 "language": _normalized_choice(filters.language),
                 "city": _normalized_choice(filters.city),
+                "city_id": filters.city_id,
                 "ad_type": _normalized_choice(filters.ad_type),
                 **(
                     {

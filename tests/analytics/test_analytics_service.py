@@ -99,7 +99,7 @@ def analytics_data() -> dict[str, pd.DataFrame]:
                     '"retrieval_ms":180.0,"reranking_ms":90.0}'
                 ),
                 "context_json": (
-                    '{"main_category":"Vehicles","city":"Chennai",'
+                    '{"main_category":"Vehicles","city_id":301,'
                     '"target_ad_type":"offer"}'
                 ),
                 "attempts_json": (
@@ -131,7 +131,7 @@ def analytics_data() -> dict[str, pd.DataFrame]:
                     '"database_filter_ms":80.0}'
                 ),
                 "context_json": (
-                    '{"main_category":"Electronics","city":"Chennai",'
+                    '{"main_category":"Electronics","city_id":301,'
                     '"target_ad_type":"offer"}'
                 ),
                 "attempts_json": "[]",

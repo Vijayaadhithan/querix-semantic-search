@@ -250,6 +250,7 @@ outcome
 category
 language
 city
+city_id (authoritative structured location ID)
 ad_type
 execution_path (internal dashboard only)
 provider (internal dashboard only)
@@ -260,10 +261,11 @@ Dashboard filters apply to the `filtered_overview` search/API activity data,
 including its main time-series graph. Catalogue, user, supply, and market
 questions are daily snapshot metrics and are intentionally not rewritten by a
 search time filter. Graph buckets and naive custom boundaries use the tenant's
-configured `analytics.timezone` (Gainr uses `Asia/Kolkata`). City is the actual
-resolved request filter captured by the search API; it is never inferred from
-query text. Records written before filter-context capture are excluded when a
-city is selected.
+configured `analytics.timezone` (Gainr uses `Asia/Kolkata`). City and city ID
+come from the actual resolved request filter captured by the search API; they
+are never inferred from query text. The response provides readable city options
+paired with their IDs. Records written before filter-context capture are
+excluded when a city is selected.
 
 The internal filtered overview reports provider/operation attempts, measured
 stage latency, and separate provider-reported token totals for LLM planning and

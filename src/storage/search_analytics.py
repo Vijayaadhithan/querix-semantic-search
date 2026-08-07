@@ -51,9 +51,12 @@ SEARCH_ANALYTICS_TIMING_FIELDS = frozenset(
 SEARCH_ANALYTICS_CONTEXT_FIELDS = frozenset(
     {
         "main_category",
+        "subcategory_id",
         "subcategory",
         "state",
+        "city_id",
         "city",
+        "locality_id",
         "locality",
         "rental_duration",
         "min_rental_fee",

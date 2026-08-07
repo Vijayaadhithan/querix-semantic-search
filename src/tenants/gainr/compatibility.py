@@ -508,6 +508,16 @@ class GainrCompatibilityService:
             "usage_recording_ms": usage_ms,
             "recent_search_ms": recent_ms,
         }
+        # Analytics uses client-selected structured filters, never location
+        # terms inferred from chat text.
+        analytics_result["resolved_filters"] = copy.deepcopy(effective)
+        analytics_result["_analytics_target_ad_type"] = (
+            "offer"
+            if allowed_ad_types == {"1"}
+            else "wanted"
+            if allowed_ad_types == {"2"}
+            else "offer_and_wanted"
+        )
         self.product_search_service.record_search_analytics(
             request.searchTerm,
             analytics_result,

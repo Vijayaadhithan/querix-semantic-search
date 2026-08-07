@@ -301,6 +301,9 @@ def test_filter_result_queues_minimized_durable_history(tmp_path):
     assert event.result_count == len(response["data"])
     assert event.plan_cache_hit is False
     assert event.result_cache_hit is False
+    assert event.context["city_id"] == 456
+    assert event.context["target_ad_type"] == "offer"
+    assert "city" not in event.context
     assert event.timings_ms["total_server_ms"] == pytest.approx(
         event.duration_ms,
         abs=0.001,
