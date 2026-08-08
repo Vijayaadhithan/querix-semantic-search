@@ -1,9 +1,9 @@
 [Unit]
-Description=Warm semantic search local paths hourly
+Description=Warm semantic search local paths every 30 minutes
 
 [Timer]
 OnBootSec=10m
-OnUnitActiveSec=60m
+OnUnitActiveSec=30m
 AccuracySec=1m
 RandomizedDelaySec=2m
 Unit=semantic-search-warmup.service

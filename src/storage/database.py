@@ -134,6 +134,63 @@ class DatabaseConnectionPool:
                 self._last_validated.pop(id(connection), None)
             self._unreserve()
 
+    def validate_idle_connections(self) -> dict[str, int]:
+        """Validate every currently idle connection without blocking checkouts.
+
+        A LIFO pool normally exercises only its newest connection during quiet
+        readiness checks. Older MySQL connections can therefore cross the
+        server's ``wait_timeout`` and make the next concurrent search pay for
+        dead-socket detection. Draining the idle queue lets maintenance touch
+        every available connection while checked-out connections continue to
+        serve traffic normally.
+        """
+        idle_connections = []
+        while True:
+            try:
+                idle_connections.append(self._idle.get_nowait())
+            except Empty:
+                break
+
+        healthy_connections = []
+        discarded = 0
+        for connection in idle_connections:
+            if self._usable(connection):
+                healthy_connections.append(connection)
+            else:
+                self._discard(connection)
+                discarded += 1
+
+        for connection in healthy_connections:
+            if self._closed:
+                self._discard(connection)
+            else:
+                self._idle.put(connection)
+
+        created = 0
+        while True:
+            with self._lock:
+                needs_connection = (
+                    not self._closed and self._created < self.min_size
+                )
+            if not needs_connection:
+                break
+            try:
+                connection = self._create_reserved()
+            except Exception:
+                break
+            if self._closed:
+                self._discard(connection)
+                break
+            self._idle.put(connection)
+            created += 1
+
+        return {
+            "checked": len(idle_connections),
+            "healthy": len(healthy_connections),
+            "discarded": discarded,
+            "created": created,
+        }
+
     def _acquire(self):
         deadline = time.monotonic() + self.timeout_seconds
         while True:

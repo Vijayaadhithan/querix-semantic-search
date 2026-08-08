@@ -171,11 +171,15 @@ class ProductSearchService:
             components["database"] = {"ok": True, "configured": False}
         else:
             try:
+                pool_maintenance = database_pool.validate_idle_connections()
                 with database_pool.connection() as connection:
                     with connection.cursor() as cursor:
                         cursor.execute("SELECT 1")
                         cursor.fetchone()
-                components["database"] = {"ok": True}
+                components["database"] = {
+                    "ok": True,
+                    "idle_pool": pool_maintenance,
+                }
             except Exception as exc:
                 components["database"] = {
                     "ok": False,

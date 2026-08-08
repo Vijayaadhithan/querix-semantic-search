@@ -174,6 +174,51 @@ def test_mysql_pool_validates_only_after_an_idle_interval(monkeypatch):
     pool.close()
 
 
+def test_pool_maintenance_validates_every_idle_connection(monkeypatch):
+    now = [100.0]
+    pinged = []
+
+    class FakeConnection:
+        open = True
+
+        def __init__(self, name):
+            self.name = name
+
+        def ping(self, reconnect=False):
+            assert reconnect is False
+            pinged.append(self.name)
+
+        def close(self):
+            self.open = False
+
+    connections = [FakeConnection("one"), FakeConnection("two")]
+    monkeypatch.setattr(
+        database_store.DatabaseConnectionPool,
+        "_new_connection",
+        lambda self: connections.pop(0),
+    )
+    monkeypatch.setattr(database_store.time, "monotonic", lambda: now[0])
+    pool = database_store.DatabaseConnectionPool(
+        mysql_config(
+            pool_min_size=2,
+            pool_max_size=2,
+            pool_validation_interval_seconds=30,
+        )
+    )
+
+    now[0] += 31
+    status = pool.validate_idle_connections()
+
+    assert sorted(pinged) == ["one", "two"]
+    assert status == {
+        "checked": 2,
+        "healthy": 2,
+        "discarded": 0,
+        "created": 0,
+    }
+    pool.close()
+
+
 def test_mysql_paged_iterator_closes_connection_before_yield(monkeypatch):
     pages = [
         [{"id": 1, "embedding_content": "one"}, {"id": 2, "embedding_content": "two"}],
