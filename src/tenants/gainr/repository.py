@@ -375,7 +375,10 @@ class GainrDatabaseRepository:
                 for product_id in product_ids
                 if str(product_id) in rows_by_id
             ]
-        self._attach_attributes(ordered)
+            # Reuse the connection that just completed the main hydration.
+            # Opening relation work across three pooled remote connections can
+            # make a small read pay idle-socket validation or reconnect costs.
+            self._attach_attributes(ordered, connection=connection)
         return ordered
 
     def hydrate_ranked_page(
@@ -441,7 +444,10 @@ class GainrDatabaseRepository:
 
             for row in rows:
                 row.pop("__eligible_total", None)
-        self._attach_attributes(rows)
+            # These relation reads are small primary/index lookups. Keeping
+            # them on the already-proven connection is both faster and more
+            # predictable than fanning out over idle remote MySQL sockets.
+            self._attach_attributes(rows, connection=connection)
         return rows, total
 
     def filter_product_ids(
