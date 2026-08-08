@@ -18,7 +18,7 @@ from tenants.gainr.models import (
     _unique,
 )
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("uvicorn.error")
 
 class GainrDatabaseRepository:
     """Gainr-only read adapter over its search-ready and result tables."""
