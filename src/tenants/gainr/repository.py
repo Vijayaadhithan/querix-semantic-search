@@ -416,16 +416,29 @@ class GainrDatabaseRepository:
                     f"""
                     SELECT a.*, sr.city_name AS __city_name,
                            sr.locality_name AS __locality_name,
-                           COUNT(*) OVER () AS __eligible_total
-                    FROM {self.search_table} AS sr
-                    JOIN {self.result_table} AS a ON a.id = sr.id
-                    WHERE {where_clause}
-                    ORDER BY FIELD(sr.id, {rank_placeholders})
-                    LIMIT %s OFFSET %s
+                           ranked.__eligible_total
+                    FROM (
+                        SELECT sr.id AS __search_id,
+                               FIELD(
+                                   sr.id,
+                                   {rank_placeholders}
+                               ) AS __rank,
+                               COUNT(*) OVER () AS __eligible_total
+                        FROM {self.search_table} AS sr
+                        JOIN {self.result_table} AS a ON a.id = sr.id
+                        WHERE {where_clause}
+                        ORDER BY __rank
+                        LIMIT %s OFFSET %s
+                    ) AS ranked
+                    JOIN {self.search_table} AS sr
+                      ON sr.id = ranked.__search_id
+                    JOIN {self.result_table} AS a
+                      ON a.id = ranked.__search_id
+                    ORDER BY ranked.__rank
                     """,
                     (
-                        *where_params,
                         *ranked_ids,
+                        *where_params,
                         page_size,
                         offset,
                     ),
