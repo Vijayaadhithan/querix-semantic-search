@@ -1,4 +1,5 @@
 import logging
+import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from typing import Any
@@ -403,7 +404,13 @@ class GainrDatabaseRepository:
         )
         rank_placeholders = ", ".join("%s" for _ in ranked_ids)
         offset = (page - 1) * page_size
+        hydration_started = time.perf_counter()
+        checkout_started = hydration_started
         with self.connection() as connection:
+            checkout_ms = round(
+                (time.perf_counter() - checkout_started) * 1000
+            )
+            main_started = time.perf_counter()
             with connection.cursor() as cursor:
                 cursor.execute(
                     f"""
@@ -444,10 +451,25 @@ class GainrDatabaseRepository:
 
             for row in rows:
                 row.pop("__eligible_total", None)
+            main_ms = round((time.perf_counter() - main_started) * 1000)
             # These relation reads are small primary/index lookups. Keeping
             # them on the already-proven connection is both faster and more
             # predictable than fanning out over idle remote MySQL sockets.
-            self._attach_attributes(rows, connection=connection)
+            relation_timings = self._attach_attributes(
+                rows,
+                connection=connection,
+            )
+        logger.info(
+            "Gainr ranked hydration timing rows=%s checkout_ms=%s main_ms=%s "
+            "attributes_ms=%s service_counts_ms=%s users_ms=%s total_ms=%s",
+            len(rows),
+            checkout_ms,
+            main_ms,
+            relation_timings.get("attributes", 0),
+            relation_timings.get("service_counts", 0),
+            relation_timings.get("users", 0),
+            round((time.perf_counter() - hydration_started) * 1000),
+        )
         return rows, total
 
     def filter_product_ids(
@@ -495,18 +517,19 @@ class GainrDatabaseRepository:
         rows: list[dict],
         *,
         connection=None,
-    ) -> None:
+    ) -> dict[str, int]:
         product_ids = [
             row.get(self.config.result_id_column)
             for row in rows
             if row.get(self.config.result_id_column) is not None
         ]
         if not product_ids:
-            return
+            return {}
         placeholders = ", ".join("%s" for _ in product_ids)
         attributes = []
         service_counts = []
         users = []
+        timings: dict[str, int] = {}
         user_ids = _unique(
             [
                 row.get("user_id")
@@ -516,40 +539,52 @@ class GainrDatabaseRepository:
         )
 
         def fetch_attributes(active_connection) -> list[dict]:
-            with active_connection.cursor() as cursor:
-                cursor.execute(
-                    f"""
-                    SELECT ads_id, attribute_id, value
-                    FROM {quote_mysql_identifier('ads_attributes')}
-                    WHERE ads_id IN ({placeholders})
-                      AND (deleted_at IS NULL OR TRIM(deleted_at) = '')
-                    ORDER BY id
-                    """,
-                    product_ids,
+            started = time.perf_counter()
+            try:
+                with active_connection.cursor() as cursor:
+                    cursor.execute(
+                        f"""
+                        SELECT ads_id, attribute_id, value
+                        FROM {quote_mysql_identifier('ads_attributes')}
+                        WHERE ads_id IN ({placeholders})
+                          AND (deleted_at IS NULL OR TRIM(deleted_at) = '')
+                        ORDER BY id
+                        """,
+                        product_ids,
+                    )
+                    return list(cursor.fetchall())
+            finally:
+                timings["attributes"] = round(
+                    (time.perf_counter() - started) * 1000
                 )
-                return list(cursor.fetchall())
 
         def fetch_service_counts(active_connection) -> list[dict]:
             if not user_ids:
                 return []
             user_placeholders = ", ".join("%s" for _ in user_ids)
-            with active_connection.cursor() as cursor:
-                cursor.execute(
-                    f"""
-                    SELECT user_id, COUNT(*) AS service_ad_count
-                    FROM {self.result_table}
-                    WHERE user_id IN ({user_placeholders})
-                      AND category_type = 2
-                      AND status = 1
-                      AND (
-                          deleted_at IS NULL
-                          OR TRIM(deleted_at) = ''
-                      )
-                    GROUP BY user_id
-                    """,
-                    user_ids,
+            started = time.perf_counter()
+            try:
+                with active_connection.cursor() as cursor:
+                    cursor.execute(
+                        f"""
+                        SELECT user_id, COUNT(*) AS service_ad_count
+                        FROM {self.result_table}
+                        WHERE user_id IN ({user_placeholders})
+                          AND category_type = 2
+                          AND status = 1
+                          AND (
+                              deleted_at IS NULL
+                              OR TRIM(deleted_at) = ''
+                          )
+                        GROUP BY user_id
+                        """,
+                        user_ids,
+                    )
+                    return list(cursor.fetchall())
+            finally:
+                timings["service_counts"] = round(
+                    (time.perf_counter() - started) * 1000
                 )
-                return list(cursor.fetchall())
 
         def fetch_users(active_connection) -> list[dict]:
             if not user_ids or self._users_table_available is False:
@@ -559,16 +594,22 @@ class GainrDatabaseRepository:
                 quote_mysql_identifier(field)
                 for field in GAINR_USER_FIELDS
             )
-            with active_connection.cursor() as cursor:
-                cursor.execute(
-                    f"""
-                    SELECT {selected_fields}
-                    FROM {self.users_table}
-                    WHERE id IN ({user_placeholders})
-                    """,
-                    user_ids,
+            started = time.perf_counter()
+            try:
+                with active_connection.cursor() as cursor:
+                    cursor.execute(
+                        f"""
+                        SELECT {selected_fields}
+                        FROM {self.users_table}
+                        WHERE id IN ({user_placeholders})
+                        """,
+                        user_ids,
+                    )
+                    return list(cursor.fetchall())
+            finally:
+                timings["users"] = round(
+                    (time.perf_counter() - started) * 1000
                 )
-                return list(cursor.fetchall())
 
         def run_with_connection(fetcher) -> list[dict]:
             with self.connection() as active_connection:
@@ -656,6 +697,7 @@ class GainrDatabaseRepository:
                 0,
             )
             row["__user"] = users_by_id.get(str(row.get("user_id")))
+        return timings
 
     def _handle_user_hydration_error(self, exc: Exception) -> None:
         if exc.args and exc.args[0] == 1146:
