@@ -392,7 +392,7 @@ class GainrDatabaseRepository:
         page: int,
         page_size: int,
     ) -> tuple[list[dict], int]:
-        """Filter, count, and hydrate one semantic page in one main query."""
+        """Filter ranked IDs, then hydrate only the requested semantic page."""
         ranked_ids = _unique(product_ids)
         if not ranked_ids:
             return [], 0
@@ -402,7 +402,6 @@ class GainrDatabaseRepository:
             product_ids=ranked_ids,
             allowed_ad_types=allowed_ad_types,
         )
-        rank_placeholders = ", ".join("%s" for _ in ranked_ids)
         offset = (page - 1) * page_size
         hydration_started = time.perf_counter()
         checkout_started = hydration_started
@@ -410,61 +409,61 @@ class GainrDatabaseRepository:
             checkout_ms = round(
                 (time.perf_counter() - checkout_started) * 1000
             )
-            main_started = time.perf_counter()
+            eligibility_started = time.perf_counter()
             with connection.cursor() as cursor:
+                search_id = quote_mysql_identifier(
+                    self.config.search_id_column
+                )
                 cursor.execute(
                     f"""
-                    SELECT a.*, sr.city_name AS __city_name,
-                           sr.locality_name AS __locality_name,
-                           ranked.__eligible_total
-                    FROM (
-                        SELECT sr.id AS __search_id,
-                               FIELD(
-                                   sr.id,
-                                   {rank_placeholders}
-                               ) AS __rank,
-                               COUNT(*) OVER () AS __eligible_total
-                        FROM {self.search_table} AS sr
-                        JOIN {self.result_table} AS a ON a.id = sr.id
-                        WHERE {where_clause}
-                        ORDER BY __rank
-                        LIMIT %s OFFSET %s
-                    ) AS ranked
-                    JOIN {self.search_table} AS sr
-                      ON sr.id = ranked.__search_id
-                    JOIN {self.result_table} AS a
-                      ON a.id = ranked.__search_id
-                    ORDER BY ranked.__rank
+                    SELECT sr.{search_id} AS __search_id
+                    FROM {self.search_table} AS sr
+                    JOIN {self.result_table} AS a ON a.id = sr.id
+                    WHERE {where_clause}
                     """,
-                    (
-                        *ranked_ids,
-                        *where_params,
-                        page_size,
-                        offset,
-                    ),
+                    where_params,
                 )
-                rows = list(cursor.fetchall())
-            total = (
-                int(rows[0].get("__eligible_total") or 0)
-                if rows
-                else 0
+                eligible = {
+                    str(row["__search_id"])
+                    for row in cursor.fetchall()
+                }
+            eligible_ids = [
+                product_id
+                for product_id in ranked_ids
+                if str(product_id) in eligible
+            ]
+            eligibility_ms = round(
+                (time.perf_counter() - eligibility_started) * 1000
             )
-            if not rows and page > 1:
+            total = len(eligible_ids)
+            page_ids = eligible_ids[offset : offset + page_size]
+
+            cards_started = time.perf_counter()
+            rows = []
+            if page_ids:
+                page_placeholders = ", ".join("%s" for _ in page_ids)
                 with connection.cursor() as cursor:
                     cursor.execute(
                         f"""
-                        SELECT COUNT(DISTINCT sr.id) AS total
+                        SELECT a.*, sr.city_name AS __city_name,
+                               sr.locality_name AS __locality_name
                         FROM {self.search_table} AS sr
                         JOIN {self.result_table} AS a ON a.id = sr.id
-                        WHERE {where_clause}
+                        WHERE sr.id IN ({page_placeholders})
                         """,
-                        where_params,
+                        page_ids,
                     )
-                    total = int(cursor.fetchone()["total"])
-
-            for row in rows:
-                row.pop("__eligible_total", None)
-            main_ms = round((time.perf_counter() - main_started) * 1000)
+                    hydrated = list(cursor.fetchall())
+                rows_by_id = {
+                    str(row[self.config.result_id_column]): row
+                    for row in hydrated
+                }
+                rows = [
+                    rows_by_id[str(product_id)]
+                    for product_id in page_ids
+                    if str(product_id) in rows_by_id
+                ]
+            cards_ms = round((time.perf_counter() - cards_started) * 1000)
             # These relation reads are small primary/index lookups. Keeping
             # them on the already-proven connection is both faster and more
             # predictable than fanning out over idle remote MySQL sockets.
@@ -473,11 +472,13 @@ class GainrDatabaseRepository:
                 connection=connection,
             )
         logger.info(
-            "Gainr ranked hydration timing rows=%s checkout_ms=%s main_ms=%s "
+            "Gainr ranked hydration timing rows=%s checkout_ms=%s "
+            "eligibility_ms=%s cards_ms=%s "
             "attributes_ms=%s service_counts_ms=%s users_ms=%s total_ms=%s",
             len(rows),
             checkout_ms,
-            main_ms,
+            eligibility_ms,
+            cards_ms,
             relation_timings.get("attributes", 0),
             relation_timings.get("service_counts", 0),
             relation_timings.get("users", 0),
