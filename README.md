@@ -157,6 +157,15 @@ table, BM25 path, and pgvector table. Startup validation rejects shared tenant
 resources. Tenant-specific ranking or interpretation belongs behind the
 `company.search_policy` hook; `default` performs no domain-specific rewriting.
 
+The upstream search-ready contract keeps vector text and lexical text separate.
+Listing descriptions are part of both `embedding_content` and `bm25_content`.
+If only BM25 text or filter metadata changes while `embedding_content_hash`
+stays current, incremental ingestion reuses the existing vector and updates the
+tenant's BM25 row and vector metadata. A BM25 source-column configuration change
+must first be applied with one full upstream ETL rebuild; the normal incremental
+ETL wrapper cannot regenerate unchanged catalogue rows for a changed content
+contract.
+
 Important reranker controls:
 
 | Variable | Purpose |

@@ -65,7 +65,17 @@ Ranking changes should be approved from a reviewed evaluation set. Generated cas
 
 ## Index lifecycle
 
-Use incremental ingestion for routine updates. It writes changed BM25 rows and vectors while skipping content whose hash and embedding model are current.
+Use incremental ingestion for routine updates. It writes changed BM25 rows and
+vectors while skipping completely unchanged content. Embedding text/model
+identity and retrieval metadata are compared separately: a BM25/filter-only
+change updates BM25 and stored vector metadata while reusing the existing
+embedding.
+
+An upstream BM25 source-column change is different from a routine row update.
+Run one full ETL content rebuild without `--incremental` so unchanged listings
+receive the new lexical contract, publish the complete artifact atomically,
+then run backend incremental ingestion. Re-embedding is required only if the
+embedding text/hash, model, or vector dimensions changed.
 
 The enabled systemd timer starts this guarded job around 03:00 IST. A source
 scan may read all eligible rows, but it embeds only changed/new content,

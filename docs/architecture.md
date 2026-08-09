@@ -138,6 +138,15 @@ rewrite semantic/BM25 queries, supply soft category hints, adjust fused
 candidates, and add bounded reranker context. The policy cache key is part of
 the planner fingerprint.
 
+A tenant policy may also return a high-confidence `category_intent` for phrases
+whose marketplace meaning is unambiguous. Gainr uses this boundary for service
+requests such as body massage, leaking-pipe repair, and selected technician
+phrases. The resolved subcategory becomes a hard tenant-catalogue filter before
+vector or BM25 retrieval, while explicit equipment phrases such as `massage
+chair` continue through their product category. Simple price/duration requests
+can therefore remain deterministic; descriptive attributes continue through
+semantic retrieval behind the same hard category boundary.
+
 ## Ranking and failure behavior
 
 Semantic ranking is the primary result order for the semantic path. BM25
@@ -170,7 +179,20 @@ metadata and verified after retrieval.
 
 ## Ingestion
 
-The ingestion job reads the configured search-ready table in bounded batches. It upserts BM25 data, skips vectors whose content hash and embedding model are unchanged, embeds only changed rows, and writes to the tenant pgvector table.
+The ingestion job reads the configured search-ready table in bounded batches.
+It compares embedding identity separately from retrieval metadata. New rows or
+changed `embedding_content_hash` values are embedded and written to the tenant
+pgvector table. Rows whose embedding text/model are current but whose
+`retrieval_metadata_hash` changed reuse their stored vector while updating
+vector metadata and BM25 content. Completely unchanged rows are skipped.
+
+The upstream ETL includes normalized listing descriptions in both
+`embedding_content` and `bm25_content`. This protects semantic recall and lets
+lexical search find rare details that exist only in a description. Changing a
+BM25 source-column configuration is a content-contract migration: run one full
+upstream ETL rebuild without `--incremental`, publish it atomically, and then
+run normal backend incremental ingestion. When the embedding hash is unchanged,
+that backend pass is metadata-only and does not call the embedding model.
 
 Indexed document IDs use the tenant's stable `database.index_namespace`. This
 allows a validated index to move from a local or staging database to production
@@ -187,6 +209,14 @@ paths and the persistent BM25 index. An unchanged scan does not advance the
 BM25 revision.
 
 Deletion reconciliation is an explicit full-scan operation. A limited scan cannot reconcile deletions because unseen source rows may still be valid. A full replacement clears only the selected tenant's vector source and BM25 index.
+
+Moving to another host does not require re-embedding when validated artifacts
+are transferred. Restore the tenant pgvector table and its company-specific
+BM25 file under `storage/companies/<tenant>/`, preserve the tenant's stable
+`database.index_namespace`, then run a full source scan with deletion
+reconciliation. If indexes are not transferred, configure the same tenant
+profile and run authoritative ingestion; the service rebuilds only that
+tenant's isolated pgvector table and BM25 file.
 
 ## Storage model
 

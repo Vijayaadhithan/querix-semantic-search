@@ -130,7 +130,8 @@ PYTHONPATH=src .venv/bin/python -m cli.ingest \
 
 ## Build or resume indexes
 
-Incremental ingestion safely skips unchanged vectors:
+Incremental ingestion safely skips completely unchanged rows and reuses stored
+vectors when only BM25/filter metadata changed:
 
 ```bash
 PYTHONPATH=src .venv/bin/python -m cli.ingest \
@@ -150,6 +151,12 @@ PYTHONPATH=src .venv/bin/python -m cli.ingest \
 Do not run either ingestion command merely because API code changed. A normal
 code change needs only an API rebuild/restart; existing pgvector and BM25 data
 remain valid.
+
+If the upstream ETL changed its BM25 source-column or content-building
+contract, first run one full ETL all-row rebuild without `--incremental` and
+publish it. Then run backend incremental ingestion. If
+`embedding_content_hash` is unchanged, the backend reports metadata-updated
+rows and performs no re-embedding.
 
 ## Verify
 

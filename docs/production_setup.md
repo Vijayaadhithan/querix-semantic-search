@@ -366,9 +366,36 @@ docker compose run --rm api python -m cli.ingest \
   --list
 ```
 
-Source, pgvector, and BM25 counts should be consistent with the expected catalogue. Run incremental ingestion only when source data or the embedding contract changed.
+Source, pgvector, and BM25 counts should be consistent with the expected
+catalogue. Run incremental ingestion when source data, BM25 content/filter
+metadata, or the embedding contract changed. BM25/filter-only changes reuse
+vectors when the embedding hash and model remain current.
 
-For a new host, restore a validated pgvector custom-format dump and the `storage/` archive before starting customer traffic. Verify artifact checksums before restoring. Use incremental ingestion only when a validated transfer is unavailable or the source has legitimately changed.
+For a new host, restore a validated pgvector custom-format dump and the
+`storage/` archive before starting customer traffic. Verify artifact checksums
+before restoring. Preserve each tenant's `database.index_namespace`, pgvector
+table, and BM25 path. Then run a complete source scan with deletion
+reconciliation and compare source/vector/BM25 counts.
+
+When the ETL and search API live on separate new servers, use this order:
+
+1. clone and configure the ETL repository with a company-owned profile,
+   credentials file, isolated output root, and destination table;
+2. run ETL preflight, a full `--run-all --no-csv` baseline, validation, and an
+   atomic `--publish`;
+3. clone and configure the backend with the matching company search-ready
+   table, stable index namespace, unique pgvector table, and unique BM25 path;
+4. restore validated indexes or run backend ingestion with deletion
+   reconciliation;
+5. start the API, run strict checks, compare counts, warm HNSW/BM25, and perform
+   authenticated deterministic and semantic smoke searches;
+6. enable the ETL schedule before the later backend-ingestion schedule so the
+   backend always reads a completed ETL publish.
+
+Changing hostnames alone is supported; update the environment-owned database
+host/TLS settings and container-visible paths. Do not copy a populated `.env`
+into Git, share tenant API keys, reuse another tenant's index resources, or
+change the stable namespace accidentally.
 
 ## 10. Start the API
 

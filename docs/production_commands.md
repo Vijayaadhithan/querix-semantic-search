@@ -381,8 +381,27 @@ Do not update indexes for API, pagination, caching, fallback, reranker,
 monitoring, documentation, or Docker-only changes. Existing embeddings remain
 valid for those releases.
 
-Run incremental ingestion only when source rows, indexed filter metadata, or
-embedding text changed:
+Run incremental ingestion only when source rows, BM25 text, indexed filter
+metadata, or embedding text changed.
+
+If the upstream ETL configuration changed which columns build
+`bm25_content`, first regenerate every ETL row; an incremental ETL run processes
+only source-record changes and cannot rewrite unchanged rows for a new content
+contract:
+
+```bash
+cd <etl-repository-path>
+.venv/bin/rag-ht-pipeline \
+  --company "$COMPANY_ID" \
+  --run-all \
+  --no-csv \
+  --publish
+```
+
+After the atomic ETL publish, run the backend command below. When
+`embedding_content_hash` is unchanged and only `retrieval_metadata_hash`
+changed, output should report rows as `unchanged for embeddings;
+metadata-updated`. This is the expected zero-model-cost path.
 
 Verify vector and BM25 counts:
 
@@ -401,7 +420,9 @@ docker compose run --rm api python -m cli.ingest \
   --embed-batch-size 32
 ```
 
-Incremental ingestion skips rows whose content hash and embedding model are already current. Do not use `--mysql-replace-source` for a routine deployment.
+Incremental ingestion skips completely unchanged rows, reuses vectors for
+metadata/BM25-only changes, and embeds only new or embedding-changed rows. Do
+not use `--mysql-replace-source` for a routine deployment.
 
 ## 11. Start the production API in the background
 
