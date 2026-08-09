@@ -28,6 +28,7 @@ CANDIDATES = [
 def test_default_policy_does_not_apply_gainr_behavior():
     policy = DefaultSearchPolicy()
 
+    assert policy.category_intent("body massage", {}) is None
     assert policy.adjust_candidates(QUERY_PLAN, CANDIDATES) is CANDIDATES
     assert policy.rerank_context(QUERY_PLAN) is None
     assert (

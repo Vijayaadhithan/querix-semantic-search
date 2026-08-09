@@ -1,4 +1,13 @@
+from dataclasses import dataclass
 from typing import Protocol
+
+
+@dataclass(frozen=True)
+class CategoryIntent:
+    """A tenant-confirmed query phrase that safely selects one catalog type."""
+
+    subcategory: str
+    consumed_tokens: frozenset[str]
 
 
 class SearchPolicy(Protocol):
@@ -13,6 +22,13 @@ class SearchPolicy(Protocol):
         ...
 
     def infer_subcategory(self, query: str, values: dict) -> str | None:
+        ...
+
+    def category_intent(
+        self,
+        query: str,
+        values: dict,
+    ) -> CategoryIntent | None:
         ...
 
     def infer_main_category(self, query: str, values: dict) -> str | None:
@@ -41,6 +57,13 @@ class DefaultSearchPolicy:
         return keyword_query
 
     def infer_subcategory(self, query: str, values: dict) -> str | None:
+        return None
+
+    def category_intent(
+        self,
+        query: str,
+        values: dict,
+    ) -> CategoryIntent | None:
         return None
 
     def infer_main_category(self, query: str, values: dict) -> str | None:

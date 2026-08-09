@@ -7,6 +7,7 @@ from core.settings import QUERY_FUZZY_MATCHING
 from search.bm25 import PersistentBM25Index
 from search.planner_rules import (
     CATEGORY_ATTRIBUTE_PREFIXES,
+    CATEGORY_LEADING_MODIFIER_TOKENS,
     DURATION_PATTERNS,
     FUZZY_MATCH_THRESHOLDS,
     GENERIC_CATEGORY_HINT_TOKENS,
@@ -355,19 +356,15 @@ def category_catalog_matches(query: str, values: dict) -> list[dict]:
                 continue
             end = start + width
             span_at_head = start == 0 or all(
-                token
+                token in CATEGORY_LEADING_MODIFIER_TOKENS
+                or token
                 in {
                     "a",
                     "an",
-                    "affordable",
-                    "budget",
-                    "cheap",
                     "find",
                     "hire",
                     "looking",
-                    "low",
                     "need",
-                    "rent",
                     "searching",
                     "show",
                     "the",
@@ -902,9 +899,23 @@ def extract_sort_order(query: str) -> str | None:
         return "price_asc"
     if re.search(rf"\b{high_to_low}\b", normalized):
         return "price_desc"
+    if re.search(
+        r"\b(?:l2h|low\s*2\s*high|lo\s+to\s+hi)\b",
+        normalized,
+    ):
+        return "price_asc"
+    if re.search(
+        r"\b(?:h2l|high\s*2\s*low|hi\s+to\s+lo)\b",
+        normalized,
+    ):
+        return "price_desc"
     ascending_patterns = (
-        r"\b(?:cheapest|lowest(?:[\s-]+priced)?|least[\s-]+expensive)\b",
-        r"\b(?:cheap|affordable|budget[\s-]+friendly)\b",
+        r"\b(?:cheapest|low(?:er|est)(?:[\s-]+priced)?|"
+        r"least[\s-]+expensive)\b",
+        r"\b(?:cheap|affordable|economical|inexpensive|"
+        r"bargain(?:[\s-]+priced)?|budget[\s-]+friendly|"
+        r"pocket[\s-]+friendly|reasonabl(?:e|y)[\s-]+priced|"
+        r"low[\s-]+cost)\b",
         rf"\b(?:low|lowest|minimum|min)\s+{price_term}\b",
         r"\blow(?:est)?\s+(?:cost|costs)\b",
         rf"\b{price_term}\s+(?:from\s+)?low(?:est)?\s+to\s+high(?:est)?\b",
@@ -915,7 +926,8 @@ def extract_sort_order(query: str) -> str | None:
         rf"\b{price_term}\s+(?:asc|ascending)\b",
     )
     descending_patterns = (
-        r"\b(?:most[\s-]+expensive|highest(?:[\s-]+priced)?)\b",
+        r"\b(?:most[\s-]+expensive|high(?:er|est)(?:[\s-]+priced)?|"
+        r"costliest|dearest|priciest|top[\s-]+priced)\b",
         rf"\b(?:high|highest|maximum|max)\s+{price_term}\b",
         rf"\b{price_term}\s+(?:from\s+)?high(?:est)?\s+to\s+low(?:est)?\b",
         rf"\bhigh(?:est)?\s+to\s+low(?:est)?\s+{price_term}\b",

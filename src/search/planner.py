@@ -208,6 +208,29 @@ def enrich_query_plan(
             else:
                 filters[key] = None
 
+    category_intent = search_policy.category_intent(
+        query,
+        value_index["subcategory"],
+    )
+    explicit_subcategory = analysis.exact_values.get("subcategory")
+    if (
+        category_intent is not None
+        and not (
+            explicit_subcategory is not None
+            and analysis.category_is_explicit.get("subcategory", False)
+            and normalize_filter_value(explicit_subcategory)
+            != normalize_filter_value(category_intent.subcategory)
+        )
+    ):
+        # High-confidence tenant phrases such as "body massage" or
+        # "repair leaking pipes" select a service provider, not similarly
+        # named equipment. Treat the tenant decision as a hard catalog
+        # boundary so vector retrieval and reranking cannot admit unrelated
+        # categories.
+        filters["subcategory"] = category_intent.subcategory
+        inferred_categories["subcategory"] = None
+        relaxed_categories.discard("subcategory")
+
     if not any(filters.get(key) for key in ("state", "city", "locality")):
         fuzzy_location = analysis.fuzzy_location(value_index)
         if fuzzy_location is not None:
@@ -420,6 +443,17 @@ def deterministic_filter_query_plan(
         allowed_tokens.update(FAST_PATH_DURATION_TOKENS)
     if plan.get("sort_order"):
         allowed_tokens.update(FAST_PATH_SORT_TOKENS)
+    category_intent = search_policy.category_intent(
+        corrected_query,
+        value_index["subcategory"],
+    )
+    if (
+        category_intent is not None
+        and filters.get("subcategory") is not None
+        and normalize_filter_value(filters["subcategory"])
+        == normalize_filter_value(category_intent.subcategory)
+    ):
+        allowed_tokens.update(category_intent.consumed_tokens)
 
     unexplained_tokens = []
     for token in re.findall(r"[^\W_]+", residual):
@@ -489,9 +523,16 @@ def direct_semantic_query_plan(
         return None, "price_or_duration_language"
     if extract_sort_order(query) is not None:
         return None, "sort_language"
-    if not any(
-        analysis.exact_values.get(key) is not None
-        for key in ("main_category", "subcategory")
+    category_intent = search_policy.category_intent(
+        analysis.query,
+        value_index["subcategory"],
+    )
+    if not (
+        any(
+            analysis.exact_values.get(key) is not None
+            for key in ("main_category", "subcategory")
+        )
+        or category_intent is not None
     ):
         return None, "no_explicit_catalog_category"
     if token_set & DIRECT_SEMANTIC_BLOCK_TOKENS:

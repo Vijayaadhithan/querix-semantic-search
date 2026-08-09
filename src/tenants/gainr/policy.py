@@ -1,6 +1,7 @@
 import re
 
 from search.planner_catalog import normalize_filter_value
+from search.policy import CategoryIntent
 
 _VEHICLE_INTENT_TERMS = {
     "automobile",
@@ -96,6 +97,120 @@ _FUNCTIONAL_VEHICLE_KEYWORDS = (
     "distance",
     "travel",
 )
+_MASSAGE_EQUIPMENT_TERMS = {
+    "chair",
+    "device",
+    "equipment",
+    "gun",
+    "machine",
+    "massager",
+}
+_SERVICE_WRAPPER_TERMS = {"anyone", "can", "somebody", "someone", "who"}
+_CATEGORY_INTENT_RULES = (
+    (
+        ("massage therapist", "freelancer massage therapist"),
+        (
+            re.compile(
+                r"\b(?:body\s+massage|massage\s+(?:service|services|"
+                r"therapist|therapy)|masseu(?:r|se)|massage)\b"
+            ),
+        ),
+    ),
+    (
+        ("plumber",),
+        (
+            re.compile(r"\bplumb(?:er|ing)\b"),
+            re.compile(
+                r"\b(?:fix|repair)(?:ing)?\s+(?:a\s+|the\s+)?"
+                r"(?:leak(?:ing)?\s+)?(?:water\s+)?pipes?\b"
+            ),
+            re.compile(
+                r"\b(?:leak(?:ing)?|burst|broken)\s+(?:water\s+)?pipes?\b"
+            ),
+        ),
+    ),
+    (
+        ("electrician", "electrician work and service man"),
+        (
+            re.compile(r"\belectrician\b"),
+            re.compile(
+                r"\b(?:fix|repair)(?:ing)?\s+(?:a\s+|the\s+)?"
+                r"(?:electrical\s+)?wir(?:e|ing)\b"
+            ),
+            re.compile(
+                r"\b(?:electrical\s+)?wir(?:e|ing)\s+"
+                r"(?:fault|issue|repair|service|work)\b"
+            ),
+        ),
+    ),
+    (
+        ("ac mechanic",),
+        (
+            re.compile(
+                r"\b(?:ac|air[\s-]+condition(?:er|ing))\s+"
+                r"(?:mechanic|repair|service|technician)\b"
+            ),
+        ),
+    ),
+    (
+        ("fridge mechanic",),
+        (
+            re.compile(
+                r"\b(?:fridge|refrigerator)\s+"
+                r"(?:mechanic|repair|service|technician)\b"
+            ),
+        ),
+    ),
+    (
+        ("washing machine mechanic",),
+        (
+            re.compile(
+                r"\bwashing\s+machine\s+"
+                r"(?:mechanic|repair|service|technician)\b"
+            ),
+        ),
+    ),
+    (
+        ("tv mechanic",),
+        (
+            re.compile(
+                r"\b(?:tv|television)\s+"
+                r"(?:mechanic|repair|service|technician)\b"
+            ),
+        ),
+    ),
+    (
+        ("mobile repair technician",),
+        (
+            re.compile(
+                r"\b(?:mobile|phone|smartphone)\s+"
+                r"(?:repair|service|technician)\b"
+            ),
+        ),
+    ),
+    (
+        ("home tutor",),
+        (
+            re.compile(r"\bhome\s+tutor\b"),
+            re.compile(r"\bteacher\s+for\s+home\s+lessons?\b"),
+            re.compile(r"\btutor\s+(?:at|for)\s+home\b"),
+        ),
+    ),
+    (
+        ("maid",),
+        (
+            re.compile(r"\b(?:house[\s-]+maid|domestic\s+(?:help|worker))\b"),
+        ),
+    ),
+    (
+        ("house cleaning labour", "cleaner"),
+        (
+            re.compile(
+                r"\b(?:house|home)\s+(?:cleaner|cleaning\s+(?:help|service))\b"
+            ),
+        ),
+    ),
+)
 
 
 def contains_phrase(text: str, phrases: set[str]) -> bool:
@@ -156,7 +271,7 @@ def _candidate_text(candidate: dict) -> str:
 class GainrSearchPolicy:
     """Gainr marketplace interpretation without coupling it to the engine."""
 
-    cache_key = "gainr-vehicle-v1"
+    cache_key = "gainr-marketplace-v2"
 
     @staticmethod
     def _is_vehicle_travel_request(query: str) -> bool:
@@ -239,6 +354,39 @@ class GainrSearchPolicy:
             actual = values.get(preferred)
             if actual is not None:
                 return actual
+        return None
+
+    def category_intent(
+        self,
+        query: str,
+        values: dict,
+    ) -> CategoryIntent | None:
+        normalized = normalize_filter_value(query)
+        tokens = _tokens(normalized)
+        for targets, patterns in _CATEGORY_INTENT_RULES:
+            if targets[0] == "massage therapist" and (
+                tokens & _MASSAGE_EQUIPMENT_TERMS
+            ):
+                continue
+            match = None
+            for pattern in patterns:
+                match = pattern.search(normalized)
+                if match is not None:
+                    break
+            if match is None:
+                continue
+            actual = next(
+                (values.get(target) for target in targets if values.get(target)),
+                None,
+            )
+            if actual is None:
+                continue
+            return CategoryIntent(
+                subcategory=actual,
+                consumed_tokens=frozenset(
+                    _tokens(match.group(0)) | (tokens & _SERVICE_WRAPPER_TERMS)
+                ),
+            )
         return None
 
     def infer_main_category(self, query: str, values: dict) -> str | None:

@@ -841,6 +841,7 @@ def test_price_sort_fast_path_is_category_agnostic(tmp_path):
     )
     value_index = query_filter_value_index(index)
     cases = (
+        ("cheapest daily bike", "Bike", "Per Day"),
         ("cheapest daily bike in Chennai", "Bike", "Per Day"),
         ("lowest price camera per day in Chennai", "Camera", "Per Day"),
         ("most affordable room per month in Chennai", "Room", "Per Month"),
@@ -853,6 +854,18 @@ def test_price_sort_fast_path_is_category_agnostic(tmp_path):
         assert plan["filters"]["subcategory"] == subcategory
         assert plan["filters"]["rental_duration"] == duration
 
+    for query, subcategory, sort_order in (
+        ("pocket-friendly camera", "Camera", "price_asc"),
+        ("reasonably priced room", "Room", "price_asc"),
+        ("price l2h bike", "Bike", "price_asc"),
+        ("priciest bike", "Bike", "price_desc"),
+        ("price h2l camera", "Camera", "price_desc"),
+    ):
+        plan = deterministic_filter_query_plan(query, value_index)
+        assert plan["execution_path"] == "deterministic_filter"
+        assert plan["filters"]["subcategory"] == subcategory
+        assert plan["sort_order"] == sort_order
+
     index.close()
 
 
@@ -863,6 +876,15 @@ def test_price_sort_wording_is_extracted_deterministically():
         "low rental rate camera",
         "affordable car rental",
         "budget-friendly bike",
+        "economical car",
+        "inexpensive bike",
+        "pocket-friendly camera",
+        "low-cost room",
+        "bargain-priced car",
+        "reasonably priced room",
+        "price l2h",
+        "price low2high",
+        "price lo to hi",
         "price low to high",
         "low to high rental fees",
         "sort by price ascending",
@@ -871,6 +893,14 @@ def test_price_sort_wording_is_extracted_deterministically():
     descending = (
         "most expensive car",
         "highest price bike",
+        "costliest car",
+        "dearest car",
+        "higher priced bike",
+        "priciest bike",
+        "top-priced camera",
+        "price h2l",
+        "price high2low",
+        "price hi to lo",
         "rental fee high to low",
         "high to low price",
         "order by rate desc",
@@ -880,6 +910,113 @@ def test_price_sort_wording_is_extracted_deterministically():
     assert all(extract_sort_order(query) == "price_asc" for query in ascending)
     assert all(extract_sort_order(query) == "price_desc" for query in descending)
     assert extract_sort_order("car under 1000") is None
+    assert extract_sort_order("medium price car") is None
+
+
+def test_gainr_service_intents_are_hard_category_boundaries(tmp_path):
+    index = PersistentBM25Index(tmp_path / "gainr-service-intents.sqlite3")
+    index.upsert(
+        [
+            product_row(
+                "massage-therapist",
+                main_category_name="Personal & Home Services",
+                subcategory_name="Massage Therapist",
+            ),
+            product_row(
+                "massage-chair",
+                main_category_name="Health & Wellness",
+                subcategory_name="Massage Chair",
+            ),
+            product_row(
+                "massager",
+                main_category_name="Health & Wellness",
+                subcategory_name="Massager",
+            ),
+            product_row(
+                "plumber",
+                main_category_name="Personal & Home Services",
+                subcategory_name="Plumber",
+            ),
+            product_row(
+                "electrician",
+                main_category_name="Personal & Home Services",
+                subcategory_name="Electrician",
+            ),
+        ]
+    )
+    value_index = query_filter_value_index(index)
+    policy = GainrSearchPolicy()
+
+    massage = deterministic_filter_query_plan(
+        "low cost body massage near me",
+        value_index,
+        search_policy=policy,
+    )
+    pipes = deterministic_filter_query_plan(
+        "someone who can repair leaking pipes",
+        value_index,
+        search_policy=policy,
+    )
+    wiring = deterministic_filter_query_plan(
+        "repair electrical wiring",
+        value_index,
+        search_policy=policy,
+    )
+    equipment = deterministic_filter_query_plan(
+        "massage chair",
+        value_index,
+        search_policy=policy,
+    )
+
+    assert massage["execution_path"] == "deterministic_filter"
+    assert massage["sort_order"] == "price_asc"
+    assert massage["filters"]["subcategory"] == "Massage Therapist"
+    assert massage["filters"]["main_category"] == "Personal & Home Services"
+    assert massage["inferred_categories"]["subcategory"] is None
+    assert pipes["filters"]["subcategory"] == "Plumber"
+    assert wiring["filters"]["subcategory"] == "Electrician"
+    assert equipment["filters"]["subcategory"] == "Massage Chair"
+    index.close()
+
+
+def test_gainr_body_massage_attributes_stay_semantic_with_hard_category(tmp_path):
+    index = PersistentBM25Index(tmp_path / "gainr-massage-attributes.sqlite3")
+    index.upsert(
+        [
+            product_row(
+                "massage-therapist",
+                main_category_name="Personal & Home Services",
+                subcategory_name="Massage Therapist",
+            ),
+            product_row(
+                "massager",
+                main_category_name="Health & Wellness",
+                subcategory_name="Massager",
+            ),
+        ]
+    )
+    value_index = query_filter_value_index(index)
+    policy = GainrSearchPolicy()
+
+    assert (
+        deterministic_filter_query_plan(
+            "body massage with oil",
+            value_index,
+            search_policy=policy,
+        )
+        is None
+    )
+    plan, reason = direct_semantic_query_plan(
+        "body massage with oil",
+        value_index,
+        search_policy=policy,
+    )
+
+    assert reason == "objective_catalog_phrase"
+    assert plan["execution_path"] == "direct_semantic"
+    assert plan["filters"]["subcategory"] == "Massage Therapist"
+    assert plan["filters"]["main_category"] == "Personal & Home Services"
+    index.close()
 
 
 def test_browse_orders_the_complete_filtered_window_by_rental_fee(tmp_path):
