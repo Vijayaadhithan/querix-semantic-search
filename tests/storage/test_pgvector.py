@@ -723,6 +723,58 @@ def test_pgvector_shadow_optimization_failure_serves_legacy(monkeypatch):
     assert metrics["shadow_error"] == "RuntimeError"
 
 
+def test_pgvector_delete_chunks_large_id_lists(monkeypatch):
+    statements = []
+
+    class FakeCursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, query, params=None):
+            statements.append((" ".join(query.split()), params))
+
+    class FakeConnection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def cursor(self):
+            return FakeCursor()
+
+    monkeypatch.setattr(pgvector_store, "DELETE_BATCH_SIZE", 2)
+    monkeypatch.setattr(
+        pgvector_store,
+        "postgres_connection",
+        lambda *_args, **_kwargs: FakeConnection(),
+    )
+    collection = PgVectorCollection.__new__(PgVectorCollection)
+    collection.config = PostgresRuntimeConfig(
+        host="localhost",
+        port=5432,
+        database="vectors",
+        user="vectors",
+        password="secret",
+    )
+    collection.table = "gainr_vectors"
+
+    collection.delete(
+        ids=["1", "2", "3", "4", "5"],
+        where={"source_file": "mysql:catalog.search_ready"},
+    )
+
+    assert len(statements) == 3
+    assert [params for _query, params in statements] == [
+        ["1", "2", "source_file", "mysql:catalog.search_ready"],
+        ["3", "4", "source_file", "mysql:catalog.search_ready"],
+        ["5", "source_file", "mysql:catalog.search_ready"],
+    ]
+
+
 def test_pgvector_source_migration_keeps_existing_target_rows(monkeypatch):
     state = {
         "source_batches": [

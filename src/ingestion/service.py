@@ -1,4 +1,5 @@
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 from core.settings import (
@@ -75,16 +76,40 @@ def embed_for_upsert(
     embed_batch_size: int = EMBED_BATCH_SIZE,
     progress_prefix: str = "",
 ) -> list[list[float]]:
+    batches = [
+        documents[start : start + embed_batch_size]
+        for start in range(0, len(documents), embed_batch_size)
+    ]
+    if not batches:
+        return []
+
+    def embed_batch(batch: list[str]) -> list[list[float]]:
+        for attempt in range(1, 4):
+            try:
+                return embed_texts(batch)
+            except RuntimeError:
+                if attempt == 3:
+                    raise
+                time.sleep(attempt * 2)
+        raise AssertionError("unreachable")
+
     embeddings = []
-    for start in range(0, len(documents), embed_batch_size):
-        batch = documents[start : start + embed_batch_size]
-        if progress_prefix:
-            completed = min(start + len(batch), len(documents))
-            print(
-                f"{progress_prefix} embedding {completed}/{len(documents)} texts",
-                flush=True,
-            )
-        embeddings.extend(embed_texts(batch))
+    with ThreadPoolExecutor(max_workers=min(4, len(batches))) as executor:
+        for batch_number, batch_embeddings in enumerate(
+            executor.map(embed_batch, batches),
+            start=1,
+        ):
+            batch = batches[batch_number - 1]
+            embeddings.extend(batch_embeddings)
+            if progress_prefix:
+                completed = min(
+                    (batch_number - 1) * embed_batch_size + len(batch),
+                    len(documents),
+                )
+                print(
+                    f"{progress_prefix} embedding {completed}/{len(documents)} texts",
+                    flush=True,
+                )
     return embeddings
 
 

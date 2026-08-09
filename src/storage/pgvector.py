@@ -28,6 +28,7 @@ FILTER_INDEX_KEYS = (
     "subcategory_id",
     "locality_id",
 )
+DELETE_BATCH_SIZE = 10_000
 
 
 class PgVectorCollection:
@@ -913,22 +914,32 @@ class PgVectorCollection:
         ids: list[str] | None = None,
         where: dict[str, Any] | None = None,
     ) -> None:
-        conditions = []
-        params: list[Any] = []
-        if ids is not None:
-            if not ids:
-                return
-            placeholders = ", ".join(["%s"] * len(ids))
-            conditions.append(f"id IN ({placeholders})")
-            params.extend(str(value) for value in ids)
-        for key, value in (where or {}).items():
-            conditions.append("metadata ->> %s = %s")
-            params.extend((str(key), str(value)))
-        if not conditions:
+        if ids is None and not where:
             raise ValueError("Refusing to delete pgvector rows without a selector")
+        if ids is not None and not ids:
+            return
+        id_batches: list[list[str] | None]
+        if ids is None:
+            id_batches = [None]
+        else:
+            normalized_ids = [str(value) for value in ids]
+            id_batches = [
+                normalized_ids[start : start + DELETE_BATCH_SIZE]
+                for start in range(0, len(normalized_ids), DELETE_BATCH_SIZE)
+            ]
         with postgres_connection(self.config) as connection:
             with connection.cursor() as cursor:
-                cursor.execute(
-                    f"DELETE FROM {self._qualified()} WHERE {' AND '.join(conditions)}",
-                    params,
-                )
+                for id_batch in id_batches:
+                    conditions = []
+                    params: list[Any] = []
+                    if id_batch is not None:
+                        placeholders = ", ".join(["%s"] * len(id_batch))
+                        conditions.append(f"id IN ({placeholders})")
+                        params.extend(id_batch)
+                    for key, value in (where or {}).items():
+                        conditions.append("metadata ->> %s = %s")
+                        params.extend((str(key), str(value)))
+                    cursor.execute(
+                        f"DELETE FROM {self._qualified()} WHERE {' AND '.join(conditions)}",
+                        params,
+                    )
