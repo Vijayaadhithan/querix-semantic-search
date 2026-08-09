@@ -53,9 +53,7 @@ class PgVectorCollection:
         self.hnsw_ef_search = hnsw_ef_search
         normalized_query_mode = str(query_mode).strip().casefold()
         if normalized_query_mode not in {"legacy", "shadow", "optimized"}:
-            raise ValueError(
-                "pgvector query_mode must be legacy, shadow, or optimized"
-            )
+            raise ValueError("pgvector query_mode must be legacy, shadow, or optimized")
         self.query_mode = normalized_query_mode
         self._query_state = threading.local()
         if create:
@@ -78,9 +76,7 @@ class PgVectorCollection:
         """
         normalized_mode = str(mode).strip().casefold()
         if normalized_mode not in {"buffer", "read", "prefetch"}:
-            raise ValueError(
-                "pgvector prewarm mode must be buffer, read, or prefetch"
-            )
+            raise ValueError("pgvector prewarm mode must be buffer, read, or prefetch")
         index_name = f"{self.table}_embedding_hnsw"
         table_relation = f"{self.config.schema}.{self.table}"
         index_relation = f"{self.config.schema}.{index_name}"
@@ -212,7 +208,9 @@ class PgVectorCollection:
         return json.dumps([float(value) for value in vector], separators=(",", ":"))
 
     @classmethod
-    def _metadata_filter_sql(cls, where: dict[str, Any] | None) -> tuple[str, list[Any]]:
+    def _metadata_filter_sql(
+        cls, where: dict[str, Any] | None
+    ) -> tuple[str, list[Any]]:
         if not where:
             return "", []
         if "$and" in where:
@@ -257,7 +255,9 @@ class PgVectorCollection:
                         )
                     )
                 else:
-                    raise ValueError(f"Unsupported pgvector metadata operator {operator!r}")
+                    raise ValueError(
+                        f"Unsupported pgvector metadata operator {operator!r}"
+                    )
         return " AND ".join(clauses), params
 
     @classmethod
@@ -274,9 +274,7 @@ class PgVectorCollection:
     def count(self) -> int:
         with postgres_connection(self.config, dict_rows=True) as connection:
             with connection.cursor() as cursor:
-                cursor.execute(
-                    f"SELECT COUNT(*) AS row_count FROM {self._qualified()}"
-                )
+                cursor.execute(f"SELECT COUNT(*) AS row_count FROM {self._qualified()}")
                 return int(cursor.fetchone()["row_count"])
 
     def source_counts(self) -> tuple[int, dict[str, int]]:
@@ -292,10 +290,7 @@ class PgVectorCollection:
                     """
                 )
                 rows = cursor.fetchall()
-        counts = {
-            str(row["source"]): int(row["vector_count"])
-            for row in rows
-        }
+        counts = {str(row["source"]): int(row["vector_count"]) for row in rows}
         return sum(counts.values()), counts
 
     def migrate_source_namespace(
@@ -354,19 +349,15 @@ class PgVectorCollection:
                         new_id = target_id(str(primary_key))
                         metadata["source_file"] = target_source_name
                         metadata["source_database"] = target_database
-                        prepared.append(
-                            (str(row["id"]), new_id, metadata)
-                        )
+                        prepared.append((str(row["id"]), new_id, metadata))
 
                     target_ids = [new_id for _, new_id, _ in prepared]
                     cursor.execute(
-                        f"SELECT id FROM {self._qualified()} "
-                        "WHERE id = ANY(%s)",
+                        f"SELECT id FROM {self._qualified()} WHERE id = ANY(%s)",
                         (target_ids,),
                     )
                     existing_targets = {
-                        str(existing["id"])
-                        for existing in cursor.fetchall()
+                        str(existing["id"]) for existing in cursor.fetchall()
                     }
                     conflicting_old_ids = [
                         old_id
@@ -375,8 +366,7 @@ class PgVectorCollection:
                     ]
                     if conflicting_old_ids:
                         cursor.execute(
-                            f"DELETE FROM {self._qualified()} "
-                            "WHERE id = ANY(%s)",
+                            f"DELETE FROM {self._qualified()} WHERE id = ANY(%s)",
                             (conflicting_old_ids,),
                         )
 
@@ -409,12 +399,7 @@ class PgVectorCollection:
         embeddings: list[list[float]],
         metadatas: list[dict[str, Any]],
     ) -> None:
-        if not (
-            len(ids)
-            == len(documents)
-            == len(embeddings)
-            == len(metadatas)
-        ):
+        if not (len(ids) == len(documents) == len(embeddings) == len(metadatas)):
             raise ValueError("pgvector upsert arrays must have equal lengths")
         rows = []
         for doc_id, document, embedding, metadata in zip(
@@ -453,6 +438,31 @@ class PgVectorCollection:
                     rows,
                 )
 
+    def update_metadatas(
+        self,
+        *,
+        ids: list[str],
+        metadatas: list[dict[str, Any]],
+    ) -> None:
+        if len(ids) != len(metadatas):
+            raise ValueError("pgvector metadata update arrays must have equal lengths")
+        rows = [
+            (
+                json.dumps(metadata, ensure_ascii=False, default=str),
+                str(doc_id),
+            )
+            for doc_id, metadata in zip(ids, metadatas)
+        ]
+        if not rows:
+            return
+        with postgres_connection(self.config) as connection:
+            with connection.cursor() as cursor:
+                cursor.executemany(
+                    f"UPDATE {self._qualified()} "
+                    "SET metadata = %s::jsonb WHERE id = %s",
+                    rows,
+                )
+
     def get(
         self,
         ids: list[str] | None = None,
@@ -477,9 +487,7 @@ class PgVectorCollection:
         for key, value in (where or {}).items():
             conditions.append("metadata ->> %s = %s")
             params.extend((str(key), str(value)))
-        where_clause = (
-            f"WHERE {' AND '.join(conditions)}" if conditions else ""
-        )
+        where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
         selected = ["id"]
         if "documents" in include:
             selected.append("document")
@@ -522,8 +530,7 @@ class PgVectorCollection:
             return True
         if "$and" in where:
             return all(
-                cls._metadata_matches_where(metadata, child)
-                for child in where["$and"]
+                cls._metadata_matches_where(metadata, child) for child in where["$and"]
             )
         for key, expected in where.items():
             actual = metadata.get(key)
@@ -572,10 +579,13 @@ class PgVectorCollection:
                 return False
             if legacy.get("metadata") != optimized.get("metadata"):
                 return False
-            if abs(
-                float(legacy.get("distance", 0.0))
-                - float(optimized.get("distance", 0.0))
-            ) > 1e-9:
+            if (
+                abs(
+                    float(legacy.get("distance", 0.0))
+                    - float(optimized.get("distance", 0.0))
+                )
+                > 1e-9
+            ):
                 return False
         return True
 
@@ -741,45 +751,12 @@ class PgVectorCollection:
             indexed_filter
             and eligible_rows is not None
             and eligible_rows > exact_filter_max_rows
-            and post_filter_n_results is not None
-            and post_filter_n_results > 0
         ):
-            strategy = "hnsw_post_filter"
-            candidate_limit = max(n_results, post_filter_n_results)
-            cursor.execute(
-                f"""
-                WITH nearest AS MATERIALIZED (
-                    SELECT id,
-                           metadata,
-                           embedding <=> %s::vector AS distance
-                    FROM {self._qualified()}
-                    ORDER BY embedding <=> %s::vector
-                    LIMIT %s
-                ),
-                filtered AS MATERIALIZED (
-                    SELECT id, metadata, distance
-                    FROM nearest
-                    WHERE {filter_clause}
-                    ORDER BY distance
-                    LIMIT %s
-                )
-                SELECT filtered.id,
-                       vectors.document,
-                       filtered.metadata,
-                       filtered.distance
-                FROM filtered
-                JOIN {self._qualified()} AS vectors USING (id)
-                ORDER BY filtered.distance
-                """,
-                (
-                    vector_literal,
-                    vector_literal,
-                    candidate_limit,
-                    *filter_params,
-                    n_results,
-                ),
-            )
-            return cursor.fetchall(), strategy, eligible_rows
+            # pgvector 0.8 iterative scans continue traversing HNSW until the
+            # metadata predicate has produced enough rows. This avoids both
+            # the cold full-subset exact scan and the recall loss of filtering
+            # a fixed global-nearest window.
+            strategy = "hnsw_filtered"
 
         cursor.execute(
             f"""
@@ -870,9 +847,7 @@ class PgVectorCollection:
                             optimized_eligible_rows = None
                             shadow_equal = False
                             shadow_error = type(exc).__name__
-                        optimized_ms += (
-                            time.perf_counter() - mode_started
-                        ) * 1000
+                        optimized_ms += (time.perf_counter() - mode_started) * 1000
                         if query_mode == "optimized":
                             rows = optimized_rows
                             strategy = optimized_strategy
@@ -900,9 +875,7 @@ class PgVectorCollection:
                     all_ids.append([str(row["id"]) for row in rows])
                     all_documents.append([row["document"] for row in rows])
                     all_metadatas.append([row["metadata"] for row in rows])
-                    all_distances.append(
-                        [float(row["distance"]) for row in rows]
-                    )
+                    all_distances.append([float(row["distance"]) for row in rows])
         self._query_state.metrics = {
             "strategy": strategy,
             "eligible_rows": eligible_rows,
@@ -912,9 +885,7 @@ class PgVectorCollection:
                 and eligible_rows == exact_filter_max_rows + 1
             ),
             "query_mode": query_mode,
-            "database_ms": (
-                optimized_ms if query_mode == "optimized" else legacy_ms
-            ),
+            "database_ms": (optimized_ms if query_mode == "optimized" else legacy_ms),
             "legacy_ms": legacy_ms,
             "optimized_ms": optimized_ms,
             "shadow_ms": (
@@ -958,7 +929,6 @@ class PgVectorCollection:
         with postgres_connection(self.config) as connection:
             with connection.cursor() as cursor:
                 cursor.execute(
-                    f"DELETE FROM {self._qualified()} "
-                    f"WHERE {' AND '.join(conditions)}",
+                    f"DELETE FROM {self._qualified()} WHERE {' AND '.join(conditions)}",
                     params,
                 )

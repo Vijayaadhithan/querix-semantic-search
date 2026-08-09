@@ -4,6 +4,7 @@ import threading
 import time
 from collections import deque
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from api.contracts import (
@@ -27,6 +28,7 @@ from core.settings import (
     EMBED_MODEL,
     RERANK_MODEL,
 )
+from ingestion.state import read_ingestion_state
 from search.engine import ProductSearchEngine
 from storage.search_analytics import (
     SEARCH_ANALYTICS_TIMING_FIELDS,
@@ -67,6 +69,7 @@ class ProductSearchService:
         analytics_store: SearchAnalyticsStore | None = None,
         max_concurrent_searches: int = API_TENANT_MAX_CONCURRENT_SEARCHES,
         search_slot_timeout_seconds: float = API_SEARCH_SLOT_TIMEOUT_SECONDS,
+        ingestion_state_path: Path | str | None = None,
     ):
         if max_results <= 0:
             raise ValueError("Maximum results must be greater than zero.")
@@ -83,6 +86,9 @@ class ProductSearchService:
         self.usage_store = usage_store
         self.analytics_store = analytics_store
         self.search_slot_timeout_seconds = search_slot_timeout_seconds
+        self.ingestion_state_path = (
+            Path(ingestion_state_path) if ingestion_state_path is not None else None
+        )
         self._engine_lock = threading.Lock()
         self._search_slots = threading.BoundedSemaphore(max_concurrent_searches)
         self.reranker_load_ms = 0.0
@@ -138,6 +144,15 @@ class ProductSearchService:
 
     def readiness(self) -> dict[str, Any]:
         components: dict[str, dict[str, Any]] = {}
+        ingestion_state = read_ingestion_state(self.ingestion_state_path)
+        components["ingestion"] = {
+            "ok": ingestion_state is None,
+            "status": (
+                "ready"
+                if ingestion_state is None
+                else ingestion_state.get("status", "invalid")
+            ),
+        }
         try:
             indexed_products = self.engine.bm25_index.count()
             components["bm25"] = {
@@ -404,6 +419,9 @@ class ProductSearchService:
         return timeline
 
     def run_engine_search(self, query: str, **kwargs) -> dict[str, Any]:
+        ingestion_state = read_ingestion_state(self.ingestion_state_path)
+        if ingestion_state is not None:
+            raise SearchCapacityError("Search index is being refreshed; retry shortly.")
         started = time.perf_counter()
         timestamp = datetime.now(timezone.utc).isoformat()
         with self._monitor_lock:

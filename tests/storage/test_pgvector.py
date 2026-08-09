@@ -296,9 +296,9 @@ def test_pgvector_broad_filtered_subset_falls_back_to_hnsw(monkeypatch):
     assert results["ids"] == [["hnsw-result"]]
     assert collection.last_query_metrics()["strategy"] == "hnsw"
     assert collection.last_query_metrics()["eligible_rows"] == 101
-    assert sum(
-        sql.startswith("SELECT id, document, metadata") for sql in statements
-    ) == 1
+    assert (
+        sum(sql.startswith("SELECT id, document, metadata") for sql in statements) == 1
+    )
 
 
 def test_pgvector_broad_filter_can_use_bounded_unfiltered_hnsw(monkeypatch):
@@ -379,7 +379,8 @@ def test_pgvector_broad_filter_can_use_bounded_unfiltered_hnsw(monkeypatch):
     assert results["ids"] == [["hnsw-result"]]
     assert collection.last_query_metrics()["strategy"] == "hnsw_post_filter"
     query_sql, query_params = next(
-        entry for entry in statements
+        entry
+        for entry in statements
         if entry[0].startswith("SELECT id, document, metadata")
     )
     assert "metadata ->> 'state_name'" not in query_sql
@@ -476,7 +477,7 @@ def test_pgvector_optimized_exact_filter_avoids_id_rejoin(monkeypatch):
     assert "JOIN eligible" not in exact_sql
 
 
-def test_pgvector_optimized_post_filter_fetches_only_filtered_payload(
+def test_pgvector_optimized_broad_filter_uses_iterative_hnsw(
     monkeypatch,
 ):
     statements = []
@@ -495,7 +496,7 @@ def test_pgvector_optimized_post_filter_fetches_only_filtered_payload(
             statements.append((compact, params))
             if compact.startswith("SELECT COUNT(*) AS eligible_count"):
                 self.rows = [{"eligible_count": 101}]
-            elif compact.startswith("WITH nearest AS MATERIALIZED"):
+            elif compact.startswith("SELECT id, document, metadata"):
                 self.rows = [
                     {
                         "id": "filtered-result",
@@ -551,17 +552,19 @@ def test_pgvector_optimized_post_filter_fetches_only_filtered_payload(
 
     assert results["ids"] == [["filtered-result"]]
     metrics = collection.last_query_metrics()
-    assert metrics["strategy"] == "hnsw_post_filter"
+    assert metrics["strategy"] == "hnsw_filtered"
     assert metrics["eligible_rows_capped"] is True
     optimized_sql, optimized_params = next(
         entry
         for entry in statements
-        if entry[0].startswith("WITH nearest AS MATERIALIZED")
+        if entry[0].startswith("SELECT id, document, metadata")
     )
     assert "WHERE metadata ->> 'state_name' = %s" in optimized_sql
     assert "LIMIT %s" in optimized_sql
-    assert optimized_params[2] == 800
     assert optimized_params[-1] == 80
+    assert not any(
+        sql.startswith("WITH nearest AS MATERIALIZED") for sql, _params in statements
+    )
 
 
 def test_pgvector_shadow_serves_legacy_and_records_equivalence(monkeypatch):
@@ -821,9 +824,7 @@ def test_pgvector_source_migration_keeps_existing_target_rows(monkeypatch):
     assert state["updated"][0][0] == "new-2"
     assert state["updated"][0][2] == "old-2"
     updated_metadata = json.loads(state["updated"][0][1])
-    assert updated_metadata["source_file"] == (
-        "mysql:production.search_ready"
-    )
+    assert updated_metadata["source_file"] == ("mysql:production.search_ready")
     assert updated_metadata["source_database"] == "production"
     assert state["commits"] == 1
     assert state["rollbacks"] == 1

@@ -1,10 +1,10 @@
-
 import requests
 
 from providers.ollama import (
     OllamaProvider,
     normalize_keep_alive,
     ollama_timing_metrics,
+    resolve_embedding_model_revision,
 )
 
 
@@ -71,6 +71,29 @@ def test_keep_alive_normalizes_integer_environment_values():
     assert normalize_keep_alive("3600") == 3600
     assert normalize_keep_alive("24h") == "24h"
     assert normalize_keep_alive("-1m") == "-1m"
+
+
+def test_embedding_model_revision_resolves_immutable_ollama_digest(monkeypatch):
+    monkeypatch.setattr("providers.ollama.EMBED_MODEL", "embeddinggemma:latest")
+    monkeypatch.setattr(
+        "providers.ollama.EMBED_MODEL_REVISION",
+        "embeddinggemma:latest",
+    )
+    monkeypatch.setattr(
+        "providers.ollama.requests.get",
+        lambda *_args, **_kwargs: FakeResponse(
+            {
+                "models": [
+                    {
+                        "name": "embeddinggemma:latest",
+                        "digest": "sha256:immutable-model",
+                    }
+                ]
+            }
+        ),
+    )
+
+    assert resolve_embedding_model_revision() == "sha256:immutable-model"
 
 
 def test_embedding_error_includes_ollama_response(monkeypatch):

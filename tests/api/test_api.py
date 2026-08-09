@@ -2,6 +2,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 import api
@@ -212,6 +213,23 @@ def test_default_api_page_contains_twenty_products():
     assert SearchRequest(query="camera").page_size == 20
 
 
+def test_search_is_blocked_while_indexes_are_being_refreshed(tmp_path):
+    state_path = tmp_path / ".ingestion-state.json"
+    state_path.write_text('{"status":"running"}', encoding="utf-8")
+    service = ProductSearchService(
+        FakeEngine(),
+        ingestion_state_path=state_path,
+    )
+
+    with pytest.raises(SearchCapacityError, match="being refreshed"):
+        service.search(SearchRequest(query="camera", page_size=2))
+
+    assert service.readiness()["components"]["ingestion"] == {
+        "ok": False,
+        "status": "running",
+    }
+
+
 def test_ranked_results_fill_first_three_pages_before_related_tail():
     class TieredEngine(FakeEngine):
         def search(self, query, limit=None):
@@ -241,15 +259,10 @@ def test_ranked_results_fill_first_three_pages_before_related_tail():
 
     assert len(pages) == 4
     assert all(
-        item["result_tier"] == "ranked"
-        for page in pages[:3]
-        for item in page.items
+        item["result_tier"] == "ranked" for page in pages[:3] for item in page.items
     )
     assert [item["id"] for item in pages[3].items] == [61, 62, 63, 64, 65]
-    assert all(
-        item["result_tier"] == "related"
-        for item in pages[3].items
-    )
+    assert all(item["result_tier"] == "related" for item in pages[3].items)
 
 
 def test_expired_cursor_requires_a_new_query():
@@ -261,9 +274,7 @@ def test_expired_cursor_requires_a_new_query():
     now[0] = 106.0
 
     try:
-        service.search(
-            SearchRequest(cursor=first.pagination.next_cursor, page_size=2)
-        )
+        service.search(SearchRequest(cursor=first.pagination.next_cursor, page_size=2))
     except ExpiredCursorError as exc:
         assert "expired" in str(exc)
     else:
@@ -290,10 +301,7 @@ def test_http_contract_and_validation():
     assert ready.json()["cached"] is False
     assert cached_ready.status_code == 200
     assert cached_ready.json()["cached"] is True
-    assert (
-        cached_ready.json()["checked_at_utc"]
-        == ready.json()["checked_at_utc"]
-    )
+    assert cached_ready.json()["checked_at_utc"] == ready.json()["checked_at_utc"]
     assert set(ready.json()) == {
         "status",
         "tenant_mode",
@@ -441,14 +449,10 @@ def test_search_monitor_reports_safe_success_and_failure_summaries():
     assert status["completed"] == 1
     assert status["failed"] == 0
     assert status["recent"][0]["status"] == "success"
-    assert status["recent"][0]["query_chars"] == len(
-        "private customer query"
-    )
+    assert status["recent"][0]["query_chars"] == len("private customer query")
     assert "private customer query" not in str(status)
     assert status["recent"][0]["timings_ms"]["vector_search"] == 20
-    assert [
-        item["step"] for item in status["recent"][0]["timeline"]
-    ] == [
+    assert [item["step"] for item in status["recent"][0]["timeline"]] == [
         "plan",
         "retrieve",
         "rerank",
@@ -626,9 +630,7 @@ def test_company_endpoint_routes_and_normalizes_company_payload(tmp_path):
 
         def company_search(query, limit=None):
             result = original_search(query, limit)
-            result["products"] = [
-                {"id": 1, "title": f"{profile.company_id}-1"}
-            ]
+            result["products"] = [{"id": 1, "title": f"{profile.company_id}-1"}]
             return result
 
         engine.search = company_search
@@ -700,17 +702,13 @@ def test_different_company_engines_can_search_concurrently(tmp_path):
         def search(self, query, limit=None):
             barrier.wait(timeout=2)
             result = super().search(query, limit)
-            result["products"] = [
-                {"id": 1, "title": f"{self.company_id}-1"}
-            ]
+            result["products"] = [{"id": 1, "title": f"{self.company_id}-1"}]
             return result
 
     pool = TenantServicePool(
         registry,
         max_services=2,
-        engine_factory=lambda profile, *_args: ConcurrentEngine(
-            profile.company_id
-        ),
+        engine_factory=lambda profile, *_args: ConcurrentEngine(profile.company_id),
     )
     alpha_service = pool.get("alpha")
     beta_service = pool.get("beta")
@@ -738,15 +736,11 @@ def test_different_company_engines_can_search_concurrently(tmp_path):
 def test_six_company_endpoints_remain_isolated_across_pool_eviction(tmp_path):
     company_ids = tuple(f"tenant-{number}" for number in range(6))
     profiles = {
-        company_id: tenant_profile(tmp_path, company_id)
-        for company_id in company_ids
+        company_id: tenant_profile(tmp_path, company_id) for company_id in company_ids
     }
     registry = TenantRegistry(
         profiles,
-        api_keys={
-            company_id: [f"{company_id}-key"]
-            for company_id in company_ids
-        },
+        api_keys={company_id: [f"{company_id}-key"] for company_id in company_ids},
     )
 
     def engine_factory(profile, _cache, _shared_reranker):
@@ -755,9 +749,7 @@ def test_six_company_endpoints_remain_isolated_across_pool_eviction(tmp_path):
 
         def company_search(query, limit=None):
             result = original_search(query, limit)
-            result["products"] = [
-                {"id": 1, "title": f"{profile.company_id}-result"}
-            ]
+            result["products"] = [{"id": 1, "title": f"{profile.company_id}-result"}]
             return result
 
         engine.search = company_search
@@ -786,13 +778,9 @@ def test_six_company_endpoints_remain_isolated_across_pool_eviction(tmp_path):
     for company_id, response in responses.items():
         assert response.status_code == 200
         assert response.json()["company_id"] == company_id
-        assert response.json()["items"] == [
-            {"id": 1, "title": f"{company_id}-result"}
-        ]
+        assert response.json()["items"] == [{"id": 1, "title": f"{company_id}-result"}]
     assert repeated.status_code == 200
-    assert repeated.json()["items"] == [
-        {"id": 1, "title": "tenant-0-result"}
-    ]
+    assert repeated.json()["items"] == [{"id": 1, "title": "tenant-0-result"}]
 
 
 def test_users_in_the_same_company_can_search_concurrently():
@@ -1062,10 +1050,7 @@ def test_search_analytics_records_route_provider_calls_and_user_context():
         "embedding_ms": 90.0,
         "total_server_ms": 1500.0,
     }
-    assert [
-        (item.provider, item.operation)
-        for item in event.api_usage
-    ] == [
+    assert [(item.provider, item.operation) for item in event.api_usage] == [
         ("groq", "query_planning"),
         ("ollama", "embedding"),
         ("voyage-2.5", "reranking"),
@@ -1080,9 +1065,7 @@ def test_search_records_full_server_workflow_duration_and_stages():
         analytics_store=analytics,
     )
 
-    response = service.search(
-        SearchRequest(query="camera rent", page_size=20)
-    )
+    response = service.search(SearchRequest(query="camera rent", page_size=20))
 
     assert len(response.items) == 5
     event = analytics.events[0]
@@ -1139,9 +1122,7 @@ def test_search_processing_failure_is_recorded_without_exception_message():
     assert event.duration_ms >= 0
     assert event.plan_cache_hit is None
     assert event.result_cache_hit is None
-    assert abs(
-        event.timings_ms["total_server_ms"] - event.duration_ms
-    ) <= 0.001
+    assert abs(event.timings_ms["total_server_ms"] - event.duration_ms) <= 0.001
     assert event.api_call_count == 0
     assert event.total_tokens == 0
     assert len(event.api_usage) == 1
@@ -1364,9 +1345,7 @@ def test_admin_status_requires_separate_key_and_hides_queries(
             },
         )
         logs_missing = client.get("/api/v1/admin/logs")
-        api.LOGGER.warning(
-            "admin_log_test status=warning api_key=test-secret-value"
-        )
+        api.LOGGER.warning("admin_log_test status=warning api_key=test-secret-value")
         logs = client.get(
             "/api/v1/admin/logs?limit=5&level=WARNING",
             headers={

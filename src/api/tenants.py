@@ -206,8 +206,7 @@ class TenantServicePool:
                     profile.retrieval.semantic_related_tail_enabled
                 ),
                 semantic_related_tail_requires_explicit_category=(
-                    profile.retrieval
-                    .semantic_related_tail_requires_explicit_category
+                    profile.retrieval.semantic_related_tail_requires_explicit_category
                 ),
                 reranker_relative_score_floor=(
                     profile.retrieval.reranker_relative_score_floor
@@ -235,9 +234,7 @@ class TenantServicePool:
                 analytics_store = MySQLSearchAnalyticsStore(
                     profile.database,
                     company_id=profile.company_id,
-                    search_history_table=(
-                        profile.analytics.search_history_table
-                    ),
+                    search_history_table=(profile.analytics.search_history_table),
                     api_usage_table=profile.analytics.api_usage_table,
                     queue_capacity=profile.analytics.queue_capacity,
                 )
@@ -248,6 +245,9 @@ class TenantServicePool:
             field_mapping=profile.payload.field_mapping,
             usage_store=self.usage_store,
             analytics_store=analytics_store,
+            ingestion_state_path=(
+                profile.storage.bm25_path.parent / ".ingestion-state.json"
+            ),
         )
         service.reranker_load_ms = self.reranker_load_ms
         service.embedding_warmup = self.embedding_warmup

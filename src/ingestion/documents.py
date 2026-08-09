@@ -7,6 +7,7 @@ from typing import Any
 
 from core.settings import (
     EMBED_MODEL,
+    EMBED_MODEL_REVISION,
     MYSQL_DATABASE,
     MYSQL_SEARCH_ID_COLUMN,
     MYSQL_TABLE,
@@ -48,8 +49,7 @@ LABELED_TEXT_KEYS = (
 LABELED_TEXT_PATTERN = re.compile(
     r"(?<!^)\s+("
     + "|".join(
-        re.escape(label)
-        for label in sorted(LABELED_TEXT_KEYS, key=len, reverse=True)
+        re.escape(label) for label in sorted(LABELED_TEXT_KEYS, key=len, reverse=True)
     )
     + r"):\s*"
 )
@@ -80,6 +80,29 @@ def mysql_document_id(
 
 def content_hash(document: str) -> str:
     return hashlib.sha256(document.encode()).hexdigest()
+
+
+def metadata_hash(metadata: dict[str, Any]) -> str:
+    """Hash every source field that can affect filtering or lexical search."""
+    excluded = {
+        "embedding_model",
+        "embedding_model_revision",
+        "source_content_hash",
+        "source_metadata_hash",
+    }
+    canonical = {
+        str(key): metadata_value(value)
+        for key, value in metadata.items()
+        if key not in excluded
+    }
+    payload = json.dumps(
+        canonical,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def metadata_value(value: Any) -> bool | int | float | str | None:
@@ -254,6 +277,7 @@ def prepare_mysql_row(
     *,
     mysql_config: DatabaseRuntimeConfig | None = None,
     company_id: str | None = None,
+    embedding_model_revision: str = EMBED_MODEL_REVISION,
 ) -> tuple[str, str, dict] | None:
     document, content_metadata = prepare_content_document(row.get(content_column))
     if not document:
@@ -273,6 +297,7 @@ def prepare_mysql_row(
         "source_database": database,
         "source_table": search_table,
         "embedding_model": EMBED_MODEL,
+        "embedding_model_revision": embedding_model_revision,
         "source_content_hash": content_hash(document),
     }
     if company_id is not None:
@@ -288,6 +313,8 @@ def prepare_mysql_row(
         safe_value = metadata_value(value)
         if safe_value is not None:
             metadata[column] = safe_value
+
+    metadata["source_metadata_hash"] = metadata_hash(metadata)
 
     return (
         mysql_document_id(
@@ -322,9 +349,7 @@ def prepare_bm25_index_row(
     )
     search_table = mysql_config.search_table if mysql_config else MYSQL_TABLE
     search_id_column = (
-        mysql_config.search_id_column
-        if mysql_config
-        else MYSQL_SEARCH_ID_COLUMN
+        mysql_config.search_id_column if mysql_config else MYSQL_SEARCH_ID_COLUMN
     )
     identity = mysql_row_identity(row, primary_key_column)
     product_id = row.get(search_id_column)
@@ -359,10 +384,6 @@ def prepare_bm25_index_row(
         "locality_id": metadata_value(row.get("locality_id")),
         # These two fields are intentionally optional. Gainr can add them to
         # ads_search_ready later without blocking today's ingestion.
-        "ad_type": metadata_value(
-            row.get("type", row.get("ad_type"))
-        ),
-        "is_rent_negotiable": metadata_value(
-            row.get("is_rent_negotiable")
-        ),
+        "ad_type": metadata_value(row.get("type", row.get("ad_type"))),
+        "is_rent_negotiable": metadata_value(row.get("is_rent_negotiable")),
     }

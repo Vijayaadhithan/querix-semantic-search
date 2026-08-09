@@ -20,9 +20,7 @@ def _env_bool(name: str, default: bool) -> bool:
         return True
     if normalized in {"0", "false", "no", "off"}:
         return False
-    raise ValueError(
-        f"{name} must be one of true/false, yes/no, on/off, or 1/0."
-    )
+    raise ValueError(f"{name} must be one of true/false, yes/no, on/off, or 1/0.")
 
 
 def _load_config() -> dict:
@@ -50,18 +48,18 @@ _usage_db_path = Path(
     )
 )
 USAGE_DB_PATH = (
-    _usage_db_path
-    if _usage_db_path.is_absolute()
-    else PROJECT_ROOT / _usage_db_path
+    _usage_db_path if _usage_db_path.is_absolute() else PROJECT_ROOT / _usage_db_path
 )
-SEARCH_ANALYTICS_DELIVERY_MODE = os.getenv(
-    "SEARCH_ANALYTICS_DELIVERY_MODE",
-    "immediate",
-).strip().casefold()
-if SEARCH_ANALYTICS_DELIVERY_MODE not in {"immediate", "daily_spool"}:
-    raise ValueError(
-        "SEARCH_ANALYTICS_DELIVERY_MODE must be immediate or daily_spool."
+SEARCH_ANALYTICS_DELIVERY_MODE = (
+    os.getenv(
+        "SEARCH_ANALYTICS_DELIVERY_MODE",
+        "immediate",
     )
+    .strip()
+    .casefold()
+)
+if SEARCH_ANALYTICS_DELIVERY_MODE not in {"immediate", "daily_spool"}:
+    raise ValueError("SEARCH_ANALYTICS_DELIVERY_MODE must be immediate or daily_spool.")
 _search_analytics_spool_path = Path(
     os.getenv(
         "SEARCH_ANALYTICS_SPOOL_PATH",
@@ -74,9 +72,7 @@ SEARCH_ANALYTICS_SPOOL_PATH = (
     else PROJECT_ROOT / _search_analytics_spool_path
 )
 
-OLLAMA_BASE_URL = os.getenv(
-    "OLLAMA_BASE_URL", "http://localhost:11434"
-).rstrip("/")
+OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
 OLLAMA_KEEP_ALIVE = os.getenv("OLLAMA_KEEP_ALIVE")
 if OLLAMA_KEEP_ALIVE is None:
     OLLAMA_KEEP_ALIVE = CONFIG.get("ollama", {}).get("keep_alive", -1)
@@ -89,6 +85,9 @@ OLLAMA_QUERY_TIMEOUT_SECONDS = float(
 if OLLAMA_QUERY_TIMEOUT_SECONDS <= 0:
     raise ValueError("OLLAMA_QUERY_TIMEOUT_SECONDS must be greater than zero.")
 EMBED_MODEL = CONFIG.get("embedding", {}).get("model", "embeddinggemma:latest")
+EMBED_MODEL_REVISION = os.getenv("EMBED_MODEL_REVISION", "").strip() or EMBED_MODEL
+if not EMBED_MODEL_REVISION:
+    raise ValueError("EMBED_MODEL_REVISION must not be empty.")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GEMINI_API_BASE_URL = os.getenv(
     "GEMINI_API_BASE_URL",
@@ -108,31 +107,21 @@ if GROQ_TIMEOUT_SECONDS <= 0:
 QUERY_EXTRACT_CONFIG = CONFIG.get("query_extraction", {})
 _query_extract_models_env = os.getenv("QUERY_EXTRACT_MODELS")
 _query_extract_models = (
-    [
-        model.strip()
-        for model in _query_extract_models_env.split(",")
-        if model.strip()
-    ]
+    [model.strip() for model in _query_extract_models_env.split(",") if model.strip()]
     if _query_extract_models_env
     else QUERY_EXTRACT_CONFIG.get("models")
 )
 if not _query_extract_models:
-    _query_extract_models = [
-        QUERY_EXTRACT_CONFIG.get("model", "gemma-4-26b-a4b-it")
-    ]
+    _query_extract_models = [QUERY_EXTRACT_CONFIG.get("model", "gemma-4-26b-a4b-it")]
 elif isinstance(_query_extract_models, str):
     _query_extract_models = [_query_extract_models]
 QUERY_EXTRACT_MODELS = tuple(
-    str(model).strip()
-    for model in _query_extract_models
-    if str(model).strip()
+    str(model).strip() for model in _query_extract_models if str(model).strip()
 )
 if not QUERY_EXTRACT_MODELS:
     raise ValueError("query_extraction.models must contain at least one model.")
 QUERY_EXTRACT_MODEL = QUERY_EXTRACT_MODELS[0]
-QUERY_EXTRACT_TEMPERATURE = float(
-    QUERY_EXTRACT_CONFIG.get("temperature", 0)
-)
+QUERY_EXTRACT_TEMPERATURE = float(QUERY_EXTRACT_CONFIG.get("temperature", 0))
 QUERY_EXTRACT_TIMEOUT_SECONDS = float(
     os.getenv(
         "GEMINI_TIMEOUT_SECONDS",
@@ -148,15 +137,9 @@ QUERY_DIRECT_SEMANTIC_FAST_PATH = _env_bool(
     "QUERY_DIRECT_SEMANTIC_FAST_PATH",
     bool(QUERY_EXTRACT_CONFIG.get("direct_semantic_fast_path", True)),
 )
-QUERY_FUZZY_MATCHING = bool(
-    QUERY_EXTRACT_CONFIG.get("fuzzy_matching", True)
-)
-QUERY_PLAN_CACHE_SIZE = int(
-    QUERY_EXTRACT_CONFIG.get("cache_size", 500)
-)
-QUERY_PLAN_CACHE_TTL_SECONDS = int(
-    QUERY_EXTRACT_CONFIG.get("cache_ttl_seconds", 900)
-)
+QUERY_FUZZY_MATCHING = bool(QUERY_EXTRACT_CONFIG.get("fuzzy_matching", True))
+QUERY_PLAN_CACHE_SIZE = int(QUERY_EXTRACT_CONFIG.get("cache_size", 500))
+QUERY_PLAN_CACHE_TTL_SECONDS = int(QUERY_EXTRACT_CONFIG.get("cache_ttl_seconds", 900))
 REDIS_CONFIG = CONFIG.get("redis", {})
 REDIS_ENABLED = _env_bool(
     "REDIS_ENABLED",
@@ -187,13 +170,9 @@ UNPRICED_RENTAL_FEE_CEILING = float(
     CONFIG.get("retrieval", {}).get("unpriced_rental_fee_ceiling", 1)
 )
 if UNPRICED_RENTAL_FEE_CEILING < 0:
-    raise ValueError(
-        "retrieval.unpriced_rental_fee_ceiling cannot be negative."
-    )
+    raise ValueError("retrieval.unpriced_rental_fee_ceiling cannot be negative.")
 
-VECTOR_CANDIDATE_K = int(
-    CONFIG.get("retrieval", {}).get("vector_candidate_k", 100)
-)
+VECTOR_CANDIDATE_K = int(CONFIG.get("retrieval", {}).get("vector_candidate_k", 100))
 VECTOR_EXACT_FILTER_MAX_ROWS = int(
     os.getenv(
         "VECTOR_EXACT_FILTER_MAX_ROWS",
@@ -219,10 +198,7 @@ VECTOR_POST_FILTER_MAX_CANDIDATES = int(
         2000,
     )
 )
-if (
-    VECTOR_POST_FILTER_OVERFETCH_FACTOR <= 0
-    or VECTOR_POST_FILTER_MAX_CANDIDATES <= 0
-):
+if VECTOR_POST_FILTER_OVERFETCH_FACTOR <= 0 or VECTOR_POST_FILTER_MAX_CANDIDATES <= 0:
     raise ValueError(
         "Vector post-filter over-fetch settings must be greater than zero."
     )
@@ -259,9 +235,7 @@ PRIMARY_RANKED_K = int(
 RELATED_TAIL_ENABLED = bool(
     CONFIG.get("retrieval", {}).get("related_tail_enabled", True)
 )
-RETRIEVAL_OVERFETCH_FACTOR = int(
-    CONFIG.get("retrieval", {}).get("overfetch_factor", 2)
-)
+RETRIEVAL_OVERFETCH_FACTOR = int(CONFIG.get("retrieval", {}).get("overfetch_factor", 2))
 RRF_CONSTANT = int(CONFIG.get("retrieval", {}).get("rrf_constant", 60))
 VECTOR_WEIGHT = float(CONFIG.get("retrieval", {}).get("vector_weight", 1.0))
 BM25_WEIGHT = float(CONFIG.get("retrieval", {}).get("bm25_weight", 1.0))
@@ -300,9 +274,7 @@ _invalid_rerank_providers = sorted(
     }
 )
 if _invalid_rerank_providers:
-    raise ValueError(
-        f"Unsupported reranker providers: {_invalid_rerank_providers}"
-    )
+    raise ValueError(f"Unsupported reranker providers: {_invalid_rerank_providers}")
 if not RERANK_PROVIDER_ORDER:
     raise ValueError("RERANK_PROVIDER_ORDER must contain at least one provider.")
 RERANK_API_TIMEOUT_SECONDS = float(
@@ -435,23 +407,13 @@ API_READINESS_CACHE_SECONDS = int(
     )
 )
 if not 0 <= API_READINESS_CACHE_SECONDS <= 3600:
-    raise ValueError(
-        "API_READINESS_CACHE_SECONDS must be between 0 and 3600."
-    )
-API_DEFAULT_PAGE_SIZE = int(
-    CONFIG.get("api", {}).get("default_page_size", 20)
-)
-API_PRELOAD_RERANKER = bool(
-    CONFIG.get("api", {}).get("preload_reranker", True)
-)
-API_PRELOAD_EMBEDDING = bool(
-    CONFIG.get("api", {}).get("preload_embedding", True)
-)
+    raise ValueError("API_READINESS_CACHE_SECONDS must be between 0 and 3600.")
+API_DEFAULT_PAGE_SIZE = int(CONFIG.get("api", {}).get("default_page_size", 20))
+API_PRELOAD_RERANKER = bool(CONFIG.get("api", {}).get("preload_reranker", True))
+API_PRELOAD_EMBEDDING = bool(CONFIG.get("api", {}).get("preload_embedding", True))
 API_MAX_PAGE_SIZE = int(CONFIG.get("api", {}).get("max_page_size", 20))
 API_MAX_RESULTS = int(CONFIG.get("api", {}).get("max_results", 200))
-API_SESSION_TTL_SECONDS = int(
-    CONFIG.get("api", {}).get("session_ttl_seconds", 600)
-)
+API_SESSION_TTL_SECONDS = int(CONFIG.get("api", {}).get("session_ttl_seconds", 600))
 API_MAX_SESSIONS = int(CONFIG.get("api", {}).get("max_sessions", 500))
 API_CORS_ORIGINS = [
     origin.strip()
@@ -476,9 +438,7 @@ API_ADMIN_LOG_BUFFER_SIZE = int(
     )
 )
 if not 100 <= API_ADMIN_LOG_BUFFER_SIZE <= 5000:
-    raise ValueError(
-        "API_ADMIN_LOG_BUFFER_SIZE must be between 100 and 5000."
-    )
+    raise ValueError("API_ADMIN_LOG_BUFFER_SIZE must be between 100 and 5000.")
 API_TENANT_CONFIG_DIR = PROJECT_ROOT / os.getenv(
     "API_TENANT_CONFIG_DIR",
     str(CONFIG.get("api", {}).get("tenant_config_dir", "configs/tenants")),
@@ -509,9 +469,7 @@ API_SEARCH_SLOT_TIMEOUT_SECONDS = float(
 if API_TENANT_ENGINE_CACHE_SIZE <= 0:
     raise ValueError("API_TENANT_ENGINE_CACHE_SIZE must be greater than zero.")
 if API_TENANT_MAX_CONCURRENT_SEARCHES <= 0:
-    raise ValueError(
-        "API_TENANT_MAX_CONCURRENT_SEARCHES must be greater than zero."
-    )
+    raise ValueError("API_TENANT_MAX_CONCURRENT_SEARCHES must be greater than zero.")
 if API_SEARCH_SLOT_TIMEOUT_SECONDS <= 0:
     raise ValueError("API_SEARCH_SLOT_TIMEOUT_SECONDS must be greater than zero.")
 

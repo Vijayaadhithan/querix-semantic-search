@@ -127,9 +127,9 @@ buffers and requires a buffer pool larger than the HNSW index. Startup prewarm
 is fail-open and logs the index, mode, blocks, bytes, and duration; it does not
 alter ranking behavior. The hourly local-path warm-up repeats the configured
 index prewarm before its representative HNSW queries. The scheduled Gainr
-warm-up uses an 800-row window so it exercises the same heap depth as the
-broad-filter post-filter path; override it with `WARMUP_CANDIDATES` only after
-latency and relevance testing.
+warm-up uses a deep unfiltered HNSW window after warming the complete vector
+heap and index. Override `WARMUP_CANDIDATES` only after latency and relevance
+testing.
 
 Gainr uses `prewarm_mode: buffer` with a 2 GB PostgreSQL `shared_buffers`
 allocation inside a 4 GB container limit. Startup, hourly warm-up, and the
@@ -138,10 +138,11 @@ buffer pool before running representative queries. Do not change the prewarm
 mode, `shared_buffers`, or the container memory limit without comparing
 filtered semantic latency and peak host/cgroup memory.
 
-`vector_eligible=10001 vector_eligible_capped=True` means the bounded
-eligibility probe found more than the 10,000-row exact-ranking threshold; it
-does not mean the vector query fetched 10,001 payload rows. The broad-filter
-path still retrieves its configured bounded ANN window. A semantic engine log
+`vector_eligible=1001 vector_eligible_capped=True` means the bounded
+eligibility probe found more than the 1,000-row exact-ranking threshold; it
+does not mean the vector query fetched 1,001 payload rows. The broad-filter
+path uses native iterative filtered HNSW and stops after the requested matching
+candidate count. A semantic engine log
 with `products=0 hydration=deferred` likewise means the compatibility layer
 will hydrate the ranked IDs, not that retrieval found no products.
 

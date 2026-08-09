@@ -1,11 +1,13 @@
 from datetime import date
 from decimal import Decimal
+from types import SimpleNamespace
 
 import pytest
 
-from core.settings import EMBED_MODEL
+from core.settings import EMBED_MODEL, EMBED_MODEL_REVISION
 from ingestion.documents import (
     content_hash,
+    metadata_hash,
     metadata_value,
     mysql_document_id,
     prepare_content_document,
@@ -13,6 +15,7 @@ from ingestion.documents import (
 )
 from ingestion.service import (
     database_current_ids,
+    database_row_changes,
     ingest_mysql_source,
     reconcile_deleted_documents,
 )
@@ -53,6 +56,8 @@ def test_prepare_mysql_row_uses_embedding_content_as_document():
     assert metadata["primary_key_column"] == "id"
     assert metadata["primary_key_value"] == 42
     assert metadata["source_content_hash"] == content_hash(document)
+    assert metadata["embedding_model_revision"] == EMBED_MODEL_REVISION
+    assert metadata["source_metadata_hash"] == metadata_hash(metadata)
     assert metadata["city"] == "Chennai"
     assert metadata["price"] == 12500.0
     assert "embedding_content" not in metadata
@@ -128,12 +133,8 @@ def test_prepare_rows_use_stable_index_namespace_across_databases():
     )
 
     assert local_id == production_id
-    assert local_metadata["source_file"] == (
-        "mysql:rag_ht_test.ads_search_ready"
-    )
-    assert production_metadata["source_file"] == (
-        "mysql:rag_ht_test.ads_search_ready"
-    )
+    assert local_metadata["source_file"] == ("mysql:rag_ht_test.ads_search_ready")
+    assert production_metadata["source_file"] == ("mysql:rag_ht_test.ads_search_ready")
     assert production_metadata["source_database"] == "production_database"
 
 
@@ -185,8 +186,7 @@ def test_prepare_mysql_row_parses_json_embedding_content():
     row = {
         "id": 7,
         "embedding_content": (
-            '{"semantic_text": "title: Road bike; category: Cycles", '
-            '"city": "Chennai"}'
+            '{"semantic_text": "title: Road bike; category: Cycles", "city": "Chennai"}'
         ),
     }
 
@@ -203,12 +203,23 @@ def test_prepare_mysql_row_skips_empty_embedding_content():
 
 
 class FakeMysqlCollection:
-    def __init__(self, ids, hashes, documents=None, model=EMBED_MODEL):
+    def __init__(
+        self,
+        ids,
+        hashes,
+        documents=None,
+        model=EMBED_MODEL,
+        metadatas=None,
+    ):
         self.data = {
             "ids": ids,
             "documents": documents or [f"document {doc_id}" for doc_id in ids],
-            "metadatas": [
-                {"embedding_model": model, "source_content_hash": hash_value}
+            "metadatas": metadatas
+            or [
+                {
+                    "embedding_model": model,
+                    "source_content_hash": hash_value,
+                }
                 for hash_value in hashes
             ],
         }
@@ -266,12 +277,72 @@ def test_database_current_ids_accepts_matching_document_without_hash():
 def test_database_current_ids_rejects_different_embedding_model():
     collection = FakeMysqlCollection(["id-1"], ["hash-1"], model="other-model")
 
-    assert database_current_ids(
+    assert (
+        database_current_ids(
+            collection,
+            ["id-1"],
+            ["document id-1"],
+            [{"source_content_hash": "hash-1"}],
+        )
+        == set()
+    )
+
+
+def test_database_row_changes_detects_metadata_without_reembedding():
+    desired = {
+        "embedding_model": EMBED_MODEL,
+        "embedding_model_revision": EMBED_MODEL_REVISION,
+        "source_content_hash": "hash-1",
+        "city_id": 142,
+    }
+    desired["source_metadata_hash"] = metadata_hash(desired)
+    stored = {
+        **desired,
+        "city_id": 81,
+    }
+    stored["source_metadata_hash"] = metadata_hash(stored)
+    collection = FakeMysqlCollection(
+        ["id-1"],
+        ["hash-1"],
+        documents=["same document"],
+        metadatas=[stored],
+    )
+
+    changes = database_row_changes(
         collection,
         ["id-1"],
-        ["document id-1"],
-        [{"source_content_hash": "hash-1"}],
-    ) == set()
+        ["same document"],
+        [desired],
+    )
+
+    assert changes.current_ids == set()
+    assert changes.metadata_only_ids == {"id-1"}
+
+
+def test_database_row_changes_reembeds_changed_model_revision():
+    desired = {
+        "embedding_model": EMBED_MODEL,
+        "embedding_model_revision": EMBED_MODEL_REVISION,
+        "source_content_hash": "hash-1",
+    }
+    desired["source_metadata_hash"] = metadata_hash(desired)
+    stored = {**desired, "embedding_model_revision": "old-digest"}
+    collection = FakeMysqlCollection(
+        ["id-1"],
+        ["hash-1"],
+        documents=["same document"],
+        metadatas=[stored],
+    )
+
+    changes = database_row_changes(
+        collection,
+        ["id-1"],
+        ["same document"],
+        [desired],
+    )
+
+    assert changes.current_ids == set()
+    assert changes.metadata_only_ids == set()
 
 
 class ReconciliationCollection:
@@ -314,3 +385,144 @@ def test_deletion_reconciliation_removes_only_unseen_rows(tmp_path):
 def test_deletion_reconciliation_rejects_partial_scan():
     with pytest.raises(RuntimeError, match="requires a full scan"):
         ingest_mysql_source(limit=10, reconcile_deletions=True)
+
+
+def test_small_ingestion_sample_refreshes_metadata_and_new_vectors(
+    tmp_path,
+    monkeypatch,
+):
+    from ingestion import service as ingestion_service
+
+    database = MySQLRuntimeConfig(
+        host="localhost",
+        port=3306,
+        database="catalog",
+        user="search",
+        password="secret",
+        search_table="ads_search_ready",
+        content_column="embedding_content",
+        bm25_column="bm25_content",
+        search_id_column="id",
+        result_table="ads",
+        result_id_column="id",
+    )
+    tenant = SimpleNamespace(
+        company_id="sample",
+        database=database,
+        storage=SimpleNamespace(bm25_path=tmp_path / "bm25.sqlite3"),
+    )
+    rows = [
+        {
+            "id": 1,
+            "embedding_content": "Title: Camera",
+            "bm25_content": "camera",
+            "city_id": 142,
+        },
+        {
+            "id": 2,
+            "embedding_content": "Title: Bicycle",
+            "bm25_content": "bicycle",
+            "city_id": 142,
+        },
+        {
+            "id": 3,
+            "embedding_content": "Title: Drill",
+            "bm25_content": "drill",
+            "city_id": 142,
+        },
+    ]
+    prepared = [
+        prepare_mysql_row(
+            row,
+            "embedding_content",
+            "id",
+            mysql_config=database,
+            company_id="sample",
+        )
+        for row in rows
+    ]
+    assert all(item is not None for item in prepared)
+    first_id, first_document, first_metadata = prepared[0]
+    second_id, second_document, second_metadata = prepared[1]
+    stale_second_metadata = {**second_metadata, "city_id": 81}
+    stale_second_metadata["source_metadata_hash"] = metadata_hash(stale_second_metadata)
+
+    class SampleCollection:
+        def __init__(self):
+            self.rows = {
+                first_id: (first_document, first_metadata),
+                second_id: (second_document, stale_second_metadata),
+            }
+            self.metadata_updates = []
+            self.vector_upserts = []
+
+        def get(self, *, ids=None, where=None, include=None):
+            del where, include
+            selected = ids or list(self.rows)
+            present = [doc_id for doc_id in selected if doc_id in self.rows]
+            return {
+                "ids": present,
+                "documents": [self.rows[doc_id][0] for doc_id in present],
+                "metadatas": [self.rows[doc_id][1] for doc_id in present],
+            }
+
+        def update_metadatas(self, *, ids, metadatas):
+            self.metadata_updates.extend(ids)
+            for doc_id, metadata in zip(ids, metadatas):
+                self.rows[doc_id] = (self.rows[doc_id][0], metadata)
+
+        def upsert(self, *, ids, documents, embeddings, metadatas):
+            assert len(ids) == len(embeddings)
+            self.vector_upserts.extend(ids)
+            for doc_id, document, metadata in zip(ids, documents, metadatas):
+                self.rows[doc_id] = (document, metadata)
+
+        def count(self):
+            return len(self.rows)
+
+    collection = SampleCollection()
+    monkeypatch.setattr(
+        ingestion_service,
+        "fetch_database_columns",
+        lambda _config: ["id", "embedding_content", "bm25_content", "city_id"],
+    )
+    monkeypatch.setattr(
+        ingestion_service,
+        "detect_database_primary_key",
+        lambda *_args: "id",
+    )
+    monkeypatch.setattr(
+        ingestion_service,
+        "count_database_rows",
+        lambda *_args: len(rows),
+    )
+    monkeypatch.setattr(
+        ingestion_service,
+        "iter_database_rows",
+        lambda *_args, **_kwargs: iter(rows),
+    )
+    monkeypatch.setattr(
+        ingestion_service,
+        "get_tenant_vector_collection",
+        lambda *_args, **_kwargs: collection,
+    )
+    monkeypatch.setattr(
+        ingestion_service,
+        "embed_for_upsert",
+        lambda documents, *_args, **_kwargs: [[0.0] * 3 for _ in documents],
+    )
+    monkeypatch.setattr(
+        ingestion_service,
+        "resolve_embedding_model_revision",
+        lambda: EMBED_MODEL_REVISION,
+    )
+
+    ingest_mysql_source(batch_size=3, tenant=tenant)
+
+    assert collection.metadata_updates == [second_id]
+    assert collection.vector_upserts == [prepared[2][0]]
+    index = PersistentBM25Index(tenant.storage.bm25_path)
+    assert index.count() == 3
+    index.close()
+    assert not (tmp_path / ".ingestion-state.json").exists()
+    assert (tmp_path / "ingestion-manifest.json").exists()

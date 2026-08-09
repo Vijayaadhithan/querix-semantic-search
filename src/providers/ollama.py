@@ -4,10 +4,37 @@ import requests
 
 from core.settings import (
     EMBED_MODEL,
+    EMBED_MODEL_REVISION,
     OLLAMA_BASE_URL,
     OLLAMA_KEEP_ALIVE,
     OLLAMA_QUERY_TIMEOUT_SECONDS,
 )
+
+
+def resolve_embedding_model_revision(timeout: float = 5.0) -> str:
+    """Resolve a mutable Ollama tag to the immutable model digest."""
+    if EMBED_MODEL_REVISION != EMBED_MODEL:
+        return EMBED_MODEL_REVISION
+    try:
+        response = requests.get(f"{OLLAMA_BASE_URL}/api/tags", timeout=timeout)
+        response.raise_for_status()
+        models = response.json().get("models", [])
+    except (requests.RequestException, AttributeError, TypeError, ValueError) as exc:
+        raise RuntimeError(
+            "Cannot resolve the embedding model digest from Ollama. "
+            "Set EMBED_MODEL_REVISION to the deployed model digest or restore Ollama."
+        ) from exc
+    for model in models:
+        if not isinstance(model, dict):
+            continue
+        if EMBED_MODEL not in {model.get("name"), model.get("model")}:
+            continue
+        digest = str(model.get("digest") or "").strip()
+        if digest:
+            return digest
+    raise RuntimeError(
+        f"Ollama did not report a digest for embedding model {EMBED_MODEL!r}."
+    )
 
 
 def normalize_keep_alive(value: str | int) -> str | int:
