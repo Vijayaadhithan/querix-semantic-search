@@ -420,6 +420,10 @@ docker compose run --rm api python -m cli.ingest \
   --embed-batch-size 32
 ```
 
+The scheduled runner accepts `MYSQL_BATCH_SIZE` and `EMBED_BATCH_SIZE`
+overrides. For a 2-vCPU host, use `MYSQL_BATCH_SIZE=250` and
+`EMBED_BATCH_SIZE=8`; larger hosts retain the `500` and `32` defaults.
+
 Incremental ingestion skips completely unchanged rows, reuses vectors for
 metadata/BM25-only changes, and embeds only new or embedding-changed rows. Do
 not use `--mysql-replace-source` for a routine deployment.

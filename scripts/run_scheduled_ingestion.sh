@@ -9,6 +9,17 @@ CONTAINER_NAME="${INGEST_CONTAINER_NAME:-semantic-search-ingest-${COMPANY_ID}}"
 RUN_ANALYTICS_FLUSH="${RUN_ANALYTICS_FLUSH:-true}"
 ANALYTICS_BATCH_SIZE="${ANALYTICS_BATCH_SIZE:-500}"
 RUN_DAILY_ANALYTICS="${RUN_DAILY_ANALYTICS:-true}"
+MYSQL_BATCH_SIZE="${MYSQL_BATCH_SIZE:-500}"
+EMBED_BATCH_SIZE="${EMBED_BATCH_SIZE:-32}"
+
+if ! [[ "$MYSQL_BATCH_SIZE" =~ ^[1-9][0-9]*$ ]]; then
+  echo "MYSQL_BATCH_SIZE must be a positive integer." >&2
+  exit 1
+fi
+if ! [[ "$EMBED_BATCH_SIZE" =~ ^[1-9][0-9]*$ ]]; then
+  echo "EMBED_BATCH_SIZE must be a positive integer." >&2
+  exit 1
+fi
 
 cd "$PROJECT_DIR"
 # Ingestion has priority over the lightweight hourly job. If a warm-up is
@@ -67,8 +78,8 @@ docker compose run --rm --name "$CONTAINER_NAME" api python -m cli.ingest \
   --company "$COMPANY_ID" \
   --database \
   --mysql-reconcile-deletions \
-  --mysql-batch-size 500 \
-  --embed-batch-size 32
+  --mysql-batch-size "$MYSQL_BATCH_SIZE" \
+  --embed-batch-size "$EMBED_BATCH_SIZE"
 
 # The API keeps tenant indexes and filter catalogues open in memory. Restart
 # only after a successful ingestion so the next request sees the new revision.
