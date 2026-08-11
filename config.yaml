@@ -11,6 +11,7 @@ query_extraction:
   models:
     - groq:openai/gpt-oss-20b
     - gemini-3.1-flash-lite
+    - gemma-4-26b-a4b-it
   # Groq is the low-latency primary. Its 11th request in any rolling minute
   # skips directly to Gemini instead of waiting for an upstream 429.
   groq_requests_per_minute: 10
