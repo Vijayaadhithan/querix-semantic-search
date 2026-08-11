@@ -1,5 +1,6 @@
 import json
 import threading
+import time
 from concurrent.futures import Future
 
 from search import engine as search_engine
@@ -1560,6 +1561,35 @@ def test_speculative_embedding_is_reused_only_for_exact_semantic_query(
     )
 
     assert captured == [[1.0, 2.0], None]
+    engine.close()
+    index.close()
+
+
+def test_speculative_embedding_can_be_cancelled_before_local_work_starts(
+    tmp_path,
+):
+    index = build_index(tmp_path / "embedding-prefetch-cancel.sqlite3")
+
+    class CountingEmbeddingProvider:
+        def __init__(self):
+            self.calls = 0
+
+        def embed_text(self, _query):
+            self.calls += 1
+            return [1.0, 2.0]
+
+    provider = CountingEmbeddingProvider()
+    engine = ProductSearchEngine(
+        collection=FakeCollection(),
+        bm25_index=index,
+        embedding_provider=provider,
+    )
+
+    future = engine.start_speculative_embedding("camera")
+
+    assert future.cancel() is True
+    time.sleep(0.05)
+    assert provider.calls == 0
     engine.close()
     index.close()
 

@@ -2,7 +2,9 @@ import hashlib
 import json
 import logging
 import sys
+import threading
 import time
+from concurrent.futures import Future
 from copy import deepcopy
 
 from core.settings import (
@@ -38,6 +40,7 @@ from storage.database import fetch_product_types_by_ids, fetch_products_by_ids
 LOGGER = logging.getLogger("uvicorn.error")
 RESULT_CACHE_SCHEMA_VERSION = "v24"
 QUERY_PLAN_CACHE_SCHEMA_VERSION = "v12"
+SPECULATIVE_EMBEDDING_DELAY_SECONDS = 0.025
 
 
 def _engine_dependency(name: str, default):
@@ -69,7 +72,7 @@ class SearchEngineSupportMixin:
         self.shared_plan_cache = cache
 
     def start_speculative_embedding(self, query: str):
-        """Start the original embedding while the remote planner is running."""
+        """Start the original embedding unless a fast path cancels it first."""
         if not self.planner_enabled or not query.strip():
             return None
 
@@ -95,7 +98,36 @@ class SearchEngineSupportMixin:
                 "seconds": time.perf_counter() - started,
             }
 
-        return self._embedding_executor.submit(run)
+        # Deterministic and direct-semantic planning normally resolves in less
+        # than 25 ms.  Give those paths a short cancellation window so a
+        # deterministic request does not consume local embedding capacity it
+        # will never use.  Full semantic planning still overlaps almost all of
+        # the embedding work with the hosted planner call.
+        result_future = Future()
+
+        def transfer_result(inner_future):
+            try:
+                result_future.set_result(inner_future.result())
+            except BaseException as exc:
+                result_future.set_exception(exc)
+
+        def launch():
+            if not result_future.set_running_or_notify_cancel():
+                return
+            try:
+                inner_future = self._embedding_executor.submit(run)
+            except BaseException as exc:
+                result_future.set_exception(exc)
+                return
+            inner_future.add_done_callback(transfer_result)
+
+        timer = threading.Timer(
+            SPECULATIVE_EMBEDDING_DELAY_SECONDS,
+            launch,
+        )
+        timer.daemon = True
+        timer.start()
+        return result_future
 
     def _cache_namespace(self, name: str) -> str:
         return f"{self.company_id}:{name}" if self.company_id else name
