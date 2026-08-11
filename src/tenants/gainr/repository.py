@@ -424,6 +424,10 @@ class GainrDatabaseRepository:
         offset = (page - 1) * page_size
         hydration_started = time.perf_counter()
         checkout_started = hydration_started
+        parallel_relations = (
+            self.database_pool is not None
+            and self.config.pool_max_size >= 12
+        )
         with self.connection() as connection:
             checkout_ms = round(
                 (time.perf_counter() - checkout_started) * 1000
@@ -484,13 +488,16 @@ class GainrDatabaseRepository:
                     if str(product_id) in rows_by_id
                 ]
             cards_ms = round((time.perf_counter() - cards_started) * 1000)
-            # These relation reads are small primary/index lookups. Keeping
-            # them on the already-proven connection is both faster and more
-            # predictable than fanning out over idle remote MySQL sockets.
-            relation_timings = self._attach_attributes(
-                rows,
-                connection=connection,
+            relation_timings = (
+                {}
+                if parallel_relations
+                else self._attach_attributes(rows, connection=connection)
             )
+        if parallel_relations:
+            # Three independent relation reads each pay remote-MySQL latency.
+            # A >=12 connection tenant pool can serve four bounded searches
+            # without exceeding its configured pool limit.
+            relation_timings = self._attach_attributes(rows)
         logger.info(
             "Gainr ranked hydration timing rows=%s checkout_ms=%s "
             "eligibility_ms=%s cards_ms=%s "

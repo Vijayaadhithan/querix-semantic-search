@@ -34,6 +34,8 @@ DELETE_BATCH_SIZE = 10_000
 class PgVectorCollection:
     """Collection-style vector interface backed by one isolated pgvector table."""
 
+    query_limit_requires_count = False
+
     def __init__(
         self,
         config: PostgresRuntimeConfig,

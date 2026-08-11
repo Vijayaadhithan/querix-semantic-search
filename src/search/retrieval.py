@@ -103,11 +103,17 @@ def vector_search(
     query_embedding=None,
 ):
     metrics = metrics if metrics is not None else {}
-    count_started = time.perf_counter()
-    row_count = collection.count()
-    metrics["count_ms"] = (time.perf_counter() - count_started) * 1000
-    if row_count <= 0:
-        return []
+    if getattr(collection, "query_limit_requires_count", True):
+        count_started = time.perf_counter()
+        row_count = collection.count()
+        metrics["count_ms"] = (time.perf_counter() - count_started) * 1000
+        if row_count <= 0:
+            return []
+    else:
+        # SQL LIMIT safely exceeds the number of available rows. Avoid a
+        # separate PostgreSQL connection and COUNT(*) round trip per query.
+        row_count = max(candidate_k, top_k)
+        metrics["count_ms"] = 0.0
 
     if query_embedding is None:
         embedding_started = time.perf_counter()

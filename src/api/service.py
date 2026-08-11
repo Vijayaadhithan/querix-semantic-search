@@ -3,6 +3,7 @@ import logging
 import threading
 import time
 from collections import deque
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -418,7 +419,31 @@ class ProductSearchService:
         )
         return timeline
 
-    def run_engine_search(self, query: str, **kwargs) -> dict[str, Any]:
+    @contextmanager
+    def search_capacity_slot(self):
+        """Bound the complete tenant request, including planner and hydration."""
+        ingestion_state = read_ingestion_state(self.ingestion_state_path)
+        if ingestion_state is not None:
+            raise SearchCapacityError("Search index is being refreshed; retry shortly.")
+        acquired = self._search_slots.acquire(
+            timeout=self.search_slot_timeout_seconds
+        )
+        if not acquired:
+            with self._monitor_lock:
+                self._monitor_rejected += 1
+            raise SearchCapacityError("Search capacity is busy; retry shortly.")
+        try:
+            yield
+        finally:
+            self._search_slots.release()
+
+    def run_engine_search(
+        self,
+        query: str,
+        *,
+        capacity_acquired: bool = False,
+        **kwargs,
+    ) -> dict[str, Any]:
         ingestion_state = read_ingestion_state(self.ingestion_state_path)
         if ingestion_state is not None:
             raise SearchCapacityError("Search index is being refreshed; retry shortly.")
@@ -455,17 +480,11 @@ class ProductSearchService:
                     len(query),
                     (time.perf_counter() - wait_started) * 1000,
                 )
-            acquired = self._search_slots.acquire(
-                timeout=self.search_slot_timeout_seconds
-            )
-            if not acquired:
-                with self._monitor_lock:
-                    self._monitor_rejected += 1
-                raise SearchCapacityError("Search capacity is busy; retry shortly.")
-            try:
+            if capacity_acquired:
                 result = self.engine.search(query, **kwargs)
-            finally:
-                self._search_slots.release()
+            else:
+                with self.search_capacity_slot():
+                    result = self.engine.search(query, **kwargs)
         except Exception as exc:
             duration_ms = (time.perf_counter() - started) * 1000
             with self._monitor_lock:

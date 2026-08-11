@@ -280,8 +280,19 @@ class GainrCompatibilityService:
         request: GainrFilterResultRequest,
         *,
         user_id: str | None = None,
+        _capacity_acquired: bool = False,
+        _request_started: float | None = None,
     ) -> dict[str, Any]:
-        request_started = time.perf_counter()
+        request_started = _request_started or time.perf_counter()
+        if not _capacity_acquired:
+            with self.product_search_service.search_capacity_slot():
+                return self.filter_results(
+                    request,
+                    user_id=user_id,
+                    _capacity_acquired=True,
+                    _request_started=request_started,
+                )
+        planning_started = time.perf_counter()
         engine_ms = 0.0
         database_ms = 0.0
         eligibility_ms = 0.0
@@ -300,7 +311,7 @@ class GainrCompatibilityService:
             else None
         )
         planned, effective, meta = self._effective_plan(request)
-        planning_ms = (time.perf_counter() - request_started) * 1000
+        planning_ms = (time.perf_counter() - planning_started) * 1000
         page_size = self.profile.compatibility.page_size
         execution_path = planned["query_plan"].get(
             "execution_path",
@@ -368,6 +379,7 @@ class GainrCompatibilityService:
             engine_started = time.perf_counter()
             result = self.product_search_service.run_engine_search(
                 request.searchTerm,
+                capacity_acquired=True,
                 limit=self.product_search_service.max_results,
                 ranking_window=(
                     self.profile.compatibility.semantic_ranked_window

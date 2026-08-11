@@ -1,5 +1,6 @@
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 
 import pytest
@@ -278,6 +279,33 @@ def test_explicit_filters_override_only_matching_auto_filters(tmp_path):
         "max_rental_fee": 500,
         "target_ad_type": "offer",
     }
+
+
+def test_filter_result_capacity_bounds_planning_and_hydration(tmp_path):
+    adapter, engine, _repository = service(tmp_path)
+    adapter.product_search_service._search_slots = threading.BoundedSemaphore(1)
+    adapter.product_search_service.search_slot_timeout_seconds = 0.01
+    entered = threading.Event()
+    release = threading.Event()
+    original_plan = engine.plan
+
+    def blocking_plan(query):
+        entered.set()
+        release.wait(timeout=2)
+        return original_plan(query)
+
+    engine.plan = blocking_plan
+    request = adapter.parse_filter_result(
+        {"searchTerm": "family bike", "filter": {}, "page": 1}
+    )
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first = executor.submit(adapter.filter_results, request)
+        assert entered.wait(timeout=1)
+        second = executor.submit(adapter.filter_results, request)
+        with pytest.raises(RuntimeError, match="Search capacity is busy"):
+            second.result(timeout=1)
+        release.set()
+        assert first.result(timeout=2)["status"] is True
 
 
 def test_filter_result_queues_minimized_durable_history(tmp_path):
