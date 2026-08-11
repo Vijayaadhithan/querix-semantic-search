@@ -128,7 +128,10 @@ database:
     statement_timeout_ms: 0
   pool:
     min_size: 4
-    max_size: 4
+    # The Gainr database permits 16 concurrent connections. Search execution
+    # remains capped separately, while the wider pool prevents concurrent
+    # compatibility-response hydration from timing out behind four sockets.
+    max_size: 16
     timeout_seconds: 5
     # Gainr's remote MySQL wait_timeout is eight hours. Avoid adding a health
     # ping to the first search after each one-minute Voyage pacing interval.
