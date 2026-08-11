@@ -1,17 +1,20 @@
 import logging
 import threading
 import time
-from collections import deque
 from contextlib import contextmanager
 
 import requests
 
+from core.request_limit import RequestWindowLimiter
 from core.settings import (
     OPENROUTER_API_KEY,
     OPENROUTER_RERANK_MODEL,
     OPENROUTER_RERANK_RPD,
     OPENROUTER_RERANK_RPM,
     OPENROUTER_RERANK_URL,
+    REDIS_ENABLED,
+    REDIS_KEY_PREFIX,
+    REDIS_URL,
     RERANK_API_TIMEOUT_SECONDS,
     RERANK_FAILURE_COOLDOWN_SECONDS,
     RERANK_MAX_DOCUMENT_CHARS,
@@ -24,41 +27,22 @@ from core.settings import (
     VOYAGE_RERANK_RPM_PER_MODEL,
     VOYAGE_RERANK_URL,
 )
+from storage.redis import RedisJsonCache
 
 LOGGER = logging.getLogger("uvicorn.error")
 
 
-class RequestWindowLimiter:
-    """Thread-safe rolling request budget for a configurable time window."""
+def _provider_rate_limit_cache():
+    if not REDIS_ENABLED:
+        return None
+    try:
+        return RedisJsonCache(REDIS_URL, REDIS_KEY_PREFIX)
+    except RuntimeError as exc:
+        LOGGER.warning("%s Provider limits will use process memory.", exc)
+        return None
 
-    def __init__(
-        self,
-        requests_per_window: int,
-        *,
-        window_seconds: float = 60,
-        clock=time.monotonic,
-    ):
-        if requests_per_window <= 0 or window_seconds <= 0:
-            raise ValueError("request budget and window must be greater than zero")
-        self.requests_per_window = requests_per_window
-        self.window_seconds = window_seconds
-        self.clock = clock
-        self._requests = deque()
-        self._lock = threading.Lock()
 
-    def allow(self) -> tuple[bool, float]:
-        now = self.clock()
-        cutoff = now - self.window_seconds
-        with self._lock:
-            while self._requests and self._requests[0] <= cutoff:
-                self._requests.popleft()
-            if len(self._requests) >= self.requests_per_window:
-                return False, max(
-                    self.window_seconds - (now - self._requests[0]),
-                    0,
-                )
-            self._requests.append(now)
-            return True, 0.0
+PROVIDER_RATE_LIMIT_CACHE = _provider_rate_limit_cache()
 
 
 class SharedReranker:
@@ -102,6 +86,8 @@ class HostedReranker:
         requests_per_minute: int | None = None,
         requests_per_day: int | None = None,
         clock=time.monotonic,
+        redis_cache=None,
+        rate_limit_scope: str | None = None,
     ):
         self.name = name
         self.url = url
@@ -115,6 +101,12 @@ class HostedReranker:
                 RequestWindowLimiter(
                     requests_per_minute,
                     clock=clock,
+                    redis_cache=redis_cache,
+                    scope=(
+                        f"{rate_limit_scope}:minute"
+                        if rate_limit_scope
+                        else None
+                    ),
                 )
             )
         if requests_per_day is not None:
@@ -123,6 +115,12 @@ class HostedReranker:
                     requests_per_day,
                     window_seconds=86400,
                     clock=clock,
+                    redis_cache=redis_cache,
+                    scope=(
+                        f"{rate_limit_scope}:day"
+                        if rate_limit_scope
+                        else None
+                    ),
                 )
             )
         self.clock = clock
@@ -364,6 +362,8 @@ def load_reranker():
                         requests_per_minute=(
                             VOYAGE_RERANK_RPM_PER_MODEL
                         ),
+                        redis_cache=PROVIDER_RATE_LIMIT_CACHE,
+                        rate_limit_scope=f"reranker:voyage:{model}",
                     )
                 )
             else:
@@ -380,6 +380,10 @@ def load_reranker():
                         model=OPENROUTER_RERANK_MODEL,
                         requests_per_minute=OPENROUTER_RERANK_RPM,
                         requests_per_day=OPENROUTER_RERANK_RPD,
+                        redis_cache=PROVIDER_RATE_LIMIT_CACHE,
+                        rate_limit_scope=(
+                            f"reranker:openrouter:{OPENROUTER_RERANK_MODEL}"
+                        ),
                     )
                 )
             else:

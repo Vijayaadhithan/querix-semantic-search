@@ -105,6 +105,22 @@ GROQ_TIMEOUT_SECONDS = float(os.getenv("GROQ_TIMEOUT_SECONDS", "5"))
 if GROQ_TIMEOUT_SECONDS <= 0:
     raise ValueError("GROQ_TIMEOUT_SECONDS must be greater than zero.")
 QUERY_EXTRACT_CONFIG = CONFIG.get("query_extraction", {})
+GROQ_QUERY_RPM = int(
+    os.getenv(
+        "GROQ_QUERY_RPM",
+        str(QUERY_EXTRACT_CONFIG.get("groq_requests_per_minute", 10)),
+    )
+)
+GEMINI_QUERY_RPM = int(
+    os.getenv(
+        "GEMINI_QUERY_RPM",
+        str(QUERY_EXTRACT_CONFIG.get("gemini_requests_per_minute", 2000)),
+    )
+)
+if GROQ_QUERY_RPM <= 0 or GEMINI_QUERY_RPM <= 0:
+    raise ValueError(
+        "GROQ_QUERY_RPM and GEMINI_QUERY_RPM must be greater than zero."
+    )
 _query_extract_models_env = os.getenv("QUERY_EXTRACT_MODELS")
 _query_extract_models = (
     [model.strip() for model in _query_extract_models_env.split(",") if model.strip()]
@@ -335,7 +351,7 @@ VOYAGE_RERANK_RPM_PER_MODEL = int(
         str(
             RERANK_PROVIDER_CONFIG.get(
                 "voyage_requests_per_minute_per_model",
-                3,
+                2000,
             )
         ),
     )

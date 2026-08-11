@@ -6,18 +6,59 @@ from urllib.parse import quote
 import requests
 from requests.adapters import HTTPAdapter
 
+from core.request_limit import RequestWindowLimiter
 from core.settings import (
     GEMINI_API_BASE_URL,
     GEMINI_API_KEY,
+    GEMINI_QUERY_RPM,
     GROQ_API_BASE_URL,
     GROQ_API_KEY,
+    GROQ_QUERY_RPM,
     GROQ_TIMEOUT_SECONDS,
     QUERY_EXTRACT_MODELS,
     QUERY_EXTRACT_TIMEOUT_SECONDS,
+    REDIS_ENABLED,
+    REDIS_KEY_PREFIX,
+    REDIS_URL,
 )
+from storage.redis import RedisJsonCache
 
 FALLBACK_HTTP_STATUSES = {408, 429, 500, 502, 503, 504}
 LOGGER = logging.getLogger("uvicorn.error")
+
+
+def _provider_rate_limit_cache():
+    if not REDIS_ENABLED:
+        return None
+    try:
+        return RedisJsonCache(REDIS_URL, REDIS_KEY_PREFIX)
+    except RuntimeError as exc:
+        LOGGER.warning("%s Query-provider limits will use process memory.", exc)
+        return None
+
+
+QUERY_PROVIDER_RATE_LIMIT_CACHE = _provider_rate_limit_cache()
+QUERY_MODEL_LIMITERS: dict[str, RequestWindowLimiter] = {}
+QUERY_MODEL_LIMITERS_LOCK = threading.Lock()
+
+
+def query_model_limiter(model: str) -> RequestWindowLimiter | None:
+    if model.startswith("groq:"):
+        requests_per_minute = GROQ_QUERY_RPM
+    elif model.startswith("gemini-"):
+        requests_per_minute = GEMINI_QUERY_RPM
+    else:
+        return None
+    with QUERY_MODEL_LIMITERS_LOCK:
+        limiter = QUERY_MODEL_LIMITERS.get(model)
+        if limiter is None:
+            limiter = RequestWindowLimiter(
+                requests_per_minute,
+                redis_cache=QUERY_PROVIDER_RATE_LIMIT_CACHE,
+                scope=f"query:{model}",
+            )
+            QUERY_MODEL_LIMITERS[model] = limiter
+        return limiter
 
 
 def pooled_http_adapter() -> HTTPAdapter:
@@ -402,6 +443,39 @@ def structured_chat(
             position,
             len(models),
         )
+        limiter = query_model_limiter(candidate_model)
+        if limiter is not None:
+            allowed, retry_after = limiter.allow()
+            if not allowed:
+                last_error = GeminiModelUnavailableError(
+                    candidate_model,
+                    reason="local_rate_limit",
+                )
+                attempt_metrics = {
+                    "load_ms": 0.0,
+                    "total_ms": 0.0,
+                    "model": candidate_model,
+                    "status": "fallback",
+                    "reason": last_error.reason,
+                    "retry_after_seconds": retry_after,
+                }
+                attempts.append(attempt_metrics)
+                DEFAULT_GEMINI_PROVIDER.last_chat_metrics = {
+                    **attempt_metrics,
+                    "total_ms": (time.perf_counter() - started) * 1000,
+                    "attempted_models": list(attempted_models),
+                    "attempts": list(attempts),
+                    "failure_reason": last_error.reason,
+                }
+                LOGGER.info(
+                    "step=query_model status=fallback model=%s reason=%s "
+                    "retry_after=%.1fs next_model=%s",
+                    candidate_model,
+                    last_error.reason,
+                    retry_after,
+                    models[position] if position < len(models) else "none",
+                )
+                continue
         try:
             content = provider.structured_chat(
                 provider_model,

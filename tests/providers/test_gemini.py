@@ -24,6 +24,18 @@ class FakeResponse:
         return self.payload
 
 
+@pytest.fixture(autouse=True)
+def isolate_query_provider_rate_limits(monkeypatch):
+    monkeypatch.setattr(
+        gemini_client,
+        "QUERY_PROVIDER_RATE_LIMIT_CACHE",
+        None,
+    )
+    gemini_client.QUERY_MODEL_LIMITERS.clear()
+    yield
+    gemini_client.QUERY_MODEL_LIMITERS.clear()
+
+
 def test_configured_query_model_fallback_order():
     assert QUERY_EXTRACT_MODELS == (
         "groq:openai/gpt-oss-20b",
@@ -378,6 +390,64 @@ def test_default_structured_chat_routes_prefixed_model_to_groq(monkeypatch):
         "groq:openai/gpt-oss-20b"
     )
     assert gemini_client.last_gemini_metrics()["provider"] == "groq"
+
+
+def test_groq_local_budget_overflow_routes_directly_to_gemini(monkeypatch):
+    class RejectingLimiter:
+        def allow(self):
+            return False, 42.5
+
+    class FakeProvider:
+        def __init__(self, content=None):
+            self.calls = []
+            self.content = content
+            self.last_chat_metrics = {}
+
+        def structured_chat(self, model, *_args):
+            self.calls.append(model)
+            self.last_chat_metrics = {"model": model, "total_ms": 1.0}
+            return self.content
+
+    groq_provider = FakeProvider()
+    gemini_provider = FakeProvider('{"query":"camera"}')
+    monkeypatch.setattr(
+        gemini_client,
+        "QUERY_EXTRACT_MODELS",
+        ("groq:openai/gpt-oss-20b", "gemini-3.1-flash-lite"),
+    )
+    monkeypatch.setattr(
+        gemini_client,
+        "DEFAULT_GROQ_PROVIDER",
+        groq_provider,
+    )
+    monkeypatch.setattr(
+        gemini_client,
+        "DEFAULT_GEMINI_PROVIDER",
+        gemini_provider,
+    )
+    monkeypatch.setattr(
+        gemini_client,
+        "query_model_limiter",
+        lambda model: RejectingLimiter() if model.startswith("groq:") else None,
+    )
+
+    content = gemini_client.structured_chat(
+        "groq:openai/gpt-oss-20b",
+        "system",
+        "user",
+        {"type": "object"},
+    )
+
+    assert content == '{"query":"camera"}'
+    assert groq_provider.calls == []
+    assert gemini_provider.calls == ["gemini-3.1-flash-lite"]
+    metrics = gemini_client.last_gemini_metrics()
+    assert metrics["attempted_models"] == [
+        "groq:openai/gpt-oss-20b",
+        "gemini-3.1-flash-lite",
+    ]
+    assert metrics["attempts"][0]["reason"] == "local_rate_limit"
+    assert metrics["attempts"][0]["retry_after_seconds"] == 42.5
 
 
 def test_provider_timeout_becomes_retryable_model_failure(monkeypatch):

@@ -332,6 +332,26 @@ def test_request_window_limiter_supports_one_request_per_second():
     assert limiter.allow() == (True, 0.0)
 
 
+def test_request_window_limiter_uses_shared_redis_budget():
+    class FakeRedisCache:
+        def __init__(self):
+            self.calls = []
+
+        def allow_request_window(self, scope, limit, window_seconds):
+            self.calls.append((scope, limit, window_seconds))
+            return False, 17.25
+
+    cache = FakeRedisCache()
+    limiter = RequestWindowLimiter(
+        10,
+        redis_cache=cache,
+        scope="query:groq:test",
+    )
+
+    assert limiter.allow() == (False, 17.25)
+    assert cache.calls == [("query:groq:test", 10, 60)]
+
+
 def test_voyage_model_budget_is_counted_independently(monkeypatch):
     calls = []
 

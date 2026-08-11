@@ -13,6 +13,10 @@ query_extraction:
     - gemini-3.1-flash-lite
     - gemma-4-26b-a4b-it
     - gemma-4-31b-it
+  # Groq is the low-latency primary. Its 11th request in any rolling minute
+  # skips directly to Gemini instead of waiting for an upstream 429.
+  groq_requests_per_minute: 10
+  gemini_requests_per_minute: 2000
   temperature: 0
   # Per-model deadline. Timeouts advance to the next configured model.
   timeout_seconds: 10
@@ -86,7 +90,7 @@ retrieval:
     max_document_chars: 300
     voyage_model: rerank-2.5
     voyage_lite_model: rerank-2.5-lite
-    voyage_requests_per_minute_per_model: 3
+    voyage_requests_per_minute_per_model: 2000
     openrouter_url: https://openrouter.ai/api/v1/rerank
     openrouter_model: nvidia/llama-nemotron-rerank-vl-1b-v2:free
     openrouter_requests_per_minute: 20

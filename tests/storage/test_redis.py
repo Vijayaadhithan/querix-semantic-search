@@ -23,6 +23,10 @@ class FakeRedisClient:
     def close(self):
         self.closed = True
 
+    def eval(self, script, number_of_keys, *args):
+        self.eval_call = (script, number_of_keys, args)
+        return [0, 12500]
+
 
 def test_redis_json_cache_round_trip(monkeypatch):
     client = FakeRedisClient()
@@ -59,3 +63,26 @@ def test_redis_failure_enters_cooldown_instead_of_raising(monkeypatch):
     assert cache.connected is False
     assert cache.get_json("plans", "digest") is None
     assert cache.set_json("plans", "digest", {"value": 1}, 30) is False
+
+
+def test_redis_request_window_returns_retry_seconds(monkeypatch):
+    client = FakeRedisClient()
+    monkeypatch.setattr(
+        redis_cache.redis.Redis,
+        "from_url",
+        lambda *_args, **_kwargs: client,
+    )
+    cache = RedisJsonCache("redis://localhost:6379/0", "test")
+
+    assert cache.allow_request_window("query:groq", 10, 60) == (
+        False,
+        12.5,
+    )
+    _script, number_of_keys, args = client.eval_call
+    assert number_of_keys == 2
+    assert args == (
+        "test:provider_rate_limit:query:groq",
+        "test:provider_rate_limit:query:groq:sequence",
+        10,
+        60000,
+    )

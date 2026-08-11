@@ -39,6 +39,33 @@ redis.call('PEXPIRE', key, ttl_ms)
 return {allowed, math.floor(tokens)}
 """
 
+SLIDING_WINDOW_SCRIPT = """
+local key = KEYS[1]
+local sequence_key = KEYS[2]
+local limit = tonumber(ARGV[1])
+local window_ms = tonumber(ARGV[2])
+local current_time = redis.call('TIME')
+local now_ms = (tonumber(current_time[1]) * 1000) + math.floor(tonumber(current_time[2]) / 1000)
+local cutoff_ms = now_ms - window_ms
+redis.call('ZREMRANGEBYSCORE', key, '-inf', cutoff_ms)
+local count = redis.call('ZCARD', key)
+if count >= limit then
+  local oldest = redis.call('ZRANGE', key, 0, 0, 'WITHSCORES')
+  local retry_ms = window_ms
+  if oldest[2] ~= nil then
+    retry_ms = math.max(window_ms - (now_ms - tonumber(oldest[2])), 0)
+  end
+  redis.call('PEXPIRE', key, window_ms)
+  return {0, retry_ms}
+end
+local sequence = redis.call('INCR', sequence_key)
+local member = tostring(now_ms) .. ':' .. tostring(sequence)
+redis.call('ZADD', key, now_ms, member)
+redis.call('PEXPIRE', key, window_ms)
+redis.call('PEXPIRE', sequence_key, window_ms)
+return {1, 0}
+"""
+
 
 class RedisJsonCache:
     """Small resilient Redis JSON cache with a failure cooldown."""
@@ -169,6 +196,34 @@ class RedisJsonCache:
         if not isinstance(result, (list, tuple)) or len(result) != 2:
             return None
         return bool(int(result[0])), int(result[1])
+
+    def allow_request_window(
+        self,
+        scope: str,
+        requests_per_window: int,
+        window_seconds: float = 60,
+    ) -> tuple[bool, float] | None:
+        """Atomically enforce a rolling request window across API workers."""
+        if not self._can_attempt():
+            return None
+        window_ms = max(int(window_seconds * 1000), 1)
+        key = self._key("provider_rate_limit", scope)
+        try:
+            result = self._client.eval(
+                SLIDING_WINDOW_SCRIPT,
+                2,
+                key,
+                f"{key}:sequence",
+                requests_per_window,
+                window_ms,
+            )
+            self._mark_success()
+        except (RedisError, OSError, TypeError, ValueError) as exc:
+            self._mark_failure("provider_rate_limit", exc)
+            return None
+        if not isinstance(result, (list, tuple)) or len(result) != 2:
+            return None
+        return bool(int(result[0])), max(float(result[1]) / 1000, 0.0)
 
     def close(self) -> None:
         self._client.close()
