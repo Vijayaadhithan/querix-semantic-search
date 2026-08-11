@@ -11,7 +11,12 @@ from core.tenant_config import discover_tenant_profiles
 from search.bm25 import PersistentBM25Index
 from search.engine import ProductSearchEngine
 from search.retrieval import extract_product_ids
-from storage.mysql import mysql_connection, quote_mysql_identifier
+from storage.mysql import (
+    MySQLRuntimeConfig,
+    mysql_active_condition,
+    mysql_connection,
+    quote_mysql_identifier,
+)
 from storage.postgres import (
     PostgresRuntimeConfig,
     postgres_connection,
@@ -137,6 +142,9 @@ def matching_ids_from_search_table(
         f"{quote_identifier(config, config.search_id_column)} "
         f"IN ({placeholders})"
     ]
+    if isinstance(config, MySQLRuntimeConfig):
+        if active_condition := mysql_active_condition(config):
+            clauses.insert(0, active_condition)
     params: list = list(result_ids)
     for column, expected in filters.items():
         clause, clause_params = source_filter_clause(

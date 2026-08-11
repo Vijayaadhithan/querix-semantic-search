@@ -248,6 +248,13 @@ def _identifier(section: dict[str, Any], key: str, default: str) -> str:
     return value
 
 
+def _optional_identifier(section: dict[str, Any], key: str) -> str:
+    value = str(section.get(key, "")).strip()
+    if "\x00" in value:
+        raise ValueError(f"Database identifier {key!r} is invalid")
+    return value
+
+
 def load_tenant_profile(path: Path) -> TenantProfile:
     path = path.resolve()
     raw = _read_yaml(path)
@@ -411,7 +418,10 @@ def load_tenant_profile(path: Path) -> TenantProfile:
             schema=_identifier(database, "schema", "public"),
         )
         if backend == "postgres"
-        else MySQLRuntimeConfig(**common_database_values)
+        else MySQLRuntimeConfig(
+            **common_database_values,
+            active_column=_optional_identifier(database, "active_column"),
+        )
     )
     if not mysql.database:
         raise ValueError(

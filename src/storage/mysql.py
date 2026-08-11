@@ -33,6 +33,9 @@ class MySQLRuntimeConfig:
     result_table: str
     result_id_column: str
     result_type_column: str = "type"
+    # Optional logical-deletion marker on the search-ready table. When set,
+    # every ingestion read only sees the current authoritative snapshot.
+    active_column: str = ""
     connect_timeout_seconds: int = 10
     read_timeout_seconds: int = 300
     write_timeout_seconds: int = 300
@@ -173,6 +176,18 @@ def quote_mysql_identifier(identifier: str) -> str:
     return f"`{identifier.replace('`', '``')}`"
 
 
+def mysql_active_condition(
+    config: MySQLRuntimeConfig,
+    *,
+    table_alias: str = "",
+) -> str:
+    """Return the configured active-row predicate, or an empty string."""
+    if not config.active_column:
+        return ""
+    prefix = f"{quote_mysql_identifier(table_alias)}." if table_alias else ""
+    return f"{prefix}{quote_mysql_identifier(config.active_column)} = 1"
+
+
 def mysql_source_name(config: MySQLRuntimeConfig | None = None) -> str:
     config = resolved_mysql_config(config)
     namespace = config.index_namespace or config.database
@@ -235,7 +250,13 @@ def count_mysql_rows(
     table = table or config.search_table
     pymysql = require_pymysql()
     quoted_content = quote_mysql_identifier(content_column)
-    where_clause = f"{quoted_content} IS NOT NULL AND TRIM({quoted_content}) <> ''"
+    conditions = [
+        f"{quoted_content} IS NOT NULL",
+        f"TRIM({quoted_content}) <> ''",
+    ]
+    if active_condition := mysql_active_condition(config):
+        conditions.insert(0, active_condition)
+    where_clause = " AND ".join(conditions)
     with mysql_connection(
         cursorclass=pymysql.cursors.DictCursor,
         config=config,
@@ -284,6 +305,8 @@ def iter_mysql_rows(
             f"{quoted_content} IS NOT NULL",
             f"TRIM({quoted_content}) <> ''",
         ]
+        if active_condition := mysql_active_condition(config):
+            conditions.insert(0, active_condition)
         params: list[Any] = []
         if quoted_primary_key and has_last_primary_key:
             conditions.append(f"{quoted_primary_key} > %s")

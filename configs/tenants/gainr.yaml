@@ -112,6 +112,9 @@ database:
   user_env: MYSQL_USER
   password_env: MYSQL_PASSWORD
   search_ready_table: ads_search_ready
+  # The ETL reconciles this stable table in place. The database account cannot
+  # DELETE rows, so inactive rows must be excluded from every backend read.
+  active_column: is_search_active
   content_column: embedding_content
   bm25_column: bm25_content
   search_id_column: id

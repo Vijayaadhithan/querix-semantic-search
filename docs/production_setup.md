@@ -163,6 +163,12 @@ as its stable namespace. A transferred local index must be re-keyed with the
 namespace-migration command; this preserves embeddings and avoids a full
 recalculation. Do not change the namespace without another explicit migration.
 
+For a MySQL search-ready table that reconciles removed source rows logically,
+set `database.active_column` to its Boolean marker (for example,
+`is_search_active`). Ingestion, catalogue hydration, and retrieval evaluation
+then read only rows where that column is `1`. Leave the setting absent for
+physical-snapshot tables that do not use logical reconciliation.
+
 Tenant query behavior belongs in `configs/tenants/<company>.yaml`:
 
 ```yaml

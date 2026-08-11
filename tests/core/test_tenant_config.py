@@ -25,6 +25,7 @@ database:
   user_env: {prefix}_DB_USER
   password_env: {prefix}_DB_PASSWORD
   search_ready_table: search_ready
+  active_column: is_search_active
   content_column: embedding_content
   bm25_column: bm25_content
   search_id_column: id
@@ -128,6 +129,7 @@ def test_tenant_profiles_resolve_separate_storage_and_api_keys(
     assert profiles["alpha"].payload.request_mapping["query"] == "query"
     assert profiles["alpha"].database.connect_timeout_seconds == 7
     assert profiles["alpha"].database.read_timeout_seconds == 31
+    assert profiles["alpha"].database.active_column == "is_search_active"
     assert profiles["alpha"].database.write_timeout_seconds == 32
     assert profiles["alpha"].database.statement_timeout_ms == 9000
     assert profiles["alpha"].database.pool_min_size == 1

@@ -40,6 +40,7 @@ def profile(tmp_path, **compatibility_overrides):
             search_id_column="id",
             result_table="ads",
             result_id_column="id",
+            active_column="is_search_active",
         ),
         storage=TenantStorageConfig(
             bm25_path=tmp_path / "bm25.sqlite3",
@@ -649,9 +650,11 @@ def test_ranked_page_query_preserves_order_total_and_relations(
     ]
     assert rows[1]["__ads_attributes"] == []
     assert "AS __search_id" in executions[0][0]
+    assert "`sr`.`is_search_active` = 1" in executions[0][0]
     assert "COUNT(*) OVER ()" not in executions[0][0]
     assert executions[0][1] == (456, "1", 2, 1)
     assert executions[1][1] == (2, 1)
+    assert "`sr`.`is_search_active` = 1" in executions[1][0]
     assert executions[2][1] == (2, 1)
 
 
@@ -842,6 +845,7 @@ def test_gainr_repository_does_not_filter_ad_status(tmp_path):
     )
 
     assert "a.status" not in where_clause
+    assert "`sr`.`is_search_active` = 1" in where_clause
     assert params == ["1"]
 
 

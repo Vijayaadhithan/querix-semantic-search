@@ -273,7 +273,7 @@ def test_mysql_paged_iterator_closes_connection_before_yield(monkeypatch):
     iterator = mysql_store.iter_mysql_rows(
         "embedding_content",
         "id",
-        config=mysql_config(),
+        config=mysql_config(active_column="is_search_active"),
         fetch_batch_size=2,
     )
 
@@ -287,6 +287,7 @@ def test_mysql_paged_iterator_closes_connection_before_yield(monkeypatch):
         next(iterator)
 
     assert "LIMIT %s" in executions[0][0]
+    assert "`is_search_active` = 1" in executions[0][0]
     assert executions[0][1] == [2]
     assert "`id` > %s" in executions[1][0]
     assert executions[1][1] == [2, 2]

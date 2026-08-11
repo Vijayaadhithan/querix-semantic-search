@@ -7,6 +7,7 @@ from typing import Any
 from core.tenant_config import TenantProfile
 from storage.mysql import (
     MySQLRuntimeConfig,
+    mysql_active_condition,
     mysql_connection,
     quote_mysql_identifier,
     require_pymysql,
@@ -40,6 +41,21 @@ class GainrDatabaseRepository:
         )
         self.users_table = quote_mysql_identifier(
             self.profile.compatibility.users_table
+        )
+        self.search_active_condition = mysql_active_condition(self.config)
+        self.search_active_qualified_condition = mysql_active_condition(
+            self.config,
+            table_alias="sr",
+        )
+        self.search_active_filter = (
+            f"AND {self.search_active_condition}"
+            if self.search_active_condition
+            else ""
+        )
+        self.search_active_qualified_filter = (
+            f"AND {self.search_active_qualified_condition}"
+            if self.search_active_qualified_condition
+            else ""
         )
         self._users_table_available: bool | None = None
 
@@ -99,6 +115,7 @@ class GainrDatabaseRepository:
                     SELECT DISTINCT rental_duration
                     FROM {self.search_table}
                     WHERE city_id = %s
+                      {self.search_active_filter}
                       AND rental_duration IS NOT NULL
                       AND TRIM(rental_duration) <> ''
                     """,
@@ -168,6 +185,8 @@ class GainrDatabaseRepository:
         conditions = [
             "(a.deleted_at IS NULL OR TRIM(a.deleted_at) = '')"
         ]
+        if self.search_active_qualified_condition:
+            conditions.insert(0, self.search_active_qualified_condition)
         params: list[Any] = []
         column_map = {
             "main_category_name": "sr.main_category_name",
@@ -450,6 +469,7 @@ class GainrDatabaseRepository:
                         FROM {self.search_table} AS sr
                         JOIN {self.result_table} AS a ON a.id = sr.id
                         WHERE sr.id IN ({page_placeholders})
+                          {self.search_active_qualified_filter}
                         """,
                         page_ids,
                     )
