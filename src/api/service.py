@@ -836,7 +836,11 @@ class ProductSearchService:
                     model=model,
                     operation="query_planning",
                     status=str(attempt.get("status") or "success"),
-                    api_calls=0 if reason == "missing_api_key" else 1,
+                    api_calls=(
+                        0
+                        if reason in {"missing_api_key", "local_rate_limit"}
+                        else 1
+                    ),
                     input_tokens=int(attempt.get("input_tokens", 0) or 0),
                     output_tokens=int(attempt.get("output_tokens", 0) or 0),
                     thought_tokens=int(attempt.get("thought_tokens", 0) or 0),

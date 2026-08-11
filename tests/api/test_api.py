@@ -1057,6 +1057,43 @@ def test_search_analytics_records_route_provider_calls_and_user_context():
     ]
 
 
+def test_search_analytics_does_not_count_locally_skipped_provider_calls():
+    analytics = CaptureAnalyticsStore()
+    service = ProductSearchService(
+        FakeEngine(),
+        company_id="gainr",
+        analytics_store=analytics,
+    )
+    result = {
+        "query_plan": {"execution_path": "semantic"},
+        "query_model_metrics": {
+            "attempts": [
+                {
+                    "model": "groq:openai/gpt-oss-20b",
+                    "status": "fallback",
+                    "reason": "local_rate_limit",
+                },
+                {
+                    "model": "gemini-3.1-flash-lite",
+                    "status": "success",
+                },
+            ]
+        },
+    }
+
+    service.record_search_analytics(
+        "family car",
+        result,
+        duration_ms=1000,
+        result_count=20,
+        total_results=80,
+    )
+
+    event = analytics.events[0]
+    assert [item.api_calls for item in event.api_usage] == [0, 1]
+    assert event.api_call_count == 1
+
+
 def test_search_records_full_server_workflow_duration_and_stages():
     analytics = CaptureAnalyticsStore()
     service = ProductSearchService(
