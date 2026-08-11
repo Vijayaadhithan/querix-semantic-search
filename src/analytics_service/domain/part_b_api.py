@@ -412,7 +412,7 @@ def process_part_b(data):
 
     # Q33: Failure reasons
     results["q33_failure_reasons"] = {
-        "labels": [r for r in failure_reasons.keys() if r],
+        "labels": [r for r in failure_reasons if r],
         "values": [v for r, v in failure_reasons.items() if r],
         "title": "Failure/Fallback Reasons",
         "chart_type": "bar",

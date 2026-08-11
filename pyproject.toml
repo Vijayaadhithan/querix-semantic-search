@@ -46,9 +46,15 @@ select = [
     "F",
     "I",
     "RUF100",
-    "SIM",
+    "SIM102",
+    "SIM103",
+    "SIM105",
+    "SIM108",
+    "SIM114",
+    "SIM118",
     "UP",
 ]
 
 [tool.ruff.lint.per-file-ignores]
 "scripts/*.py" = ["E402"]
+"src/storage/redis.py" = ["E501"]

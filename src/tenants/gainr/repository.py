@@ -485,36 +485,6 @@ class GainrDatabaseRepository:
         )
         return rows, total
 
-    def filter_product_ids(
-        self,
-        product_ids: list[Any],
-        resolved_filters: dict,
-        request_filter: GainrSearchFilter,
-        allowed_ad_types: set[str] | None,
-    ) -> list[Any]:
-        """Return eligible IDs in semantic rank order without hydrating cards."""
-        if not product_ids:
-            return []
-        where_clause, params = self._where_clause(
-            resolved_filters,
-            request_filter,
-            product_ids=product_ids,
-            allowed_ad_types=allowed_ad_types,
-        )
-        with self.connection() as connection, connection.cursor() as cursor:
-            search_id = quote_mysql_identifier(self.config.search_id_column)
-            cursor.execute(
-                f"""
-                    SELECT sr.{search_id} AS __search_id
-                    FROM {self.search_table} AS sr
-                    JOIN {self.result_table} AS a ON a.id = sr.id
-                    WHERE {where_clause}
-                    """,
-                params,
-            )
-            eligible = {str(row["__search_id"]) for row in cursor.fetchall()}
-        return [product_id for product_id in product_ids if str(product_id) in eligible]
-
     def _attach_attributes(
         self,
         rows: list[dict],

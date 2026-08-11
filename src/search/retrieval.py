@@ -51,9 +51,7 @@ def metadata_matches_filters(
         return include_unpriced
     if minimum is not None and rental_fee < minimum:
         return False
-    if maximum is not None and rental_fee > maximum:
-        return False
-    return True
+    return not (maximum is not None and rental_fee > maximum)
 
 
 def vector_where_filter(

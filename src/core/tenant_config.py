@@ -312,43 +312,43 @@ def load_tenant_profile(path: Path) -> TenantProfile:
         )
     except ValueError as exc:
         raise ValueError(f"Tenant {company_id!r} has an invalid database port") from exc
-    common_database_values = dict(
-        host=_env_value(
+    common_database_values = {
+        "host": _env_value(
             database,
             "host_env",
             f"{default_prefix}_HOST",
             default="localhost",
         ),
-        port=port,
-        database=_env_value(
+        "port": port,
+        "database": _env_value(
             database,
             "database_env",
             f"{default_prefix}_DATABASE",
         ),
-        user=_env_value(database, "user_env", f"{default_prefix}_USER"),
-        password=_env_value(
+        "user": _env_value(database, "user_env", f"{default_prefix}_USER"),
+        "password": _env_value(
             database,
             "password_env",
             f"{default_prefix}_PASSWORD",
         ),
-        search_table=_identifier(database, "search_ready_table", "ads_search_ready"),
-        content_column=_identifier(database, "content_column", "embedding_content"),
-        bm25_column=_identifier(database, "bm25_column", "bm25_content"),
-        search_id_column=_identifier(database, "search_id_column", "id"),
-        result_table=_identifier(database, "result_table", "ads"),
-        result_id_column=_identifier(database, "result_id_column", "id"),
-        result_type_column=_identifier(database, "result_type_column", "type"),
-        connect_timeout_seconds=int(timeouts.get("connect_seconds", 10)),
-        read_timeout_seconds=int(timeouts.get("read_seconds", 300)),
-        write_timeout_seconds=int(timeouts.get("write_seconds", 300)),
-        statement_timeout_ms=int(timeouts.get("statement_timeout_ms", 0)),
-        pool_min_size=int(pool.get("min_size", 0)),
-        pool_max_size=int(pool.get("max_size", 4)),
-        pool_timeout_seconds=float(pool.get("timeout_seconds", 5)),
-        pool_validation_interval_seconds=float(
+        "search_table": _identifier(database, "search_ready_table", "ads_search_ready"),
+        "content_column": _identifier(database, "content_column", "embedding_content"),
+        "bm25_column": _identifier(database, "bm25_column", "bm25_content"),
+        "search_id_column": _identifier(database, "search_id_column", "id"),
+        "result_table": _identifier(database, "result_table", "ads"),
+        "result_id_column": _identifier(database, "result_id_column", "id"),
+        "result_type_column": _identifier(database, "result_type_column", "type"),
+        "connect_timeout_seconds": int(timeouts.get("connect_seconds", 10)),
+        "read_timeout_seconds": int(timeouts.get("read_seconds", 300)),
+        "write_timeout_seconds": int(timeouts.get("write_seconds", 300)),
+        "statement_timeout_ms": int(timeouts.get("statement_timeout_ms", 0)),
+        "pool_min_size": int(pool.get("min_size", 0)),
+        "pool_max_size": int(pool.get("max_size", 4)),
+        "pool_timeout_seconds": float(pool.get("timeout_seconds", 5)),
+        "pool_validation_interval_seconds": float(
             pool.get("validation_interval_seconds", 30)
         ),
-        tls_mode=_env_value(
+        "tls_mode": _env_value(
             tls,
             "mode_env",
             f"{default_prefix}_TLS_MODE",
@@ -361,28 +361,28 @@ def load_tenant_profile(path: Path) -> TenantProfile:
         )
         .strip()
         .casefold(),
-        tls_ca_file=_env_value(
+        "tls_ca_file": _env_value(
             tls,
             "ca_file_env",
             f"{default_prefix}_TLS_CA_FILE",
         ),
-        tls_cert_file=_env_value(
+        "tls_cert_file": _env_value(
             tls,
             "cert_file_env",
             f"{default_prefix}_TLS_CERT_FILE",
         ),
-        tls_key_file=_env_value(
+        "tls_key_file": _env_value(
             tls,
             "key_file_env",
             f"{default_prefix}_TLS_KEY_FILE",
         ),
-        index_namespace=_env_value(
+        "index_namespace": _env_value(
             database,
             "index_namespace_env",
             f"{default_prefix}_INDEX_NAMESPACE",
             default=str(database.get("index_namespace", "")),
         ).strip(),
-    )
+    }
     mysql = (
         PostgresRuntimeConfig(
             **common_database_values,

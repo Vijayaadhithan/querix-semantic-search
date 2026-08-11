@@ -15,10 +15,6 @@ def ingestion_state_path(bm25_path: Path | str) -> Path:
     return Path(bm25_path).parent / ".ingestion-state.json"
 
 
-def ingestion_manifest_path(bm25_path: Path | str) -> Path:
-    return Path(bm25_path).parent / "ingestion-manifest.json"
-
-
 def read_ingestion_state(path: Path | str | None) -> dict[str, Any] | None:
     if path is None:
         return None

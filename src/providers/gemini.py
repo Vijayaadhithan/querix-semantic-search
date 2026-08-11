@@ -1,3 +1,4 @@
+import contextlib
 import logging
 import threading
 import time
@@ -332,10 +333,8 @@ class GroqProvider:
             )
             for key, value in (payload.get("metadata") or {}).items():
                 if key.endswith("_time"):
-                    try:
+                    with contextlib.suppress(TypeError, ValueError):
                         metrics[f"groq_{key}_ms"] = float(value) * 1000
-                    except (TypeError, ValueError):
-                        pass
             return strip_json_fence(self._output_text(payload))
         except requests.HTTPError as exc:
             status_code = exc.response.status_code if exc.response is not None else 0

@@ -135,9 +135,10 @@ def matching_ids_from_search_table(
     clauses = [
         f"{quote_identifier(config, config.search_id_column)} IN ({placeholders})"
     ]
-    if isinstance(config, MySQLRuntimeConfig):
-        if active_condition := mysql_active_condition(config):
-            clauses.insert(0, active_condition)
+    if isinstance(config, MySQLRuntimeConfig) and (
+        active_condition := mysql_active_condition(config)
+    ):
+        clauses.insert(0, active_condition)
     params: list = list(result_ids)
     for column, expected in filters.items():
         clause, clause_params = source_filter_clause(

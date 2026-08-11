@@ -210,7 +210,9 @@ def fetch_relevant_ids(config, filters: dict[str, Any], limit: int) -> list[str]
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Generate labelled Gainr semantic retrieval cases from live DB rows."
+        description=(
+            "Generate labelled Gainr semantic retrieval cases from live DB rows."
+        )
     )
     parser.add_argument("--company", default="gainr")
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)

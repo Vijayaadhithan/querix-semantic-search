@@ -943,7 +943,8 @@ class PgVectorCollection:
                     for key, value in (where or {}).items():
                         conditions.append("metadata ->> %s = %s")
                         params.extend((str(key), str(value)))
+                    delete_conditions = " AND ".join(conditions)
                     cursor.execute(
-                        f"DELETE FROM {self._qualified()} WHERE {' AND '.join(conditions)}",
+                        f"DELETE FROM {self._qualified()} WHERE {delete_conditions}",
                         params,
                     )

@@ -40,7 +40,7 @@ __all__ = [
 
 
 def parse_attempts_json(value: Any) -> list[dict[str, Any]]:
-    """Parse provider-attempt telemetry without allowing malformed rows to fail a build."""
+    """Parse provider attempts without letting malformed rows fail a build."""
     if value is None or (not isinstance(value, (str, list)) and pd.isna(value)):
         return []
     if isinstance(value, list):

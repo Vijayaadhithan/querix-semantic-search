@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import math
@@ -884,10 +885,8 @@ class MySQLSearchAnalyticsStore:
                         self._write(connection, item)
                     except Exception as exc:
                         if connection is not None:
-                            try:
+                            with contextlib.suppress(Exception):
                                 connection.close()
-                            except Exception:
-                                pass
                             connection = None
                         if attempt == 0:
                             continue
@@ -905,10 +904,8 @@ class MySQLSearchAnalyticsStore:
             finally:
                 self._queue.task_done()
                 if item is _STOP and connection is not None:
-                    try:
+                    with contextlib.suppress(Exception):
                         connection.close()
-                    except Exception:
-                        pass
 
     def _write(self, connection, event: SearchAnalyticsEvent) -> None:
         write_search_analytics_events(

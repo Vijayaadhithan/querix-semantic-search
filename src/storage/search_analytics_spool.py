@@ -7,7 +7,7 @@ import queue
 import sqlite3
 import threading
 import time
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -149,10 +149,8 @@ def _connect_spool(path: Path) -> sqlite3.Connection:
         """
     )
     connection.commit()
-    try:
+    with suppress(OSError):
         os.chmod(path, 0o600)
-    except OSError:
-        pass
     return connection
 
 

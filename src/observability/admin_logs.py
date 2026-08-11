@@ -133,10 +133,7 @@ class AdminLogBuffer(logging.Handler):
             if LOG_LEVELS.get(event["level"], logging.INFO) >= threshold
             and (after_id is None or event["id"] > after_id)
         ]
-        if after_id is None:
-            selected = eligible[-limit:]
-        else:
-            selected = eligible[:limit]
+        selected = eligible[-limit:] if after_id is None else eligible[:limit]
         latest_id = events[-1]["id"] if events else 0
         oldest_id = events[0]["id"] if events else 0
         next_after_id = (

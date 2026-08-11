@@ -60,7 +60,7 @@ def process_part_c(data):
     # Q49: Search-to-listing ratio (simplified — top categories)
     results["q49_search_to_listing"] = {
         "note": "Cross-reference with Part A Q1 categories",
-        "supply_data": {k: v for k, v in list(cat_supply.items())[:15]},
+        "supply_data": dict(list(cat_supply.items())[:15]),
         "title": "Supply Volume per Category",
         "chart_type": "comparison_table",
     }

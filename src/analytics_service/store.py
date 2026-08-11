@@ -523,7 +523,8 @@ class AnalyticsSnapshotStore:
                         if key == "source_rows_json" and run[key]
                         else run[key]
                     )
-                    for key in run.keys()
+                    # sqlite3.Row iterates values; keys() is required here.
+                    for key in run.keys()  # noqa: SIM118
                 }
                 if run is not None
                 else None

@@ -4,7 +4,6 @@ import threading
 import time
 from contextlib import contextmanager
 from queue import Empty, LifoQueue
-from typing import TypeAlias
 
 from storage.mysql import (
     DEFAULT_MYSQL_CONFIG,
@@ -35,7 +34,7 @@ from storage.postgres import (
     postgres_source_name,
 )
 
-DatabaseRuntimeConfig: TypeAlias = MySQLRuntimeConfig | PostgresRuntimeConfig
+type DatabaseRuntimeConfig = MySQLRuntimeConfig | PostgresRuntimeConfig
 
 
 class DatabaseConnectionPool:
@@ -202,7 +201,7 @@ class DatabaseConnectionPool:
                 if remaining <= 0:
                     raise TimeoutError(
                         "Timed out waiting for a tenant database connection"
-                    )
+                    ) from None
                 try:
                     connection = self._idle.get(timeout=remaining)
                 except Empty as exc:

@@ -368,7 +368,8 @@ def _ingest_mysql_source(
         if not upsert_documents:
             bm25_index.upsert(bm25_rows)
             print(
-                f"  Rows {batch_start}-{batch_end}/{total_label} unchanged for embeddings; "
+                f"  Rows {batch_start}-{batch_end}/{total_label} "
+                "unchanged for embeddings; "
                 f"metadata-updated {len(metadata_only_ids)}.",
                 flush=True,
             )
@@ -471,7 +472,8 @@ def _ingest_mysql_source(
         f"\n{database_backend(mysql_config).title()} ingestion complete. "
         f"Indexed/updated {indexed} rows; "
         f"metadata-updated {metadata_updated} rows; "
-        f"skipped unchanged {skipped_current} rows; skipped empty {skipped_empty} rows. "
+        f"skipped unchanged {skipped_current} rows; "
+        f"skipped empty {skipped_empty} rows. "
         f"Collection contains {collection.count()} chunks. "
         f"BM25 index contains {bm25_count} products."
     )

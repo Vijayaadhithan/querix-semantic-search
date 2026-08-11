@@ -759,7 +759,7 @@ class ProductSearchEngine(SearchEngineSupportMixin, SearchRankingMixin):
                 query_plan["target_ad_type"],
                 catalogue_tail_limit,
                 exclude_doc_ids={result["id"] for result in excluded_candidates},
-                exclude_product_ids=set((*primary_product_ids, *hybrid_product_ids)),
+                exclude_product_ids={*primary_product_ids, *hybrid_product_ids},
                 type_fetcher=self._fetch_product_types,
                 sort_order=query_plan.get("sort_order"),
                 allowed_ad_types=allowed_ad_types,

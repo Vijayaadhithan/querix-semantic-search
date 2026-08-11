@@ -97,7 +97,9 @@ def main() -> None:
         "--embed-batch-size",
         type=int,
         default=EMBED_BATCH_SIZE,
-        help=f"texts to send per Ollama embedding request (default: {EMBED_BATCH_SIZE})",
+        help=(
+            f"texts to send per Ollama embedding request (default: {EMBED_BATCH_SIZE})"
+        ),
     )
     parser.add_argument(
         "--mysql-primary-key",

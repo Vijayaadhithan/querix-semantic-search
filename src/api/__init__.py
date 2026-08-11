@@ -1,17 +1,12 @@
 import hashlib
 import hmac
 import logging
-import threading
 import time
 from collections.abc import Callable
-from contextlib import asynccontextmanager
-from datetime import UTC, datetime, timezone
 from typing import Any
 
-import requests
 from fastapi import FastAPI, Header, HTTPException, Query, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 
 from api.contracts import (
@@ -30,6 +25,8 @@ from api.contracts import (
     encode_cursor,
     process_monitor_status,
 )
+from api.lifecycle import build_lifespan
+from api.readiness import readiness_response
 from api.service import (
     ProductSearchService,
     product_is_visible,
@@ -39,30 +36,13 @@ from api.tenants import TenantServicePool
 from core.rate_limit import TenantRateLimiter
 from core.settings import (
     API_ADMIN_KEY,
-    API_ADMIN_LOG_BUFFER_SIZE,
-    API_AUTH_ENABLED,
     API_CORS_ORIGINS,
-    API_PRELOAD_EMBEDDING,
-    API_PRELOAD_RERANKER,
     API_RATE_LIMIT_ENABLED,
-    API_READINESS_CACHE_SECONDS,
-    API_TENANT_CONFIG_DIR,
-    API_TENANT_ENGINE_CACHE_SIZE,
     APP_NAME,
-    EMBED_MODEL,
-    OLLAMA_BASE_URL,
-    REDIS_ENABLED,
-    REDIS_KEY_PREFIX,
-    REDIS_URL,
-    RERANK_MODEL,
-    USAGE_DB_PATH,
-    USAGE_TRACKING_ENABLED,
 )
-from core.tenant_config import TenantProfile, TenantRegistry, load_tenant_registry
-from observability.admin_logs import LOG_LEVELS, AdminLogBuffer
-from providers.ollama import preload_ollama_embedding
+from core.tenant_config import TenantProfile, TenantRegistry
+from observability.admin_logs import LOG_LEVELS
 from search.engine import ProductSearchEngine
-from storage.redis import create_redis_cache
 from storage.usage import MonthlyUsageStore
 from storage.vector import get_tenant_vector_collection
 
@@ -104,153 +84,16 @@ def create_app(
     preload_models: bool | None = None,
     usage_store: MonthlyUsageStore | None = None,
 ) -> FastAPI:
-    @asynccontextmanager
-    async def lifespan(application: FastAPI):
-        engine = None
-        pool = None
-        redis_cache = None
-        active_usage_store = usage_store
-        owns_usage_store = False
-        if active_usage_store is None and USAGE_TRACKING_ENABLED:
-            active_usage_store = MonthlyUsageStore(USAGE_DB_PATH)
-            owns_usage_store = True
-        application.state.usage_store = active_usage_store
-        application.state.check_ollama_readiness = service is None
-        application.state.readiness_cache = None
-        application.state.readiness_cache_lock = threading.Lock()
-        tenant_mode = service is None and (
-            tenant_registry is not None or API_AUTH_ENABLED
-        )
-        application.state.tenant_mode = tenant_mode
-        if tenant_mode:
-            redis_cache = create_redis_cache(
-                REDIS_ENABLED,
-                REDIS_URL,
-                REDIS_KEY_PREFIX,
-            )
-            registry = tenant_registry or load_tenant_registry(
-                API_TENANT_CONFIG_DIR,
-                require_api_keys=True,
-            )
-            pool = TenantServicePool(
-                registry,
-                shared_cache=redis_cache,
-                max_services=API_TENANT_ENGINE_CACHE_SIZE,
-                engine_factory=tenant_engine_factory,
-                compatibility_factory=compatibility_factory,
-                usage_store=active_usage_store,
-            )
-            application.state.tenant_registry = registry
-            application.state.tenant_service_pool = pool
-            application.state.rate_limiter = rate_limiter or TenantRateLimiter(
-                redis_cache
-            )
-            application.state.search_service = None
-            application.state.pgvector_prewarm = pool.prewarm_pgvector_indexes()
-        elif service is None:
-            redis_cache = create_redis_cache(
-                REDIS_ENABLED,
-                REDIS_URL,
-                REDIS_KEY_PREFIX,
-            )
-            engine = engine_factory()
-            engine.set_shared_plan_cache(redis_cache)
-            application.state.search_service = ProductSearchService(
-                engine,
-                usage_store=active_usage_store,
-            )
-        else:
-            application.state.search_service = service
-
-        preload_reranker = (
-            API_PRELOAD_RERANKER if preload_models is None else preload_models
-        )
-        preload_embedding = (
-            API_PRELOAD_EMBEDDING if preload_models is None else preload_models
-        )
-        if preload_reranker:
-            LOGGER.info("Initializing the configured reranker chain...")
-            load_ms = (
-                pool.preload_reranker()
-                if pool is not None
-                else application.state.search_service.warmup()
-            )
-            ranker = (
-                pool.shared_reranker.ranker
-                if pool is not None
-                else application.state.search_service.engine.ranker
-            )
-            LOGGER.info(
-                "Reranker chain ready model_order=%s in %.0f ms.",
-                getattr(ranker, "model_label", RERANK_MODEL),
-                load_ms,
-            )
-        if preload_embedding and service is None:
-            LOGGER.info("Preloading the Ollama embedding model...")
-            embedding_warmup = preload_ollama_embedding()
-            if pool is not None:
-                pool.embedding_warmup = embedding_warmup
-            else:
-                application.state.search_service.embedding_warmup = embedding_warmup
-            LOGGER.info(
-                "Ollama embedding model ready in %.0f ms.",
-                embedding_warmup["embedding_model"].get("total_ms", 0.0),
-            )
-        if pool is not None:
-            application.state.planner_catalog_prewarm = pool.prewarm_planner_catalogs()
-        admin_log_buffer = AdminLogBuffer(API_ADMIN_LOG_BUFFER_SIZE)
-        application.state.admin_log_buffer = admin_log_buffer
-        captured_loggers = [
-            logging.getLogger("uvicorn.error"),
-            logging.getLogger("uvicorn.access"),
-            logging.getLogger("gainr_compat"),
-        ]
-        for captured_logger in captured_loggers:
-            captured_logger.addHandler(admin_log_buffer)
-        pgvector_status = (
-            ",".join(
-                f"{company_id}:{result.get('status', 'unknown')}"
-                for company_id, result in sorted(
-                    getattr(application.state, "pgvector_prewarm", {}).items()
-                )
-            )
-            or "not_configured"
-        )
-        planner_status = (
-            ",".join(
-                f"{company_id}:{result.get('status', 'unknown')}"
-                for company_id, result in sorted(
-                    getattr(
-                        application.state,
-                        "planner_catalog_prewarm",
-                        {},
-                    ).items()
-                )
-            )
-            or "not_configured"
-        )
-        LOGGER.info(
-            "startup_warmup status=complete pgvector=%s reranker=%s "
-            "embedding=%s planner_catalog=%s",
-            pgvector_status,
-            "ready" if preload_reranker else "lazy",
-            "ready" if preload_embedding and service is None else "lazy",
-            planner_status,
-        )
-        try:
-            yield
-        finally:
-            for captured_logger in captured_loggers:
-                captured_logger.removeHandler(admin_log_buffer)
-            admin_log_buffer.close()
-            if pool is not None:
-                pool.close()
-            if engine is not None:
-                engine.close()
-            if redis_cache is not None:
-                redis_cache.close()
-            if owns_usage_store and active_usage_store is not None:
-                active_usage_store.close()
+    lifespan = build_lifespan(
+        engine_factory=engine_factory,
+        service=service,
+        tenant_registry=tenant_registry,
+        tenant_engine_factory=tenant_engine_factory,
+        compatibility_factory=compatibility_factory,
+        rate_limiter=rate_limiter,
+        preload_models=preload_models,
+        usage_store=usage_store,
+    )
 
     application = FastAPI(
         title=f"{APP_NAME} API",
@@ -510,79 +353,7 @@ def create_app(
 
     @application.get("/api/v1/ready", tags=["system"])
     def ready():
-        now = time.monotonic()
-        with application.state.readiness_cache_lock:
-            cached = application.state.readiness_cache
-            if (
-                cached is not None
-                and API_READINESS_CACHE_SECONDS > 0
-                and now - cached["created_monotonic"] < API_READINESS_CACHE_SECONDS
-            ):
-                return JSONResponse(
-                    {**cached["payload"], "cached": True},
-                    status_code=cached["status_code"],
-                )
-
-            tenant_mode = bool(application.state.tenant_mode)
-            registry = getattr(application.state, "tenant_registry", None)
-            checks: dict[str, Any] = {}
-            if tenant_mode:
-                pool = application.state.tenant_service_pool
-                for company_id in registry.profiles:
-                    try:
-                        checks[company_id] = pool.get(company_id).readiness()
-                    except Exception as exc:
-                        checks[company_id] = {
-                            "ok": False,
-                            "components": {},
-                            "error_type": type(exc).__name__,
-                        }
-            else:
-                checks["legacy"] = application.state.search_service.readiness()
-
-            ollama = {"ok": True, "checked": False}
-            if application.state.check_ollama_readiness:
-                try:
-                    response = requests.get(
-                        f"{OLLAMA_BASE_URL}/api/tags",
-                        timeout=2,
-                    )
-                    response.raise_for_status()
-                    names = {
-                        model.get("name") for model in response.json().get("models", [])
-                    }
-                    ollama = {
-                        "ok": EMBED_MODEL in names,
-                        "checked": True,
-                        "model": EMBED_MODEL,
-                    }
-                except Exception as exc:
-                    ollama = {
-                        "ok": False,
-                        "checked": True,
-                        "model": EMBED_MODEL,
-                        "error_type": type(exc).__name__,
-                    }
-            checks["ollama"] = ollama
-            ready_now = all(check.get("ok", False) for check in checks.values())
-            payload = {
-                "status": "ok" if ready_now else "not_ready",
-                "tenant_mode": tenant_mode,
-                "configured_companies": (
-                    len(registry.profiles) if registry is not None else 1
-                ),
-                "checked_at_utc": datetime.now(UTC).isoformat(),
-                "cache_seconds": API_READINESS_CACHE_SECONDS,
-                "cached": False,
-            }
-            status_code = 200 if ready_now else 503
-            if ready_now and API_READINESS_CACHE_SECONDS > 0:
-                application.state.readiness_cache = {
-                    "created_monotonic": now,
-                    "status_code": status_code,
-                    "payload": payload,
-                }
-            return JSONResponse(payload, status_code=status_code)
+        return readiness_response(application)
 
     @application.get("/api/v1/live", tags=["system"])
     def live() -> dict[str, str]:

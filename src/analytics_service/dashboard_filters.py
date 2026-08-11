@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 from collections import Counter, defaultdict
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -97,9 +98,12 @@ def _resolve_window(
             anchor = anchor.replace(tzinfo=UTC)
         created_to = anchor.astimezone(UTC)
         created_from = created_to - _PERIOD_DELTAS[period]
-    if created_from is not None and created_to is not None:
-        if created_from > created_to:
-            raise ValueError("Dashboard from boundary must not be after to")
+    if (
+        created_from is not None
+        and created_to is not None
+        and created_from > created_to
+    ):
+        raise ValueError("Dashboard from boundary must not be after to")
     return period, created_from, created_to
 
 
@@ -223,10 +227,8 @@ def _available_filters(
         city_id = applied.get("city_id")
         city_label = str(applied.get("city") or "").strip()
         if city_id is not None:
-            try:
+            with contextlib.suppress(TypeError, ValueError):
                 city_options[int(city_id)] = city_label or str(city_id)
-            except (TypeError, ValueError):
-                pass
         ad_types.append(applied.get("target_ad_type"))
         if internal:
             performance = dict(record.get("performance") or {})
