@@ -183,12 +183,19 @@ curl -fsS \
 ```
 
 Use `next_after_id` as the next request's `after_id` to retrieve only newer
-entries. The feed retains at most `API_ADMIN_LOG_BUFFER_SIZE` entries per API
-process, resets when that process restarts, omits tracebacks, and redacts common
-credential formats. It includes API, search/provider, compatibility, and
-Uvicorn access messages. Successful `/api/v1/live` and `/api/v1/ready` probes
-are omitted as routine noise; failed probes remain visible. It intentionally
-does not expose Nginx, Docker,
+entries. Events are explicitly ordered `oldest_to_newest` and include a small
+`kind` such as `startup`, `search_completed`, `provider_fallback`, `capacity`,
+`http_failure`, `warning`, or `error`. At INFO, the feed keeps one end-to-end
+Gainr completion summary per request rather than every internal search stage.
+It also keeps the startup warm-up summary, provider fallback/capacity events,
+failed HTTP requests, and all warnings/errors. Successful HTTP access logs and
+intermediate plan/retrieval/reranking lines are omitted; use the company admin
+`search-events` endpoint for structured stage timings and Docker logs for raw
+detail.
+
+The feed retains at most `API_ADMIN_LOG_BUFFER_SIZE` entries per API process,
+resets when that process restarts, omits tracebacks, and redacts common
+credential formats. It intentionally does not expose Nginx, Docker,
 PostgreSQL, Redis, Ollama, arbitrary files, or environment variables. Use the
 server's normal operational tooling when those infrastructure logs are needed.
 

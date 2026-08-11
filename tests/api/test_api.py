@@ -1432,6 +1432,7 @@ def test_admin_status_requires_separate_key_and_hides_queries(
     assert logs.status_code == 200
     assert logs.headers["cache-control"] == "no-store"
     logs_payload = logs.json()
+    assert logs_payload["ordering"] == "oldest_to_newest"
     assert logs_payload["retained"] >= 1
     assert logs_payload["events"][-1]["level"] == "WARNING"
     assert "test-secret-value" not in logs.text

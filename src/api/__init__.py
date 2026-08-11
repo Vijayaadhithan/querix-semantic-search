@@ -214,6 +214,30 @@ def create_app(
         ]
         for captured_logger in captured_loggers:
             captured_logger.addHandler(admin_log_buffer)
+        pgvector_status = ",".join(
+            f"{company_id}:{result.get('status', 'unknown')}"
+            for company_id, result in sorted(
+                getattr(application.state, "pgvector_prewarm", {}).items()
+            )
+        ) or "not_configured"
+        planner_status = ",".join(
+            f"{company_id}:{result.get('status', 'unknown')}"
+            for company_id, result in sorted(
+                getattr(
+                    application.state,
+                    "planner_catalog_prewarm",
+                    {},
+                ).items()
+            )
+        ) or "not_configured"
+        LOGGER.info(
+            "startup_warmup status=complete pgvector=%s reranker=%s "
+            "embedding=%s planner_catalog=%s",
+            pgvector_status,
+            "ready" if preload_reranker else "lazy",
+            "ready" if preload_embedding and service is None else "lazy",
+            planner_status,
+        )
         try:
             yield
         finally:

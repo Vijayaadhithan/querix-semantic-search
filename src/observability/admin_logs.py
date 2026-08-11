@@ -28,6 +28,18 @@ _URL_CREDENTIALS = re.compile(
     r"(?i)(\b[a-z][a-z0-9+.-]*://[^:/\s]+:)[^@\s]+(@)"
 )
 _CONTROL_CHARACTERS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]+")
+_HTTP_STATUS = re.compile(r"\s(\d{3})(?:\s+[A-Z][A-Z ]*)?$")
+
+_OPERATIONAL_INFO_EVENTS = (
+    ("startup", "startup_warmup status="),
+    ("search_completed", "step=compat_response status=complete"),
+    ("provider_fallback", "step=query_model status=fallback"),
+    ("capacity", "step=request_coalesce status=waited"),
+)
+_FILTERED_APPLICATION_LOGGERS = {
+    "gainr_compat",
+    "uvicorn.error",
+}
 
 
 def sanitize_log_message(message: str, *, max_chars: int = 2000) -> str:
@@ -40,6 +52,30 @@ def sanitize_log_message(message: str, *, max_chars: int = 2000) -> str:
     if len(sanitized) > max_chars:
         return f"{sanitized[:max_chars]}...[truncated]"
     return sanitized
+
+
+def operational_event_kind(
+    record: logging.LogRecord,
+    message: str,
+) -> str | None:
+    """Classify the small operational subset exposed by the admin feed."""
+    if record.name == "uvicorn.access":
+        if "/api/v1/admin/logs" in message:
+            return None
+        match = _HTTP_STATUS.search(message)
+        if match is not None and 200 <= int(match.group(1)) < 400:
+            return None
+        return "http_failure"
+    if record.levelno >= logging.ERROR:
+        return "error"
+    if record.levelno >= logging.WARNING:
+        return "warning"
+    if record.name not in _FILTERED_APPLICATION_LOGGERS:
+        return "application"
+    for kind, marker in _OPERATIONAL_INFO_EVENTS:
+        if marker in message:
+            return kind
+    return None
 
 
 class AdminLogBuffer(logging.Handler):
@@ -58,18 +94,9 @@ class AdminLogBuffer(logging.Handler):
     def emit(self, record: logging.LogRecord) -> None:
         try:
             message = sanitize_log_message(record.getMessage())
-            if record.name == "uvicorn.access":
-                if "/api/v1/admin/logs" in message:
-                    return
-                successful_health_check = (
-                    (
-                        "GET /api/v1/ready" in message
-                        or "GET /api/v1/live" in message
-                    )
-                    and message.endswith(" 200")
-                )
-                if successful_health_check:
-                    return
+            kind = operational_event_kind(record, message)
+            if kind is None:
+                return
             event = {
                 "id": 0,
                 "timestamp_utc": datetime.fromtimestamp(
@@ -77,6 +104,7 @@ class AdminLogBuffer(logging.Handler):
                     timezone.utc,
                 ).isoformat(),
                 "level": record.levelname,
+                "kind": kind,
                 "logger": record.name,
                 "message": message,
             }
@@ -120,6 +148,7 @@ class AdminLogBuffer(logging.Handler):
         )
         return {
             "stream_id": self.stream_id,
+            "ordering": "oldest_to_newest",
             "capacity": self.capacity,
             "retained": len(events),
             "oldest_id": oldest_id,

@@ -80,11 +80,67 @@ def test_successful_health_access_logs_are_omitted_but_failures_remain():
         logger.warning(
             '127.0.0.1:1236 - "GET /api/v1/ready HTTP/1.1" 503'
         )
+        logger.info(
+            '127.0.0.1:1237 - "GET /api/v1/gainr/filter-result HTTP/1.1" 200'
+        )
+        logger.info(
+            '127.0.0.1:1238 - "GET /api/v1/missing HTTP/1.1" 404'
+        )
 
         snapshot = buffer.snapshot(limit=10, minimum_level="INFO")
-        assert snapshot["retained"] == 1
+        assert snapshot["ordering"] == "oldest_to_newest"
+        assert snapshot["retained"] == 2
+        assert [event["kind"] for event in snapshot["events"]] == [
+            "http_failure",
+            "http_failure",
+        ]
         assert snapshot["events"][0]["message"].endswith(" 503")
+        assert snapshot["events"][1]["message"].endswith(" 404")
     finally:
         logger.removeHandler(buffer)
         logger.setLevel(original_level)
+        buffer.close()
+
+
+def test_admin_log_buffer_keeps_only_concise_operational_info():
+    buffer = AdminLogBuffer(capacity=20)
+    logger = logging.getLogger("uvicorn.error")
+    original_level = logger.level
+    original_propagate = logger.propagate
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
+    logger.addHandler(buffer)
+    try:
+        logger.info("[search:abc] step=plan status=complete duration_ms=5")
+        logger.info("[search:abc] step=retrieve status=complete duration_ms=20")
+        logger.info(
+            "[search:abc] step=compat_response status=complete "
+            "route=deterministic products=20 duration_ms=100"
+        )
+        logger.info(
+            "step=query_model status=fallback model=groq reason=local_rate_limit"
+        )
+        logger.info(
+            "startup_warmup status=complete pgvector=gainr:complete "
+            "reranker=ready embedding=ready planner_catalog=gainr:complete"
+        )
+        logger.warning("database pool temporarily unavailable")
+
+        snapshot = buffer.snapshot(limit=20, minimum_level="INFO")
+
+        assert [event["kind"] for event in snapshot["events"]] == [
+            "search_completed",
+            "provider_fallback",
+            "startup",
+            "warning",
+        ]
+        assert all("step=plan" not in event["message"] for event in snapshot["events"])
+        assert all(
+            "step=retrieve" not in event["message"]
+            for event in snapshot["events"]
+        )
+    finally:
+        logger.removeHandler(buffer)
+        logger.setLevel(original_level)
+        logger.propagate = original_propagate
         buffer.close()
