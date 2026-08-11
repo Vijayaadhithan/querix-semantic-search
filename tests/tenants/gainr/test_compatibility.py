@@ -675,9 +675,10 @@ def test_ranked_page_query_preserves_order_total_and_relations(
     ]
     assert rows[1]["__ads_attributes"] == []
     assert "COUNT(*) OVER () AS __eligible_total" in executions[0][0]
-    assert "ORDER BY FIELD(sr.id" in executions[0][0]
+    assert "AS __rank_order" in executions[0][0]
+    assert "JOIN `ads` AS page_ad" in executions[0][0]
     assert "`sr`.`is_search_active` = 1" in executions[0][0]
-    assert executions[0][1] == (456, "1", 2, 1, 2, 1, 20, 0)
+    assert executions[0][1] == (2, 1, 456, "1", 2, 1, 20, 0)
     assert executions[1][1] == (2, 1)
 
 

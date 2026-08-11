@@ -439,16 +439,29 @@ class GainrDatabaseRepository:
             with connection.cursor() as cursor:
                 cursor.execute(
                     f"""
-                    SELECT a.*, sr.city_name AS __city_name,
-                           sr.locality_name AS __locality_name,
-                           COUNT(*) OVER () AS __eligible_total
-                    FROM {self.search_table} AS sr
-                    JOIN {self.result_table} AS a ON a.id = sr.id
-                    WHERE {where_clause}
-                    ORDER BY FIELD(sr.id, {rank_placeholders})
-                    LIMIT %s OFFSET %s
+                    SELECT page_ad.*,
+                           ranked.__city_name,
+                           ranked.__locality_name,
+                           ranked.__eligible_total
+                    FROM (
+                        SELECT sr.id AS __ranked_id,
+                               sr.city_name AS __city_name,
+                               sr.locality_name AS __locality_name,
+                               COUNT(*) OVER () AS __eligible_total,
+                               FIELD(
+                                   sr.id, {rank_placeholders}
+                               ) AS __rank_order
+                        FROM {self.search_table} AS sr
+                        JOIN {self.result_table} AS a ON a.id = sr.id
+                        WHERE {where_clause}
+                        ORDER BY __rank_order
+                        LIMIT %s OFFSET %s
+                    ) AS ranked
+                    JOIN {self.result_table} AS page_ad
+                      ON page_ad.id = ranked.__ranked_id
+                    ORDER BY ranked.__rank_order
                     """,
-                    (*where_params, *ranked_ids, page_size, offset),
+                    (*ranked_ids, *where_params, page_size, offset),
                 )
                 rows = list(cursor.fetchall())
             if rows:
