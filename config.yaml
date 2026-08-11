@@ -7,19 +7,19 @@ query_extraction:
   # Try the next model only when the current model is rate-limited or
   # temporarily unavailable.
   # Prefix Groq model IDs with `groq:`. Groq is the validated low-latency
-  # primary; Gemini and the two local Gemma models remain ordered fallbacks.
+  # primary; Gemini Flash Lite handles overflow and temporary Groq failures.
   models:
     - groq:openai/gpt-oss-20b
     - gemini-3.1-flash-lite
-    - gemma-4-26b-a4b-it
-    - gemma-4-31b-it
   # Groq is the low-latency primary. Its 11th request in any rolling minute
   # skips directly to Gemini instead of waiting for an upstream 429.
   groq_requests_per_minute: 10
   gemini_requests_per_minute: 2000
   temperature: 0
   # Per-model deadline. Timeouts advance to the next configured model.
-  timeout_seconds: 10
+  # Avoid long provider tails. If both hosted planners are unavailable, the
+  # planner immediately retains the query in its safe default semantic plan.
+  timeout_seconds: 5
   deterministic_fast_path: true
   # Skip hosted planning only for short, objective, explicitly catalogued
   # phrases with no location, price, duration, wanted-ad, multilingual, or

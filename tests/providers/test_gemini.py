@@ -40,8 +40,6 @@ def test_configured_query_model_fallback_order():
     assert QUERY_EXTRACT_MODELS == (
         "groq:openai/gpt-oss-20b",
         "gemini-3.1-flash-lite",
-        "gemma-4-26b-a4b-it",
-        "gemma-4-31b-it",
     )
 
 
@@ -105,7 +103,7 @@ def test_structured_chat_uses_generate_content_json_schema(monkeypatch):
         "responseMimeType": "application/json",
         "responseJsonSchema": schema,
     }
-    assert captured["timeout"] == 10
+    assert captured["timeout"] == 5
     assert provider.last_chat_metrics["total_ms"] >= 0
 
 
