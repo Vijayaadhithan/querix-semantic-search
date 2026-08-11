@@ -158,9 +158,7 @@ class GainrSearchFilter(BaseModel):
                 return ""
             if value.isdigit():
                 return int(value)
-            raise ValueError(
-                "subcategory_id must be a numeric ID or an empty string"
-            )
+            raise ValueError("subcategory_id must be a numeric ID or an empty string")
         return value
 
     @field_validator("locality_id")

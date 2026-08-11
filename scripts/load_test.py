@@ -116,20 +116,14 @@ def main() -> int:
         "",
     )
     if not api_key:
-        parser.error(
-            "no API key configured in: "
-            + ", ".join(profile.api_key_envs)
-        )
+        parser.error("no API key configured in: " + ", ".join(profile.api_key_envs))
 
     queries = args.queries or ["portable camera"]
     compatibility_enabled = profile.compatibility.adapter == "gainr_legacy"
     if compatibility_enabled and (args.city_id is None or args.city_id <= 0):
         parser.error("--city-id must be a positive integer for gainr_legacy")
     route = "filter-result" if compatibility_enabled else "search"
-    url = (
-        f"{args.base_url.rstrip('/')}/api/v1/"
-        f"{profile.endpoint_slug}/{route}"
-    )
+    url = f"{args.base_url.rstrip('/')}/api/v1/{profile.endpoint_slug}/{route}"
 
     def payload(number: int) -> dict:
         query = queries[number % len(queries)]

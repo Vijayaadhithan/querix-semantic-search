@@ -132,14 +132,10 @@ class ProductSearchEngine(SearchEngineSupportMixin, SearchRankingMixin):
         self.semantic_related_tail_requires_explicit_category = (
             semantic_related_tail_requires_explicit_category
         )
-        self.reranker_relative_score_floor = (
-            reranker_relative_score_floor
-        )
+        self.reranker_relative_score_floor = reranker_relative_score_floor
         self.reranker_min_score_by_provider = {
             str(provider).casefold(): float(score)
-            for provider, score in (
-                reranker_min_score_by_provider or {}
-            ).items()
+            for provider, score in (reranker_min_score_by_provider or {}).items()
         }
         self.search_policy = search_policy
         self.mysql_config = mysql_config
@@ -175,9 +171,7 @@ class ProductSearchEngine(SearchEngineSupportMixin, SearchRankingMixin):
                     },
                     "models": list(QUERY_EXTRACT_MODELS),
                     "planner_enabled": self.planner_enabled,
-                    "direct_semantic_fast_path": (
-                        self.direct_semantic_fast_path
-                    ),
+                    "direct_semantic_fast_path": (self.direct_semantic_fast_path),
                     "prompt_context": self.planner_prompt_context,
                     "search_policy": self.search_policy.cache_key,
                     "schema": QUERY_PLAN_CACHE_SCHEMA_VERSION,
@@ -187,9 +181,7 @@ class ProductSearchEngine(SearchEngineSupportMixin, SearchRankingMixin):
                 separators=(",", ":"),
             ).encode("utf-8")
         ).hexdigest()[:24]
-        self._query_plan_cache: OrderedDict[str, tuple[float, dict]] = (
-            OrderedDict()
-        )
+        self._query_plan_cache: OrderedDict[str, tuple[float, dict]] = OrderedDict()
         self._plan_cache_lock = threading.RLock()
         self._embedding_executor = ThreadPoolExecutor(
             max_workers=1,
@@ -212,9 +204,7 @@ class ProductSearchEngine(SearchEngineSupportMixin, SearchRankingMixin):
             {str(value) for value in allowed_ad_types}
             if allowed_ad_types is not None
             else {
-                WANTED_AD_TYPE
-                if query_plan.get("target_ad_type") == "wanted"
-                else "1"
+                WANTED_AD_TYPE if query_plan.get("target_ad_type") == "wanted" else "1"
             }
         )
         include_unpriced = expected_types == {WANTED_AD_TYPE}
@@ -223,9 +213,7 @@ class ProductSearchEngine(SearchEngineSupportMixin, SearchRankingMixin):
         # retrieval recall. Tenant policies run over the deeper fused pool
         # before the bounded reranker window is selected.
         recall_window = max(HYBRID_CANDIDATE_K, requested)
-        extended_window = (
-            candidate_limit is not None and recall_window > RERANK_TOP_K
-        )
+        extended_window = candidate_limit is not None and recall_window > RERANK_TOP_K
         retrieval_depth = (
             max(
                 VECTOR_TOP_K,
@@ -237,11 +225,7 @@ class ProductSearchEngine(SearchEngineSupportMixin, SearchRankingMixin):
         )
         vector_top_k = retrieval_depth or VECTOR_TOP_K
         bm25_top_k = retrieval_depth or BM25_TOP_K
-        hybrid_top_k = (
-            requested
-            if strict_candidate_limit
-            else recall_window
-        )
+        hybrid_top_k = requested if strict_candidate_limit else recall_window
         vector_candidate_k = max(VECTOR_CANDIDATE_K, vector_top_k)
         LOGGER.debug(
             "[search:%s] step=retrieve status=start embedding_model=%s "
@@ -336,9 +320,7 @@ class ProductSearchEngine(SearchEngineSupportMixin, SearchRankingMixin):
                     type(exc).__name__,
                 )
 
-        parallel_retrieval_ms = (
-            time.perf_counter() - retrieval_started
-        ) * 1000
+        parallel_retrieval_ms = (time.perf_counter() - retrieval_started) * 1000
 
         if len(retrieval_errors) == 2:
             stages = ", ".join(stage for stage, _exc in retrieval_errors)
@@ -369,9 +351,7 @@ class ProductSearchEngine(SearchEngineSupportMixin, SearchRankingMixin):
             search_id_column=self.search_id_column,
             allowed_ad_types=allowed_ad_types,
         )
-        type_lookup_ms = (
-            time.perf_counter() - type_lookup_started
-        ) * 1000
+        type_lookup_ms = (time.perf_counter() - type_lookup_started) * 1000
         candidates = eligible_candidates[:hybrid_top_k]
         # Keep the rest of the fused pool for later pages without increasing
         # the hosted reranker payload. These candidates remain in reciprocal-
@@ -379,14 +359,9 @@ class ProductSearchEngine(SearchEngineSupportMixin, SearchRankingMixin):
         # validation as the reranked window.
         hybrid_tail_candidates = eligible_candidates[hybrid_top_k:]
         embedding_metrics = dict(embedding_prefetch_metrics or {})
-        if (
-            not embedding_metrics
-            and self.embedding_provider is None
-        ):
+        if not embedding_metrics and self.embedding_provider is None:
             embedding_metrics = last_ollama_embedding_metrics()
-        retrieval_total_ms = (
-            time.perf_counter() - retrieval_started
-        ) * 1000
+        retrieval_total_ms = (time.perf_counter() - retrieval_started) * 1000
         LOGGER.info(
             "[search:%s] step=retrieve status=complete vector=%d bm25=%d "
             "merged=%d candidates=%d hybrid_tail=%d vector_ms=%.0f bm25_ms=%.0f "
@@ -444,13 +419,10 @@ class ProductSearchEngine(SearchEngineSupportMixin, SearchRankingMixin):
             "embedding_model_metrics": embedding_metrics,
             "retrieval_degraded": bool(retrieval_errors),
             "retrieval_error_type": (
-                type(retrieval_errors[0][1]).__name__
-                if retrieval_errors
-                else None
+                type(retrieval_errors[0][1]).__name__ if retrieval_errors else None
             ),
             "degraded_stages": [stage for stage, _exc in retrieval_errors],
         }
-
 
     def _semantic_related_tail_allowed(self, resolved_filters: dict) -> bool:
         if not self.semantic_related_tail_enabled:
@@ -459,8 +431,7 @@ class ProductSearchEngine(SearchEngineSupportMixin, SearchRankingMixin):
             return True
         categorical = resolved_filters.get("categorical", {})
         return any(
-            key in categorical
-            for key in ("main_category_name", "subcategory_name")
+            key in categorical for key in ("main_category_name", "subcategory_name")
         )
 
     def _filtered_search(
@@ -488,9 +459,7 @@ class ProductSearchEngine(SearchEngineSupportMixin, SearchRankingMixin):
             "[search:%s] step=fast_filter status=complete filters=%s "
             "products=%d duration_ms=%.0f",
             trace_id,
-            ",".join(
-                active_filter_names(planned["resolved_filters"])
-            ) or "none",
+            ",".join(active_filter_names(planned["resolved_filters"])) or "none",
             len(product_ids),
             browse_seconds * 1000,
         )
@@ -549,9 +518,7 @@ class ProductSearchEngine(SearchEngineSupportMixin, SearchRankingMixin):
             else PRIMARY_RANKED_K
         )
         primary_limit = (
-            min(configured_primary_limit, limit)
-            if limit is not None
-            else RERANK_TOP_K
+            min(configured_primary_limit, limit) if limit is not None else RERANK_TOP_K
         )
         configured_candidate_limit = (
             min(RERANK_CANDIDATE_K, ranking_window)
@@ -592,13 +559,8 @@ class ProductSearchEngine(SearchEngineSupportMixin, SearchRankingMixin):
                 (time.perf_counter() - started) * 1000,
             )
             return cached_result
-        if (
-            speculative_embedding_future is None
-            and planned_result is None
-        ):
-            speculative_embedding_future = (
-                self.start_speculative_embedding(query)
-            )
+        if speculative_embedding_future is None and planned_result is None:
+            speculative_embedding_future = self.start_speculative_embedding(query)
         planned = (
             deepcopy(planned_result)
             if planned_result is not None
@@ -606,10 +568,7 @@ class ProductSearchEngine(SearchEngineSupportMixin, SearchRankingMixin):
         )
         if resolved_filters is not None:
             planned["resolved_filters"] = deepcopy(resolved_filters)
-        if (
-            planned["query_plan"].get("execution_path")
-            == "deterministic_filter"
-        ):
+        if planned["query_plan"].get("execution_path") == "deterministic_filter":
             if speculative_embedding_future is not None:
                 speculative_embedding_future.cancel()
             result = self._filtered_search(
@@ -634,18 +593,13 @@ class ProductSearchEngine(SearchEngineSupportMixin, SearchRankingMixin):
         prefetched_embedding = None
         prefetch_metrics = {}
         semantic_query = planned["query_plan"]["semantic_query"]
-        if (
-            speculative_embedding_future is not None
-            and semantic_query == query
-        ):
+        if speculative_embedding_future is not None and semantic_query == query:
             prefetch_wait_started = time.perf_counter()
             try:
                 prefetched = speculative_embedding_future.result()
                 if prefetched.get("query") == semantic_query:
                     prefetched_embedding = prefetched["embedding"]
-                    prefetch_metrics = dict(
-                        prefetched.get("metrics") or {}
-                    )
+                    prefetch_metrics = dict(prefetched.get("metrics") or {})
                     prefetch_metrics["prefetch_total_ms"] = (
                         float(prefetched.get("seconds", 0.0)) * 1000
                     )
@@ -654,8 +608,7 @@ class ProductSearchEngine(SearchEngineSupportMixin, SearchRankingMixin):
                     ) * 1000
             except Exception as exc:
                 LOGGER.warning(
-                    "[search:%s] step=embedding_prefetch "
-                    "status=degraded error_type=%s",
+                    "[search:%s] step=embedding_prefetch status=degraded error_type=%s",
                     trace_id,
                     type(exc).__name__,
                 )
@@ -683,8 +636,7 @@ class ProductSearchEngine(SearchEngineSupportMixin, SearchRankingMixin):
                 )
             except Exception as exc:
                 LOGGER.exception(
-                    "[search:%s] step=rerank status=failed "
-                    "error_type=%s candidates=%d",
+                    "[search:%s] step=rerank status=failed error_type=%s candidates=%d",
                     trace_id,
                     type(exc).__name__,
                     len(candidates),
@@ -708,20 +660,14 @@ class ProductSearchEngine(SearchEngineSupportMixin, SearchRankingMixin):
             search_id_column=self.search_id_column,
         )
         tail_limit = (
-            max(limit - len(primary_product_ids), 0)
-            if limit is not None
-            else 0
+            max(limit - len(primary_product_ids), 0) if limit is not None else 0
         )
         tail_started = time.perf_counter()
         hybrid_product_ids = []
         related_product_ids = []
         query_plan = planned["query_plan"]
-        inferred_categories = dict(
-            query_plan.get("inferred_categories") or {}
-        )
-        relaxed_categories = set(
-            query_plan.get("relaxed_categories") or []
-        )
+        inferred_categories = dict(query_plan.get("inferred_categories") or {})
+        relaxed_categories = set(query_plan.get("relaxed_categories") or [])
         category_metadata = {
             "main_category": "main_category_name",
             "subcategory": "subcategory_name",
@@ -731,9 +677,7 @@ class ProductSearchEngine(SearchEngineSupportMixin, SearchRankingMixin):
             {},
         )
         top_ranked_metadata = (
-            (ranked["results"][0].get("metadata") or {})
-            if ranked["results"]
-            else {}
+            (ranked["results"][0].get("metadata") or {}) if ranked["results"] else {}
         )
         for category_key, metadata_key in category_metadata.items():
             if metadata_key in resolved_categorical:
@@ -755,15 +699,10 @@ class ProductSearchEngine(SearchEngineSupportMixin, SearchRankingMixin):
             )
             or any(inferred_categories.get(key) for key in category_metadata)
         )
-        tail_allowed = self._semantic_related_tail_allowed(
-            planned["resolved_filters"]
-        )
+        tail_allowed = self._semantic_related_tail_allowed(planned["resolved_filters"])
         unanchored_hybrid_product_ids = []
         if tail_allowed and tail_limit:
-            primary_identities = {
-                str(product_id)
-                for product_id in primary_product_ids
-            }
+            primary_identities = {str(product_id) for product_id in primary_product_ids}
             hybrid_candidates = retrieved.get("hybrid_tail_candidates", [])
 
             def candidate_matches_anchor(candidate):
@@ -774,9 +713,10 @@ class ProductSearchEngine(SearchEngineSupportMixin, SearchRankingMixin):
                         expected = inferred_categories.get(category_key)
                     if expected is None:
                         continue
-                    if str(metadata.get(metadata_key) or "").casefold() != str(
-                        expected
-                    ).casefold():
+                    if (
+                        str(metadata.get(metadata_key) or "").casefold()
+                        != str(expected).casefold()
+                    ):
                         return False
                 return True
 
@@ -809,9 +749,8 @@ class ProductSearchEngine(SearchEngineSupportMixin, SearchRankingMixin):
             0,
         )
         if tail_allowed and has_category_anchor and catalogue_tail_limit:
-            excluded_candidates = (
-                candidates
-                + retrieved.get("hybrid_tail_candidates", [])
+            excluded_candidates = candidates + retrieved.get(
+                "hybrid_tail_candidates", []
             )
             related_product_ids = related_tail_product_ids(
                 self.bm25_index,
@@ -819,21 +758,14 @@ class ProductSearchEngine(SearchEngineSupportMixin, SearchRankingMixin):
                 inferred_categories,
                 query_plan["target_ad_type"],
                 catalogue_tail_limit,
-                exclude_doc_ids={
-                    result["id"]
-                    for result in excluded_candidates
-                },
-                exclude_product_ids=set(
-                    (*primary_product_ids, *hybrid_product_ids)
-                ),
+                exclude_doc_ids={result["id"] for result in excluded_candidates},
+                exclude_product_ids=set((*primary_product_ids, *hybrid_product_ids)),
                 type_fetcher=self._fetch_product_types,
                 sort_order=query_plan.get("sort_order"),
                 allowed_ad_types=allowed_ad_types,
             )
         remaining_tail_limit = max(
-            tail_limit
-            - len(hybrid_product_ids)
-            - len(related_product_ids),
+            tail_limit - len(hybrid_product_ids) - len(related_product_ids),
             0,
         )
         if remaining_tail_limit and unanchored_hybrid_product_ids:
@@ -854,9 +786,7 @@ class ProductSearchEngine(SearchEngineSupportMixin, SearchRankingMixin):
             "[search:%s] step=related_tail status=complete filters=%s "
             "primary=%d hybrid=%d related=%d duration_ms=%.0f",
             trace_id,
-            ",".join(
-                active_filter_names(planned["resolved_filters"])
-            ) or "none",
+            ",".join(active_filter_names(planned["resolved_filters"])) or "none",
             len(primary_product_ids),
             len(hybrid_product_ids),
             len(related_product_ids),
@@ -868,17 +798,13 @@ class ProductSearchEngine(SearchEngineSupportMixin, SearchRankingMixin):
             len(product_ids),
         )
         products = self._fetch_products(product_ids) if hydrate_products else []
-        primary_identities = {
-            str(product_id)
-            for product_id in primary_product_ids
-        }
+        primary_identities = {str(product_id) for product_id in primary_product_ids}
         products = [
             {
                 **product,
                 "result_tier": (
                     "ranked"
-                    if str(product.get(self.result_id_column))
-                    in primary_identities
+                    if str(product.get(self.result_id_column)) in primary_identities
                     else "related"
                 ),
             }

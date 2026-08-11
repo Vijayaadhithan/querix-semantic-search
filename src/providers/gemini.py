@@ -99,8 +99,7 @@ class GeminiModelUnavailableError(RuntimeError):
             f"http_{status_code}" if status_code is not None else "unavailable"
         )
         super().__init__(
-            f"Query model '{model}' is temporarily unavailable "
-            f"({self.reason})."
+            f"Query model '{model}' is temporarily unavailable ({self.reason})."
         )
 
 
@@ -151,10 +150,7 @@ class GeminiProvider:
         }
         try:
             response = self._post(
-                (
-                    f"{self.base_url}/models/"
-                    f"{quote(model, safe='.-')}:generateContent"
-                ),
+                (f"{self.base_url}/models/{quote(model, safe='.-')}:generateContent"),
                 headers={
                     "Content-Type": "application/json",
                     "X-goog-api-key": self.api_key,
@@ -182,34 +178,21 @@ class GeminiProvider:
             usage = payload.get("usageMetadata") or {}
             metrics.update(
                 {
-                    "input_tokens": int(
-                        usage.get("promptTokenCount", 0) or 0
-                    ),
-                    "output_tokens": int(
-                        usage.get("candidatesTokenCount", 0) or 0
-                    ),
-                    "thought_tokens": int(
-                        usage.get("thoughtsTokenCount", 0) or 0
-                    ),
-                    "total_tokens": int(
-                        usage.get("totalTokenCount", 0) or 0
-                    ),
+                    "input_tokens": int(usage.get("promptTokenCount", 0) or 0),
+                    "output_tokens": int(usage.get("candidatesTokenCount", 0) or 0),
+                    "thought_tokens": int(usage.get("thoughtsTokenCount", 0) or 0),
+                    "total_tokens": int(usage.get("totalTokenCount", 0) or 0),
                 }
             )
             content = payload["candidates"][0]["content"]
             text = "".join(
-                part.get("text", "")
-                for part in content.get("parts", [])
+                part.get("text", "") for part in content.get("parts", [])
             ).strip()
             if not text:
                 raise ValueError("Gemini returned an empty response.")
             return strip_json_fence(text)
         except requests.HTTPError as exc:
-            status_code = (
-                exc.response.status_code
-                if exc.response is not None
-                else 0
-            )
+            status_code = exc.response.status_code if exc.response is not None else 0
             if status_code in FALLBACK_HTTP_STATUSES:
                 raise GeminiModelUnavailableError(
                     model,
@@ -237,8 +220,7 @@ class GeminiProvider:
             ValueError,
         ) as exc:
             raise RuntimeError(
-                f"Cannot extract a structured query with Google model "
-                f"'{model}'."
+                f"Cannot extract a structured query with Google model '{model}'."
             ) from exc
         finally:
             metrics["total_ms"] = (time.perf_counter() - started) * 1000
@@ -343,15 +325,9 @@ class GroqProvider:
             usage = payload.get("usage") or {}
             metrics.update(
                 {
-                    "input_tokens": int(
-                        usage.get("input_tokens", 0) or 0
-                    ),
-                    "output_tokens": int(
-                        usage.get("output_tokens", 0) or 0
-                    ),
-                    "total_tokens": int(
-                        usage.get("total_tokens", 0) or 0
-                    ),
+                    "input_tokens": int(usage.get("input_tokens", 0) or 0),
+                    "output_tokens": int(usage.get("output_tokens", 0) or 0),
+                    "total_tokens": int(usage.get("total_tokens", 0) or 0),
                 }
             )
             for key, value in (payload.get("metadata") or {}).items():
@@ -362,11 +338,7 @@ class GroqProvider:
                         pass
             return strip_json_fence(self._output_text(payload))
         except requests.HTTPError as exc:
-            status_code = (
-                exc.response.status_code
-                if exc.response is not None
-                else 0
-            )
+            status_code = exc.response.status_code if exc.response is not None else 0
             raise GeminiModelUnavailableError(
                 model,
                 status_code=status_code,
@@ -388,8 +360,7 @@ class GroqProvider:
             ValueError,
         ) as exc:
             raise RuntimeError(
-                f"Cannot extract a structured query with Groq model "
-                f"'{model}'."
+                f"Cannot extract a structured query with Groq model '{model}'."
             ) from exc
         finally:
             metrics["total_ms"] = (time.perf_counter() - started) * 1000
@@ -417,11 +388,7 @@ def structured_chat(
     schema: dict,
     temperature: float = 0,
 ) -> str:
-    models = (
-        QUERY_EXTRACT_MODELS
-        if model == QUERY_EXTRACT_MODELS[0]
-        else (model,)
-    )
+    models = QUERY_EXTRACT_MODELS if model == QUERY_EXTRACT_MODELS[0] else (model,)
     attempted_models = []
     attempts = []
     started = time.perf_counter()
@@ -429,13 +396,9 @@ def structured_chat(
     for position, candidate_model in enumerate(models, start=1):
         attempted_models.append(candidate_model)
         is_groq = candidate_model.startswith("groq:")
-        provider = (
-            DEFAULT_GROQ_PROVIDER if is_groq else DEFAULT_GEMINI_PROVIDER
-        )
+        provider = DEFAULT_GROQ_PROVIDER if is_groq else DEFAULT_GEMINI_PROVIDER
         provider_model = (
-            candidate_model.split(":", 1)[1]
-            if is_groq
-            else candidate_model
+            candidate_model.split(":", 1)[1] if is_groq else candidate_model
         )
         LOGGER.debug(
             "step=query_model status=attempt model=%s position=%d/%d",
@@ -531,15 +494,10 @@ def structured_chat(
                 }
             )
             LOGGER.warning(
-                "step=query_model status=fallback model=%s reason=%s "
-                "next_model=%s",
+                "step=query_model status=fallback model=%s reason=%s next_model=%s",
                 candidate_model,
                 exc.reason,
-                (
-                    models[position]
-                    if position < len(models)
-                    else "none"
-                ),
+                (models[position] if position < len(models) else "none"),
             )
     LOGGER.error(
         "step=query_model status=failed attempted_models=%s reason=%s",

@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable
 
 from core.tenant_config import TenantProfile
 

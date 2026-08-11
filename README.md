@@ -186,6 +186,7 @@ run the same gate as CI:
 uv lock --check
 uv sync --frozen --group analytics
 uv run --frozen --group analytics ruff check src scripts tests
+uv run --frozen --group analytics ruff format --check src scripts tests
 uv run --frozen --group analytics python scripts/check_markdown.py
 uv run --frozen --group analytics python -m compileall -q src scripts tests
 uv run --frozen --group analytics pytest -q

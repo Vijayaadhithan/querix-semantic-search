@@ -14,31 +14,24 @@ class CompatibilityAdapter(Protocol):
 
     product_search_service: Any
 
-    def parse_search_suggestions(self, payload: dict[str, Any]) -> Any:
-        ...
+    def parse_search_suggestions(self, payload: dict[str, Any]) -> Any: ...
 
-    def search_suggestions(self, request: Any) -> dict[str, Any]:
-        ...
+    def search_suggestions(self, request: Any) -> dict[str, Any]: ...
 
-    def parse_filter_data(self, payload: dict[str, Any]) -> Any:
-        ...
+    def parse_filter_data(self, payload: dict[str, Any]) -> Any: ...
 
-    def filter_data(self, request: Any) -> dict[str, Any]:
-        ...
+    def filter_data(self, request: Any) -> dict[str, Any]: ...
 
-    def parse_filter_result(self, payload: dict[str, Any]) -> Any:
-        ...
+    def parse_filter_result(self, payload: dict[str, Any]) -> Any: ...
 
     def filter_results(
         self,
         request: Any,
         *,
         user_id: str | None = None,
-    ) -> dict[str, Any]:
-        ...
+    ) -> dict[str, Any]: ...
 
-    def recent_searches(self, user_id: str | None) -> dict[str, Any]:
-        ...
+    def recent_searches(self, user_id: str | None) -> dict[str, Any]: ...
 
 
 AdapterFactory = Callable[[Any, Any, Any], CompatibilityAdapter]
@@ -75,7 +68,6 @@ def build_compatibility_adapter(
     except KeyError as exc:
         supported = ", ".join(supported_compatibility_adapters())
         raise ValueError(
-            f"Unsupported compatibility adapter {name!r}; "
-            f"expected one of: {supported}"
+            f"Unsupported compatibility adapter {name!r}; expected one of: {supported}"
         ) from exc
     return factory(profile, product_search_service, shared_cache)

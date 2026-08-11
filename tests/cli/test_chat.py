@@ -174,9 +174,7 @@ def test_filtered_vector_query_uses_bounded_post_filter_window():
         top_k=20,
         candidate_k=40,
         source_name="mysql:gainr.ads_search_ready",
-        resolved_filters={
-            "categorical": {"rental_duration": ["Per Day"]}
-        },
+        resolved_filters={"categorical": {"rental_duration": ["Per Day"]}},
         company_id="gainr",
         embedding_provider=FakeEmbeddingProvider(),
         post_filter_metadata=True,
@@ -201,9 +199,7 @@ def test_filtered_vector_query_passes_adaptive_post_filter_window():
         candidate_k=40,
         collection=collection,
         source_name="mysql:gainr.ads_search_ready",
-        resolved_filters={
-            "categorical": {"rental_duration": ["Per Day"]}
-        },
+        resolved_filters={"categorical": {"rental_duration": ["Per Day"]}},
         company_id="gainr",
         embedding_provider=FakeEmbeddingProvider(),
         post_filter_metadata="adaptive",
@@ -337,9 +333,7 @@ def test_enrich_query_plan_treats_safety_as_vehicle_quality():
     for concept in ("car", "cab", "taxi", "driver", "van", "bus", "traveller"):
         assert concept in enriched["keyword_query"].casefold().split()
     assert enriched["filters"]["main_category"] is None
-    assert enriched["inferred_categories"]["main_category"] == (
-        "Automobiles"
-    )
+    assert enriched["inferred_categories"]["main_category"] == ("Automobiles")
 
 
 def test_vehicle_safety_service_request_is_not_rewritten_as_travel():
@@ -398,17 +392,13 @@ def test_functional_category_word_does_not_become_hard_filter():
         "A vehicle for recreational driving on rough terrain.",
     )
     value_index = {
-        "main_category": {
-            "personal & home services": "Personal & Home Services"
-        },
+        "main_category": {"personal & home services": "Personal & Home Services"},
         "subcategory": {"driving": "Driving"},
         "state": {},
         "city": {},
         "locality": {},
         "rental_duration": {},
-        "_subcategory_main_category": {
-            "driving": "Personal & Home Services"
-        },
+        "_subcategory_main_category": {"driving": "Personal & Home Services"},
         "_city_state": {},
         "_locality_location": {},
     }
@@ -550,9 +540,7 @@ def test_descriptive_query_keeps_explicit_category_as_hard_filter():
         "rental_duration": {},
         "_subcategory_main_category": {"bike": "Automobiles"},
         "_city_state": {},
-        "_locality_location": {
-            "red": {"city": "Sangli", "state": "Maharashtra"}
-        },
+        "_locality_location": {"red": {"city": "Sangli", "state": "Maharashtra"}},
     }
 
     enriched = enrich_query_plan("red bike with ABS", plan, value_index)
@@ -596,9 +584,7 @@ def test_budget_bike_city_rides_rejects_generic_locality():
         "rental_duration": {},
         "_subcategory_main_category": {"bike": "Automobiles"},
         "_city_state": {},
-        "_locality_location": {
-            "city": {"city": "Bargarh", "state": "Odisha"}
-        },
+        "_locality_location": {"city": {"city": "Bargarh", "state": "Odisha"}},
     }
 
     enriched = enrich_query_plan(query, plan, value_index)
@@ -727,9 +713,7 @@ def test_partial_multiword_category_is_not_used_as_soft_hint():
         "city": {},
         "locality": {},
         "rental_duration": {},
-        "_subcategory_main_category": {
-            "fridge mechanic": "Personal & Home Services"
-        },
+        "_subcategory_main_category": {"fridge mechanic": "Personal & Home Services"},
         "_city_state": {},
         "_locality_location": {},
     }
@@ -898,21 +882,13 @@ def test_infer_target_ad_type_uses_searcher_perspective():
     assert infer_target_ad_type("a person who needs a bike") == "wanted"
     assert infer_target_ad_type("show wanted ads for bikes") == "wanted"
     assert infer_target_ad_type("I need a wedding photographer") == "offer"
+    assert infer_target_ad_type("find photographers available for hire") == "offer"
     assert (
-        infer_target_ad_type("find photographers available for hire")
-        == "offer"
-    )
-    assert (
-        infer_target_ad_type(
-            "show people looking for wedding photographers"
-        )
+        infer_target_ad_type("show people looking for wedding photographers")
         == "wanted"
     )
     assert (
-        infer_target_ad_type(
-            "find customers who need photography services"
-        )
-        == "wanted"
+        infer_target_ad_type("find customers who need photography services") == "wanted"
     )
 
 
@@ -1018,9 +994,7 @@ def test_filters_resolve_case_insensitively_and_apply_to_both_searches(tmp_path)
 
     assert unresolved == {}
     assert resolved["categorical"] == {"city_name": "Coimbatore"}
-    assert [
-        row["doc_id"] for row in index.search("bike", resolved, top_k=10)
-    ] == ["1"]
+    assert [row["doc_id"] for row in index.search("bike", resolved, top_k=10)] == ["1"]
     assert metadata_matches_filters(
         {
             "source_file": "mysql:test.ads_search_ready",
@@ -1089,12 +1063,11 @@ def test_bm25_supports_numeric_and_multi_value_compatibility_filters(tmp_path):
         }
     }
 
-    assert [
-        row["doc_id"] for row in index.search("bike", filters, top_k=10)
-    ] == ["1", "2"]
-    assert [
-        row["doc_id"] for row in index.browse(filters, top_k=10)
-    ] == ["2", "1"]
+    assert [row["doc_id"] for row in index.search("bike", filters, top_k=10)] == [
+        "1",
+        "2",
+    ]
+    assert [row["doc_id"] for row in index.browse(filters, top_k=10)] == ["2", "1"]
     index.close()
 
 
@@ -1407,8 +1380,7 @@ def test_related_tail_uses_any_available_filter_and_offer_type(tmp_path):
         limit=10,
         exclude_product_ids={"primary-bike"},
         type_fetcher=lambda ids: {
-            str(product_id): product_types[str(product_id)]
-            for product_id in ids
+            str(product_id): product_types[str(product_id)] for product_id in ids
         },
     )
 
@@ -1441,10 +1413,7 @@ def test_related_tail_combines_inferred_category_with_partial_filters(tmp_path):
         {"main_category": None, "subcategory": "Camera"},
         "offer",
         limit=10,
-        type_fetcher=lambda ids: {
-            str(product_id): "1"
-            for product_id in ids
-        },
+        type_fetcher=lambda ids: {str(product_id): "1" for product_id in ids},
     )
 
     assert product_ids == ["camera-chennai"]
@@ -1476,10 +1445,7 @@ def test_related_tail_combines_explicit_parent_with_inferred_child(tmp_path):
         {"main_category": None, "subcategory": "Bike"},
         "offer",
         limit=10,
-        type_fetcher=lambda ids: {
-            str(product_id): "1"
-            for product_id in ids
-        },
+        type_fetcher=lambda ids: {str(product_id): "1" for product_id in ids},
     )
 
     assert product_ids == ["bike"]
@@ -1601,8 +1567,7 @@ def test_fetch_products_by_ids_preserves_reranker_order():
 
     assert [row[MYSQL_RESULT_ID_COLUMN] for row in products] == ["20", "10"]
     assert (
-        connection.fake_cursor.query
-        == f"SELECT * FROM `{MYSQL_RESULT_TABLE}` "
+        connection.fake_cursor.query == f"SELECT * FROM `{MYSQL_RESULT_TABLE}` "
         f"WHERE `{MYSQL_RESULT_ID_COLUMN}` IN (%s, %s)"
     )
     assert connection.fake_cursor.params == [20, 10]

@@ -4,7 +4,7 @@ import threading
 import time
 from collections import deque
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -425,9 +425,7 @@ class ProductSearchService:
         ingestion_state = read_ingestion_state(self.ingestion_state_path)
         if ingestion_state is not None:
             raise SearchCapacityError("Search index is being refreshed; retry shortly.")
-        acquired = self._search_slots.acquire(
-            timeout=self.search_slot_timeout_seconds
-        )
+        acquired = self._search_slots.acquire(timeout=self.search_slot_timeout_seconds)
         if not acquired:
             with self._monitor_lock:
                 self._monitor_rejected += 1
@@ -448,7 +446,7 @@ class ProductSearchService:
         if ingestion_state is not None:
             raise SearchCapacityError("Search index is being refreshed; retry shortly.")
         started = time.perf_counter()
-        timestamp = datetime.now(timezone.utc).isoformat()
+        timestamp = datetime.now(UTC).isoformat()
         with self._monitor_lock:
             self._monitor_active += 1
             self._monitor_started += 1
@@ -605,7 +603,7 @@ class ProductSearchService:
         timeline: list[dict[str, Any]] | None = None,
     ) -> None:
         event = {
-            "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+            "timestamp_utc": datetime.now(UTC).isoformat(),
             "status": "success",
             "query_chars": len(query),
             "duration_ms": round(duration_ms, 3),
@@ -837,9 +835,7 @@ class ProductSearchService:
                     operation="query_planning",
                     status=str(attempt.get("status") or "success"),
                     api_calls=(
-                        0
-                        if reason in {"missing_api_key", "local_rate_limit"}
-                        else 1
+                        0 if reason in {"missing_api_key", "local_rate_limit"} else 1
                     ),
                     input_tokens=int(attempt.get("input_tokens", 0) or 0),
                     output_tokens=int(attempt.get("output_tokens", 0) or 0),

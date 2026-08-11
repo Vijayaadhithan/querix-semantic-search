@@ -65,7 +65,7 @@ class AnalyticsSettings:
     password_min_length: int = 15
 
     @classmethod
-    def from_env(cls) -> "AnalyticsSettings":
+    def from_env(cls) -> AnalyticsSettings:
         raw_db_path = Path(
             os.getenv(
                 "ANALYTICS_SNAPSHOT_DB_PATH",

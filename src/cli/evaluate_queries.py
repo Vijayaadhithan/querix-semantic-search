@@ -90,9 +90,11 @@ def main() -> None:
             raise SystemExit(
                 f"Unknown company {args.company!r}; available: {available}"
             ) from exc
-    index = PersistentBM25Index(
-        profile.storage.bm25_path if profile else None
-    ) if profile else PersistentBM25Index()
+    index = (
+        PersistentBM25Index(profile.storage.bm25_path if profile else None)
+        if profile
+        else PersistentBM25Index()
+    )
     try:
         value_index = query_filter_value_index(index)
         catalog = build_query_filter_catalog(value_index)

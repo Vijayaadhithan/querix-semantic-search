@@ -73,6 +73,7 @@ __all__ = (
     "resolve_query_filters",
 )
 
+
 def infer_target_ad_type(query: str) -> str:
     normalized = normalize_filter_value(query)
     wanted_patterns = (
@@ -213,15 +214,12 @@ def enrich_query_plan(
         value_index["subcategory"],
     )
     explicit_subcategory = analysis.exact_values.get("subcategory")
-    if (
-        category_intent is not None
-        and not (
-            explicit_subcategory is not None
-            and analysis.category_is_explicit.get("subcategory", False)
-            and normalize_filter_value(explicit_subcategory)
-            != normalize_filter_value(category_intent.subcategory)
-            and not category_intent.override_explicit_conflict
-        )
+    if category_intent is not None and not (
+        explicit_subcategory is not None
+        and analysis.category_is_explicit.get("subcategory", False)
+        and normalize_filter_value(explicit_subcategory)
+        != normalize_filter_value(category_intent.subcategory)
+        and not category_intent.override_explicit_conflict
     ):
         # High-confidence tenant phrases such as "body massage" or
         # "repair leaking pipes" select a service provider, not similarly
@@ -242,23 +240,19 @@ def enrich_query_plan(
         if requested is None:
             continue
         inferred_categories[key] = (
-            canonical_catalog_value(key, requested, value_index[key])
-            or requested
+            canonical_catalog_value(key, requested, value_index[key]) or requested
         )
 
     if (
         filters.get("subcategory") is None
         and inferred_categories.get("subcategory") is None
     ):
-        inferred_subcategory = (
-            search_policy.infer_subcategory(
-                query,
-                value_index["subcategory"],
-            )
-            or infer_keyword_subcategory(
-                plan["keyword_query"],
-                value_index["subcategory"],
-            )
+        inferred_subcategory = search_policy.infer_subcategory(
+            query,
+            value_index["subcategory"],
+        ) or infer_keyword_subcategory(
+            plan["keyword_query"],
+            value_index["subcategory"],
         )
         if inferred_subcategory is not None and is_repair_subject_usage(
             query,
@@ -267,9 +261,10 @@ def enrich_query_plan(
             inferred_subcategory = None
         inferred_categories["subcategory"] = inferred_subcategory
 
-    if filters.get("main_category") is None and inferred_categories.get(
-        "main_category"
-    ) is None:
+    if (
+        filters.get("main_category") is None
+        and inferred_categories.get("main_category") is None
+    ):
         # Policy-provided categories remain soft fusion preferences.
         inferred_categories["main_category"] = search_policy.infer_main_category(
             query,
@@ -290,11 +285,9 @@ def enrich_query_plan(
         )
         if parent is not None:
             hard_parent = filters.get("main_category")
-            if (
-                hard_parent is not None
-                and normalize_filter_value(hard_parent)
-                != normalize_filter_value(parent)
-            ):
+            if hard_parent is not None and normalize_filter_value(
+                hard_parent
+            ) != normalize_filter_value(parent):
                 # Never combine a hard parent with a child from another
                 # catalog branch (for example Musical Instruments with the
                 # Books -> Music subcategory). Such an impossible tail filter
@@ -306,10 +299,7 @@ def enrich_query_plan(
                 inferred_categories["main_category"] = None
             else:
                 inferred_categories["main_category"] = parent
-    if (
-        filters.get("city") is not None
-        and filters.get("locality") is not None
-    ):
+    if filters.get("city") is not None and filters.get("locality") is not None:
         normalized_city = normalize_filter_value(filters["city"])
         normalized_locality = normalize_filter_value(filters["locality"])
         locality_as_city = QUERY_FILTER_ALIASES.get("city", {}).get(
@@ -330,9 +320,7 @@ def enrich_query_plan(
 
     city = filters.get("city")
     if city is not None and filters.get("state") is None:
-        state = value_index.get("_city_state", {}).get(
-            normalize_filter_value(city)
-        )
+        state = value_index.get("_city_state", {}).get(normalize_filter_value(city))
         if state is not None:
             filters["state"] = state
 
@@ -381,9 +369,7 @@ def deterministic_filter_query_plan(
             corrected_query,
             flags=re.IGNORECASE,
         )
-        corrections.append(
-            {"field": "intent", "input": "retail", "value": "rental"}
-        )
+        corrections.append({"field": "intent", "input": "retail", "value": "rental"})
     plan = enrich_query_plan(
         corrected_query,
         default_query_plan(corrected_query),
@@ -398,18 +384,10 @@ def deterministic_filter_query_plan(
         search_policy,
     )
     filters = plan["filters"]
-    if not any(
-        filters.get(key)
-        for key in ("main_category", "subcategory")
-    ):
+    if not any(filters.get(key) for key in ("main_category", "subcategory")):
         return None
-    if (
-        filters.get("min_rental_fee") is None
-        and filters.get("max_rental_fee") is None
-    ):
-        filters["max_rental_fee"] = extract_standalone_budget(
-            corrected_query
-        )
+    if filters.get("min_rental_fee") is None and filters.get("max_rental_fee") is None:
+        filters["max_rental_fee"] = extract_standalone_budget(corrected_query)
 
     residual = normalize_filter_value(corrected_query)
     for key in QUERY_FILTER_FIELDS:
@@ -431,8 +409,7 @@ def deterministic_filter_query_plan(
                 )
 
     has_price = any(
-        filters.get(key) is not None
-        for key in ("min_rental_fee", "max_rental_fee")
+        filters.get(key) is not None for key in ("min_rental_fee", "max_rental_fee")
     )
     has_duration = filters.get("rental_duration") is not None
     allowed_tokens = set(FAST_PATH_FILLER_TOKENS)
@@ -517,9 +494,8 @@ def direct_semantic_query_plan(
         or analysis.fuzzy_location(value_index) is not None
     ):
         return None, "location_language"
-    if (
-        analysis.rental_duration is not None
-        or any(value is not None for value in analysis.price_constraints)
+    if analysis.rental_duration is not None or any(
+        value is not None for value in analysis.price_constraints
     ):
         return None, "price_or_duration_language"
     if extract_sort_order(query) is not None:
@@ -552,8 +528,7 @@ def direct_semantic_query_plan(
     non_category_filters = {
         key: value
         for key, value in plan["filters"].items()
-        if key not in {"main_category", "subcategory"}
-        and value is not None
+        if key not in {"main_category", "subcategory"} and value is not None
     }
     if non_category_filters or plan["target_ad_type"] != "offer":
         return None, "structured_intent_detected"
@@ -573,9 +548,7 @@ def extract_query_plan(
     catalog_json = getattr(filter_catalog, "json_text", None)
     if catalog_json is None:
         catalog_json = (
-            json.dumps(filter_catalog, ensure_ascii=False)
-            if filter_catalog
-            else ""
+            json.dumps(filter_catalog, ensure_ascii=False) if filter_catalog else ""
         )
     static_cache_key = (prompt_context.strip(), catalog_json)
     with _STATIC_PROMPT_CACHE_LOCK:
@@ -583,8 +556,7 @@ def extract_query_plan(
     system_prompt = (
         static_content[0]
         if static_content is not None
-        else
-        "You convert product-search requests into a retrieval plan. "
+        else "You convert product-search requests into a retrieval plan. "
         "Queries may be written in any language or script, may mix languages, "
         "or may use colloquial romanized/transliterated Indian-language wording. "
         "Determine the underlying meaning before choosing any product, service, "

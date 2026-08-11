@@ -9,12 +9,12 @@ import secrets
 import sqlite3
 import threading
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Iterator, Literal
+from typing import Literal
 
 INTERNAL_ADMIN = "internal_admin"
 COMPANY_USER = "company_user"
@@ -58,17 +58,12 @@ def _password_hash(password: str) -> str:
         maxmem=SCRYPT_MAXMEM,
         dklen=32,
     )
-    return (
-        f"scrypt${SCRYPT_N}${SCRYPT_R}${SCRYPT_P}$"
-        f"{salt.hex()}${digest.hex()}"
-    )
+    return f"scrypt${SCRYPT_N}${SCRYPT_R}${SCRYPT_P}${salt.hex()}${digest.hex()}"
 
 
 def _verify_password(encoded: str, password: str) -> bool:
     try:
-        algorithm, raw_n, raw_r, raw_p, raw_salt, raw_digest = (
-            encoded.split("$", 5)
-        )
+        algorithm, raw_n, raw_r, raw_p, raw_salt, raw_digest = encoded.split("$", 5)
         if algorithm != "scrypt":
             return False
         n, r, p = int(raw_n), int(raw_r), int(raw_p)
@@ -93,8 +88,7 @@ def _password_needs_rehash(encoded: str) -> bool:
     return (
         len(parts) != 6
         or parts[0] != "scrypt"
-        or parts[1:4]
-        != [str(SCRYPT_N), str(SCRYPT_R), str(SCRYPT_P)]
+        or parts[1:4] != [str(SCRYPT_N), str(SCRYPT_R), str(SCRYPT_P)]
     )
 
 
@@ -176,15 +170,11 @@ class AnalyticsAuthStore:
             ),
         ):
             if idle_seconds <= 0 or absolute_seconds < idle_seconds:
-                raise ValueError(
-                    f"Invalid {label} analytics session expiration policy"
-                )
+                raise ValueError(f"Invalid {label} analytics session expiration policy")
         self._lock = threading.Lock()
         # A real scrypt verification is performed even for an unknown account,
         # reducing the usefulness of username timing probes.
-        self._dummy_password_hash = _password_hash(
-            secrets.token_urlsafe(32)
-        )
+        self._dummy_password_hash = _password_hash(secrets.token_urlsafe(32))
         self._initialize()
 
     @contextmanager
@@ -294,8 +284,7 @@ class AnalyticsAuthStore:
         for name, sql_type in additions.items():
             if name not in columns:
                 connection.execute(
-                    f"ALTER TABLE analytics_sessions ADD COLUMN {name} "
-                    f"{sql_type}"
+                    f"ALTER TABLE analytics_sessions ADD COLUMN {name} {sql_type}"
                 )
         connection.execute(
             """
@@ -372,8 +361,7 @@ class AnalyticsAuthStore:
     def _validate_password(self, password: str) -> None:
         if len(password) < self.password_min_length:
             raise ValueError(
-                "Password must contain at least "
-                f"{self.password_min_length} characters"
+                f"Password must contain at least {self.password_min_length} characters"
             )
         if len(password) > 1024:
             raise ValueError("Password is too long")
@@ -382,9 +370,7 @@ class AnalyticsAuthStore:
     def _validate_binding(role: str, company_id: str | None) -> str | None:
         if role not in VALID_ROLES:
             raise ValueError(f"Unsupported analytics role {role!r}")
-        normalized_company = (
-            company_id.strip().casefold() if company_id else None
-        )
+        normalized_company = company_id.strip().casefold() if company_id else None
         if role == INTERNAL_ADMIN and normalized_company is not None:
             raise ValueError("Internal users cannot be bound to a company")
         if role == COMPANY_USER and normalized_company is None:
@@ -600,25 +586,17 @@ class AnalyticsAuthStore:
                 (normalized,),
             ).fetchone()
             candidate_hash = (
-                row["password_hash"]
-                if row is not None
-                else self._dummy_password_hash
+                row["password_hash"] if row is not None else self._dummy_password_hash
             )
             verified = _verify_password(candidate_hash, password)
-            role_allowed = (
-                row is not None
-                and (
-                    required_role is None
-                    or row["role"] == required_role
-                )
+            role_allowed = row is not None and (
+                required_role is None or row["role"] == required_role
             )
 
             locked = False
             if row is not None and row["locked_until"]:
                 try:
-                    locked = datetime.fromisoformat(
-                        row["locked_until"]
-                    ) > now
+                    locked = datetime.fromisoformat(row["locked_until"]) > now
                 except ValueError:
                     locked = True
 
@@ -639,9 +617,7 @@ class AnalyticsAuthStore:
                     failed_attempts = int(row["failed_attempts"]) + 1
                     locked_until = None
                     if failed_attempts >= self.max_login_attempts:
-                        locked_until = _iso(
-                            now + timedelta(seconds=self.lock_seconds)
-                        )
+                        locked_until = _iso(now + timedelta(seconds=self.lock_seconds))
                         event = "account_locked"
                     connection.execute(
                         """
@@ -682,14 +658,12 @@ class AnalyticsAuthStore:
                     ),
                 )
 
-            portal_type, idle_seconds, absolute_seconds = (
-                self._session_policy(row["role"])
+            portal_type, idle_seconds, absolute_seconds = self._session_policy(
+                row["role"]
             )
             token = secrets.token_urlsafe(48)
             idle_expires_at = now + timedelta(seconds=idle_seconds)
-            absolute_expires_at = now + timedelta(
-                seconds=absolute_seconds
-            )
+            absolute_expires_at = now + timedelta(seconds=absolute_seconds)
             expires_at = min(idle_expires_at, absolute_expires_at)
             connection.execute(
                 """
@@ -798,24 +772,15 @@ class AnalyticsAuthStore:
                 connection.rollback()
                 return None
             try:
-                idle_expires_at = datetime.fromisoformat(
-                    row["idle_expires_at"]
-                )
-                absolute_expires_at = datetime.fromisoformat(
-                    row["absolute_expires_at"]
-                )
+                idle_expires_at = datetime.fromisoformat(row["idle_expires_at"])
+                absolute_expires_at = datetime.fromisoformat(row["absolute_expires_at"])
             except ValueError:
                 connection.rollback()
                 return None
-            expected_portal, idle_seconds, _ = self._session_policy(
-                row["role"]
-            )
+            expected_portal, idle_seconds, _ = self._session_policy(row["role"])
             if (
                 row["portal_type"] != expected_portal
-                or (
-                    portal_type is not None
-                    and row["portal_type"] != portal_type
-                )
+                or (portal_type is not None and row["portal_type"] != portal_type)
                 or idle_expires_at <= now
                 or absolute_expires_at <= now
             ):

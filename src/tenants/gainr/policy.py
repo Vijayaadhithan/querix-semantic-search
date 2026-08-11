@@ -129,9 +129,7 @@ _CATEGORY_INTENT_RULES = (
                 r"\b(?:fix|repair)(?:ing)?\s+(?:a\s+|the\s+)?"
                 r"(?:leak(?:ing)?\s+)?(?:water\s+)?pipes?\b"
             ),
-            re.compile(
-                r"\b(?:leak(?:ing)?|burst|broken)\s+(?:water\s+)?pipes?\b"
-            ),
+            re.compile(r"\b(?:leak(?:ing)?|burst|broken)\s+(?:water\s+)?pipes?\b"),
         ),
     ),
     (
@@ -211,17 +209,11 @@ _CATEGORY_INTENT_RULES = (
     ),
     (
         ("maid",),
-        (
-            re.compile(r"\b(?:house[\s-]+maid|domestic\s+(?:help|worker))\b"),
-        ),
+        (re.compile(r"\b(?:house[\s-]+maid|domestic\s+(?:help|worker))\b"),),
     ),
     (
         ("house cleaning labour", "cleaner"),
-        (
-            re.compile(
-                r"\b(?:house|home)\s+(?:cleaner|cleaning\s+(?:help|service))\b"
-            ),
-        ),
+        (re.compile(r"\b(?:house|home)\s+(?:cleaner|cleaning\s+(?:help|service))\b"),),
     ),
 )
 
@@ -231,10 +223,7 @@ def contains_phrase(text: str, phrases: set[str]) -> bool:
     return any(
         re.search(
             r"(?<!\w)"
-            + r"\s+".join(
-                re.escape(token)
-                for token in phrase.casefold().split()
-            )
+            + r"\s+".join(re.escape(token) for token in phrase.casefold().split())
             + r"(?!\w)",
             normalized,
         )
@@ -251,8 +240,7 @@ def _vehicle_travel_intent(query_plan: dict | None) -> bool:
     if not isinstance(query_plan, dict):
         return False
     query_text = " ".join(
-        str(query_plan.get(key) or "")
-        for key in ("semantic_query", "keyword_query")
+        str(query_plan.get(key) or "") for key in ("semantic_query", "keyword_query")
     )
     query_tokens = _tokens(query_text)
     if query_tokens & _VEHICLE_SERVICE_TERMS:
@@ -314,9 +302,8 @@ class GainrSearchPolicy:
 
     def rewrite_keyword_query(self, query: str, keyword_query: str) -> str:
         normalized = normalize_filter_value(query)
-        rough_terrain = (
-            re.search(r"\brough\s+terrain\b", normalized)
-            or re.search(r"\boff[\s-]?road\b", normalized)
+        rough_terrain = re.search(r"\brough\s+terrain\b", normalized) or re.search(
+            r"\boff[\s-]?road\b", normalized
         )
         vehicle_context = re.search(
             r"\b(?:vehicle|driv(?:e|ing)|recreational)\b",
@@ -343,9 +330,7 @@ class GainrSearchPolicy:
         ).strip()
         existing = set(re.findall(r"[^\W_]+", keyword_query.casefold()))
         additions = [
-            term
-            for term in _FUNCTIONAL_VEHICLE_KEYWORDS
-            if term not in existing
+            term for term in _FUNCTIONAL_VEHICLE_KEYWORDS if term not in existing
         ]
         return " ".join([keyword_query, *additions]).strip()
 

@@ -193,10 +193,9 @@ def fetch_relevant_ids(config, filters: dict[str, Any], limit: int) -> list[str]
         clauses.append(f"{quote_identifier(config, column)} = %s")
         params.append(value)
     where = " AND ".join(clauses)
-    with connection_context(config) as connection:
-        with connection.cursor() as cursor:
-            cursor.execute(
-                f"""
+    with connection_context(config) as connection, connection.cursor() as cursor:
+        cursor.execute(
+            f"""
                 SELECT {quote_identifier(config, config.search_id_column)}
                 FROM {table}
                 WHERE {where}
@@ -204,9 +203,9 @@ def fetch_relevant_ids(config, filters: dict[str, Any], limit: int) -> list[str]
                          {quote_identifier(config, config.search_id_column)} DESC
                 LIMIT %s
                 """,
-                (*params, limit),
-            )
-            return [str(row[0]) for row in cursor.fetchall()]
+            (*params, limit),
+        )
+        return [str(row[0]) for row in cursor.fetchall()]
 
 
 def main() -> int:

@@ -1,4 +1,3 @@
-
 import pytest
 
 from storage import database as database_store
@@ -34,9 +33,7 @@ def test_mysql_index_namespace_is_stable_across_physical_databases():
         index_namespace="gainr_index_v1",
     )
 
-    assert mysql_store.mysql_source_name(local) == (
-        "mysql:gainr_index_v1.search_ready"
-    )
+    assert mysql_store.mysql_source_name(local) == ("mysql:gainr_index_v1.search_ready")
     assert mysql_store.mysql_source_name(production) == (
         "mysql:gainr_index_v1.search_ready"
     )
@@ -126,10 +123,8 @@ def test_database_pool_reuses_connections_and_enforces_bound(monkeypatch):
 
     monkeypatch.setattr(pool, "_new_connection", new_connection)
 
-    with pool.connection() as first:
-        with pytest.raises(TimeoutError):
-            with pool.connection():
-                pass
+    with pool.connection() as first, pytest.raises(TimeoutError), pool.connection():
+        pass
     with pool.connection() as second:
         assert second is first
 

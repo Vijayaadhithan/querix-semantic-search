@@ -102,11 +102,7 @@ class HostedReranker:
                     requests_per_minute,
                     clock=clock,
                     redis_cache=redis_cache,
-                    scope=(
-                        f"{rate_limit_scope}:minute"
-                        if rate_limit_scope
-                        else None
-                    ),
+                    scope=(f"{rate_limit_scope}:minute" if rate_limit_scope else None),
                 )
             )
         if requests_per_day is not None:
@@ -116,11 +112,7 @@ class HostedReranker:
                     window_seconds=86400,
                     clock=clock,
                     redis_cache=redis_cache,
-                    scope=(
-                        f"{rate_limit_scope}:day"
-                        if rate_limit_scope
-                        else None
-                    ),
+                    scope=(f"{rate_limit_scope}:day" if rate_limit_scope else None),
                 )
             )
         self.clock = clock
@@ -177,19 +169,13 @@ class HostedReranker:
         retry_after = self._cooldown_retry_after()
         if retry_after > 0:
             raise RuntimeError(
-                f"{self.name} provider cooldown active; "
-                f"retry_after={retry_after:.1f}s"
+                f"{self.name} provider cooldown active; retry_after={retry_after:.1f}s"
             )
         queries = {str(pair[0]) for pair in pairs}
         if len(queries) != 1:
-            raise RuntimeError(
-                f"{self.name} reranker requires one query per request."
-            )
+            raise RuntimeError(f"{self.name} reranker requires one query per request.")
         query = str(pairs[0][0])
-        documents = [
-            str(pair[1])[: self.max_document_chars]
-            for pair in pairs
-        ]
+        documents = [str(pair[1])[: self.max_document_chars] for pair in pairs]
         for request_limiter in self.request_limiters:
             allowed, retry_after = request_limiter.allow()
             if not allowed:
@@ -225,22 +211,16 @@ class HostedReranker:
                     self._retry_after_seconds(response)
                     or RERANK_RATE_LIMIT_COOLDOWN_SECONDS
                 )
-            elif status is not None:
+            elif status is not None or isinstance(
+                exc, (requests.Timeout, requests.ConnectionError)
+            ):
                 self._set_cooldown(RERANK_FAILURE_COOLDOWN_SECONDS)
-            elif isinstance(exc, (requests.Timeout, requests.ConnectionError)):
-                self._set_cooldown(RERANK_FAILURE_COOLDOWN_SECONDS)
-            raise RuntimeError(
-                f"{self.name} reranker unavailable: {reason}"
-            ) from exc
+            raise RuntimeError(f"{self.name} reranker unavailable: {reason}") from exc
         except ValueError as exc:
-            raise RuntimeError(
-                f"{self.name} reranker returned invalid JSON"
-            ) from exc
+            raise RuntimeError(f"{self.name} reranker returned invalid JSON") from exc
         results = payload.get("data") or payload.get("results")
         if not isinstance(results, list):
-            raise RuntimeError(
-                f"{self.name} reranker response has no result list"
-            )
+            raise RuntimeError(f"{self.name} reranker response has no result list")
         scores: list[float | None] = [None] * len(documents)
         for result in results:
             try:
@@ -258,9 +238,7 @@ class HostedReranker:
             if 0 <= index < len(scores):
                 scores[index] = score
         if any(score is None for score in scores):
-            raise RuntimeError(
-                f"{self.name} reranker did not score every document"
-            )
+            raise RuntimeError(f"{self.name} reranker did not score every document")
         return [float(score) for score in scores]
 
 
@@ -338,9 +316,7 @@ class FallbackReranker:
                 elapsed_ms,
             )
             return scores
-        raise RuntimeError(
-            "All reranker providers failed: " + "; ".join(failures)
-        )
+        raise RuntimeError("All reranker providers failed: " + "; ".join(failures))
 
 
 def load_reranker():
@@ -359,17 +335,13 @@ def load_reranker():
                         url=VOYAGE_RERANK_URL,
                         api_key=VOYAGE_API_KEY,
                         model=model,
-                        requests_per_minute=(
-                            VOYAGE_RERANK_RPM_PER_MODEL
-                        ),
+                        requests_per_minute=(VOYAGE_RERANK_RPM_PER_MODEL),
                         redis_cache=PROVIDER_RATE_LIMIT_CACHE,
                         rate_limit_scope=f"reranker:voyage:{model}",
                     )
                 )
             else:
-                LOGGER.info(
-                    "Voyage reranker skipped because VOYAGE_API_KEY is unset."
-                )
+                LOGGER.info("Voyage reranker skipped because VOYAGE_API_KEY is unset.")
         elif name == "openrouter-nemotron":
             if OPENROUTER_API_KEY:
                 providers.append(
@@ -388,8 +360,7 @@ def load_reranker():
                 )
             else:
                 LOGGER.info(
-                    "OpenRouter reranker skipped because "
-                    "OPENROUTER_API_KEY is unset."
+                    "OpenRouter reranker skipped because OPENROUTER_API_KEY is unset."
                 )
     if not providers:
         raise RuntimeError(

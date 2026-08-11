@@ -67,9 +67,7 @@ def test_generate_credentials_creates_exclusive_mode_0600_file(
     )
     rotated_values = dotenv_values(path)
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
-    assert rotated_values[CREDENTIAL_PASSWORD_ENV] != (
-        values[CREDENTIAL_PASSWORD_ENV]
-    )
+    assert rotated_values[CREDENTIAL_PASSWORD_ENV] != (values[CREDENTIAL_PASSWORD_ENV])
 
 
 def test_credential_environment_validation(monkeypatch):
@@ -117,16 +115,22 @@ def test_sync_credentials_hashes_password_and_revokes_prior_session(tmp_path):
     )
     assert _sync_credential_record(store, rotated) == "updated"
     assert store.resolve_session(session.token) is None
-    assert store.authenticate(
-        username=rotated.username,
-        password=initial.password,
-        required_role=COMPANY_USER,
-    ) is None
-    assert store.authenticate(
-        username=rotated.username,
-        password=rotated.password,
-        required_role=COMPANY_USER,
-    ) is not None
+    assert (
+        store.authenticate(
+            username=rotated.username,
+            password=initial.password,
+            required_role=COMPANY_USER,
+        )
+        is None
+    )
+    assert (
+        store.authenticate(
+            username=rotated.username,
+            password=rotated.password,
+            required_role=COMPANY_USER,
+        )
+        is not None
+    )
 
     wrong_binding = CredentialRecord(
         username=initial.username,

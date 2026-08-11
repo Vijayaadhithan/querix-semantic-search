@@ -36,14 +36,15 @@ class PostgresRuntimeConfig:
     index_namespace: str = ""
 
     def __post_init__(self) -> None:
-        if min(
-            self.connect_timeout_seconds,
-            self.read_timeout_seconds,
-            self.write_timeout_seconds,
-        ) <= 0:
-            raise ValueError(
-                "PostgreSQL connection timeouts must be greater than zero"
+        if (
+            min(
+                self.connect_timeout_seconds,
+                self.read_timeout_seconds,
+                self.write_timeout_seconds,
             )
+            <= 0
+        ):
+            raise ValueError("PostgreSQL connection timeouts must be greater than zero")
         if self.statement_timeout_ms < 0:
             raise ValueError("PostgreSQL statement_timeout_ms must not be negative")
         if (
@@ -58,8 +59,7 @@ class PostgresRuntimeConfig:
             )
         if self.pool_validation_interval_seconds <= 0:
             raise ValueError(
-                "PostgreSQL pool_validation_interval_seconds must be "
-                "greater than zero"
+                "PostgreSQL pool_validation_interval_seconds must be greater than zero"
             )
         if self.tls_mode not in {
             "disable",
@@ -69,9 +69,7 @@ class PostgresRuntimeConfig:
             "verify-ca",
             "verify-full",
         }:
-            raise ValueError(
-                f"Unsupported PostgreSQL TLS mode {self.tls_mode!r}"
-            )
+            raise ValueError(f"Unsupported PostgreSQL TLS mode {self.tls_mode!r}")
 
 
 def require_psycopg():
@@ -109,9 +107,7 @@ def postgres_connection(
     if config.tls_key_file:
         options["sslkey"] = config.tls_key_file
     if config.statement_timeout_ms:
-        options["options"] = (
-            f"-c statement_timeout={config.statement_timeout_ms}"
-        )
+        options["options"] = f"-c statement_timeout={config.statement_timeout_ms}"
     if dict_rows:
         options["row_factory"] = dict_row
     return psycopg.connect(**options)
@@ -125,17 +121,13 @@ def quote_postgres_identifier(identifier: str) -> str:
 
 def qualified_table(config: PostgresRuntimeConfig, table: str) -> str:
     return (
-        f"{quote_postgres_identifier(config.schema)}."
-        f"{quote_postgres_identifier(table)}"
+        f"{quote_postgres_identifier(config.schema)}.{quote_postgres_identifier(table)}"
     )
 
 
 def postgres_source_name(config: PostgresRuntimeConfig) -> str:
     namespace = config.index_namespace or config.database
-    return (
-        f"postgres:{namespace}.{config.schema}."
-        f"{config.search_table}"
-    )
+    return f"postgres:{namespace}.{config.schema}.{config.search_table}"
 
 
 def fetch_postgres_columns(
@@ -228,9 +220,7 @@ def iter_postgres_rows(
     quoted_content = quote_postgres_identifier(content_column)
     qualified = qualified_table(config, table)
     quoted_primary_key = (
-        quote_postgres_identifier(primary_key_column)
-        if primary_key_column
-        else None
+        quote_postgres_identifier(primary_key_column) if primary_key_column else None
     )
     emitted = 0
     last_primary_key = None

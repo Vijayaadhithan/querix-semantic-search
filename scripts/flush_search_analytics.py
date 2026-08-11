@@ -28,9 +28,7 @@ def main() -> None:
 
     profile = load_tenant_registry(require_api_keys=False).get(args.company)
     if not profile.analytics.enabled:
-        raise SystemExit(
-            f"Search analytics is disabled for company {args.company!r}."
-        )
+        raise SystemExit(f"Search analytics is disabled for company {args.company!r}.")
     if not isinstance(profile.database, MySQLRuntimeConfig):
         raise SystemExit(
             "Search analytics delivery currently supports MySQL tenants only."

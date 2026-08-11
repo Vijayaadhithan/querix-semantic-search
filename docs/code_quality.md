@@ -30,6 +30,7 @@ Run the same deterministic checks before every push:
 uv lock --check
 uv sync --frozen --group analytics
 uv run --frozen --group analytics ruff check src scripts tests
+uv run --frozen --group analytics ruff format --check src scripts tests
 uv run --frozen --group analytics python scripts/check_markdown.py
 uv run --frozen --group analytics python -m compileall -q src scripts tests
 uv run --frozen --group analytics pytest -q
@@ -38,7 +39,8 @@ git diff --check
 ```
 
 Ruff enforces import ordering, unused imports and variables, critical syntax
-errors, and stale suppression comments. The Markdown checker validates every
+errors, 88-column formatting, Python 3.12 modernization, safe simplifications,
+and stale suppression comments. The Markdown checker validates every
 repository-local documentation target and heading anchor. External URLs are not
 called during CI, keeping the gate deterministic and independent of third-party
 availability.

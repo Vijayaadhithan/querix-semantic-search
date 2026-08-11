@@ -90,7 +90,9 @@ def is_gibberish(query: Any) -> bool:
         return True
     original = "" if query is None else str(query).strip()
     if len(original) > 5:
-        valid_count = sum(character.isalnum() or character.isspace() for character in original)
+        valid_count = sum(
+            character.isalnum() or character.isspace() for character in original
+        )
         if valid_count / len(original) < 0.5:
             return True
     if normalized in {"ddun", "vfl", "autolpg"}:

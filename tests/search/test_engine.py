@@ -319,10 +319,7 @@ def test_tenant_prompt_context_is_added_only_to_llm_planning(tmp_path):
 
     assert result["query_plan"]["execution_path"] == "semantic"
     assert provider.calls == 1
-    assert (
-        "This tenant rents professional event equipment."
-        in provider.system_prompt
-    )
+    assert "This tenant rents professional event equipment." in provider.system_prompt
     assert "Return the structured query plan." in provider.user_prompt
     assert '"semantic_query"' not in provider.user_prompt
 
@@ -371,9 +368,7 @@ def test_transliterated_queries_receive_trusted_semantic_normalization(tmp_path)
     assert result["query_plan"]["execution_path"] == "semantic"
     assert "romanized/transliterated" in provider.system_prompt
     assert "not a car" in provider.system_prompt
-    assert "Original user query:\nveetu vela kaari in Chennai" in (
-        provider.user_prompt
-    )
+    assert "Original user query:\nveetu vela kaari in Chennai" in (provider.user_prompt)
     assert "house maid domestic worker in Chennai" in provider.user_prompt
 
 
@@ -390,9 +385,7 @@ def test_transliterated_query_normalization_is_narrow_and_spelling_tolerant():
     assert normalize_transliterated_query("kalyanathuku camera venum") == (
         "for wedding camera venum"
     )
-    assert normalize_transliterated_query("Ford car for rent") == (
-        "Ford car for rent"
-    )
+    assert normalize_transliterated_query("Ford car for rent") == ("Ford car for rent")
 
 
 def test_company_intent_is_not_rewritten_by_shared_normalization():
@@ -414,16 +407,17 @@ def test_reviewed_category_typos_are_semantically_normalized():
     assert normalize_transliterated_query("bke in Chennai", gainr_aliases) == (
         "bike in Chennai"
     )
-    assert normalize_transliterated_query(
-        "techcician in Coimbatore",
-        gainr_aliases,
-    ) == "technician in Coimbatore"
+    assert (
+        normalize_transliterated_query(
+            "techcician in Coimbatore",
+            gainr_aliases,
+        )
+        == "technician in Coimbatore"
+    )
     assert normalize_transliterated_query("Ford in Coimbatore") == (
         "Ford in Coimbatore"
     )
-    assert normalize_transliterated_query("bke in Chennai") == (
-        "bke in Chennai"
-    )
+    assert normalize_transliterated_query("bke in Chennai") == ("bke in Chennai")
 
 
 def test_query_aliases_are_scoped_to_the_engine_instance(tmp_path):
@@ -666,10 +660,7 @@ def test_separate_word_is_not_corrected_to_similar_category(tmp_path):
         "dell",
         "door",
     ):
-        assert (
-            deterministic_filter_query_plan(separate_word, value_index)
-            is None
-        )
+        assert deterministic_filter_query_plan(separate_word, value_index) is None
     resort = deterministic_filter_query_plan("resort", value_index)
     assert resort["execution_path"] == "deterministic_filter"
     assert resort["filters"]["subcategory"] == "Resort"
@@ -678,10 +669,13 @@ def test_separate_word_is_not_corrected_to_similar_category(tmp_path):
         value_index,
     )
     assert technician_typo is None
-    assert normalize_transliterated_query(
-        "techcician",
-        {"techcician": "technician"},
-    ) == "technician"
+    assert (
+        normalize_transliterated_query(
+            "techcician",
+            {"techcician": "technician"},
+        )
+        == "technician"
+    )
     index.close()
 
 
@@ -768,9 +762,7 @@ def test_deterministic_filter_plan_accepts_reordered_bare_budget_query(
     assert normalize_transliterated_query(
         "1000 bke rent in chni",
         {"bke": "bike"},
-    ) == (
-        "1000 bike rent in chni"
-    )
+    ) == ("1000 bike rent in chni")
     index.close()
 
 
@@ -1147,22 +1139,34 @@ def test_deterministic_filter_plan_rejects_descriptive_queries(tmp_path):
     index = build_index(tmp_path / "semantic-plan.sqlite3")
     value_index = query_filter_value_index(index)
 
-    assert deterministic_filter_query_plan(
-        "red bike with ABS in Chennai",
-        value_index,
-    ) is None
-    assert deterministic_filter_query_plan(
-        "red bke with ABS in chni",
-        value_index,
-    ) is None
-    assert deterministic_filter_query_plan(
-        "vehicle for recreational driving on rough terrain",
-        value_index,
-    ) is None
-    assert deterministic_filter_query_plan(
-        "wanted bike",
-        value_index,
-    ) is None
+    assert (
+        deterministic_filter_query_plan(
+            "red bike with ABS in Chennai",
+            value_index,
+        )
+        is None
+    )
+    assert (
+        deterministic_filter_query_plan(
+            "red bke with ABS in chni",
+            value_index,
+        )
+        is None
+    )
+    assert (
+        deterministic_filter_query_plan(
+            "vehicle for recreational driving on rough terrain",
+            value_index,
+        )
+        is None
+    )
+    assert (
+        deterministic_filter_query_plan(
+            "wanted bike",
+            value_index,
+        )
+        is None
+    )
     index.close()
 
 
@@ -1173,9 +1177,7 @@ def test_normalized_query_plan_cache_skips_repeated_planner_work(
     index = build_index(tmp_path / "plan-cache.sqlite3")
     provider = CountingQueryProvider()
     deterministic_calls = []
-    original_deterministic_plan = (
-        search_engine.deterministic_filter_query_plan
-    )
+    original_deterministic_plan = search_engine.deterministic_filter_query_plan
 
     def deterministic_plan(*args, **kwargs):
         deterministic_calls.append(True)
@@ -1312,10 +1314,7 @@ def test_shared_plan_cache_survives_engine_restart(tmp_path):
     assert second["plan_cache_hit"] is True
     assert first_provider.calls == 1
     assert second_provider.calls == 0
-    assert all(
-        "red" not in key
-        for _namespace, key in cache.values
-    )
+    assert all("red" not in key for _namespace, key in cache.values)
     assert second_engine.plan_cache_health() == {
         "redis_enabled": True,
         "redis_connected": True,
@@ -1401,14 +1400,8 @@ def test_result_id_cache_skips_repeated_search_and_invalidates_on_index_change(
         "101",
         "102",
     ]
-    assert all(
-        product["result_tier"] == "filtered"
-        for product in second["products"]
-    )
-    assert any(
-        namespace == "search_result"
-        for namespace, _key in cache.values
-    )
+    assert all(product["result_tier"] == "filtered" for product in second["products"])
+    assert any(namespace == "search_result" for namespace, _key in cache.values)
 
     index.upsert(
         [
@@ -1754,9 +1747,7 @@ def test_small_rerank_window_preserves_deep_gainr_recall(
 
     result = engine.retrieve(
         {
-            "semantic_query": (
-                "vehicle for long distance with comfort and safety"
-            ),
+            "semantic_query": ("vehicle for long distance with comfort and safety"),
             "keyword_query": "vehicle long distance comfort safety",
             "target_ad_type": "offer",
             "inferred_categories": {},
@@ -1953,9 +1944,7 @@ def test_reranker_failure_falls_back_to_fusion_order(tmp_path):
         ]
 
         def compute_score(self, _pairs, **_kwargs):
-            raise RuntimeError(
-                "All reranker providers failed: voyage-2.5=ReadTimeout"
-            )
+            raise RuntimeError("All reranker providers failed: voyage-2.5=ReadTimeout")
 
     engine = ProductSearchEngine(
         collection=FakeCollection(),
@@ -2082,13 +2071,13 @@ def test_semantic_search_uses_hybrid_continuation_before_catalogue_tail(
         return {
             "id": doc_id,
             "text": f"candidate {product_id}",
-                "metadata": {
-                    "source_type": "mysql",
-                    "source_table": engine.search_table,
-                    engine.search_id_column: product_id,
-                    "main_category_name": "Automobiles",
-                    "subcategory_name": "Car",
-                },
+            "metadata": {
+                "source_type": "mysql",
+                "source_table": engine.search_table,
+                engine.search_id_column: product_id,
+                "main_category_name": "Automobiles",
+                "subcategory_name": "Car",
+            },
         }
 
     ranked_candidate = candidate("ranked-doc", 101)
@@ -2109,9 +2098,7 @@ def test_semantic_search_uses_hybrid_continuation_before_catalogue_tail(
             "execution_path": "semantic",
             "sort_order": None,
         },
-        "resolved_filters": {
-            "categorical": {"city_name": "Chennai"}
-        },
+        "resolved_filters": {"categorical": {"city_name": "Chennai"}},
         "unresolved_filters": {},
     }
     monkeypatch.setattr(

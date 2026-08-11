@@ -41,9 +41,7 @@ OPTIONAL_PRODUCT_COLUMNS = {
 
 def tokenize_query(text: str) -> list[str]:
     return list(
-        dict.fromkeys(
-            re.findall(r"[^\W_]+", text.casefold(), flags=re.UNICODE)
-        )
+        dict.fromkeys(re.findall(r"[^\W_]+", text.casefold(), flags=re.UNICODE))
     )
 
 
@@ -135,9 +133,7 @@ class PersistentBM25Index:
         )
         existing_columns = {
             str(row["name"])
-            for row in self.connection.execute(
-                "PRAGMA table_info(products)"
-            ).fetchall()
+            for row in self.connection.execute("PRAGMA table_info(products)").fetchall()
         }
         for column, column_type in OPTIONAL_PRODUCT_COLUMNS.items():
             if column not in existing_columns:
@@ -146,8 +142,7 @@ class PersistentBM25Index:
                 )
         for column in OPTIONAL_PRODUCT_COLUMNS:
             self.connection.execute(
-                f"CREATE INDEX IF NOT EXISTS products_{column} "
-                f"ON products({column})"
+                f"CREATE INDEX IF NOT EXISTS products_{column} ON products({column})"
             )
         self.connection.commit()
 
@@ -164,9 +159,7 @@ class PersistentBM25Index:
 
     def doc_ids(self) -> set[str]:
         with self._lock:
-            rows = self.connection.execute(
-                "SELECT doc_id FROM products"
-            ).fetchall()
+            rows = self.connection.execute("SELECT doc_id FROM products").fetchall()
         return {str(row["doc_id"]) for row in rows}
 
     def revision(self) -> int:
@@ -178,34 +171,30 @@ class PersistentBM25Index:
 
     def _increment_revision(self) -> None:
         self.connection.execute(
-            "UPDATE index_metadata SET value = value + 1 "
-            "WHERE key = 'revision'"
+            "UPDATE index_metadata SET value = value + 1 WHERE key = 'revision'"
         )
 
     def clear(self) -> None:
-        with self._lock:
-            with self.connection:
-                self.connection.execute("DELETE FROM products")
-                self._increment_revision()
+        with self._lock, self.connection:
+            self.connection.execute("DELETE FROM products")
+            self._increment_revision()
 
     def delete_doc_ids(self, doc_ids: list[str] | set[str]) -> int:
         unique_ids = sorted({str(doc_id) for doc_id in doc_ids})
         if not unique_ids:
             return 0
         deleted = 0
-        with self._lock:
-            with self.connection:
-                for start in range(0, len(unique_ids), 500):
-                    batch = unique_ids[start : start + 500]
-                    placeholders = ", ".join("?" for _ in batch)
-                    cursor = self.connection.execute(
-                        f"DELETE FROM products "
-                        f"WHERE doc_id IN ({placeholders})",
-                        batch,
-                    )
-                    deleted += max(cursor.rowcount, 0)
-                if deleted:
-                    self._increment_revision()
+        with self._lock, self.connection:
+            for start in range(0, len(unique_ids), 500):
+                batch = unique_ids[start : start + 500]
+                placeholders = ", ".join("?" for _ in batch)
+                cursor = self.connection.execute(
+                    f"DELETE FROM products WHERE doc_id IN ({placeholders})",
+                    batch,
+                )
+                deleted += max(cursor.rowcount, 0)
+            if deleted:
+                self._increment_revision()
         return deleted
 
     def upsert(self, rows: list[dict]) -> None:
@@ -233,11 +222,10 @@ class PersistentBM25Index:
             )
             for row in rows
         ]
-        with self._lock:
-            with self.connection:
-                changes_before = self.connection.total_changes
-                self.connection.executemany(
-                    """
+        with self._lock, self.connection:
+            changes_before = self.connection.total_changes
+            self.connection.executemany(
+                """
                     INSERT INTO products (
                         doc_id,
                         product_id,
@@ -292,10 +280,10 @@ class PersistentBM25Index:
                        OR products.ad_type IS NOT excluded.ad_type
                        OR products.is_rent_negotiable IS NOT excluded.is_rent_negotiable
                     """,
-                    values,
-                )
-                if self.connection.total_changes > changes_before:
-                    self._increment_revision()
+                values,
+            )
+            if self.connection.total_changes > changes_before:
+                self._increment_revision()
 
     def filter_value_index(self) -> dict:
         value_index = {}
@@ -316,7 +304,10 @@ class PersistentBM25Index:
         parent_columns: tuple[str, ...],
     ) -> dict[str, tuple[str, ...]]:
         allowed_columns = set(FILTER_COLUMNS)
-        if child_column not in allowed_columns or not set(parent_columns) <= allowed_columns:
+        if (
+            child_column not in allowed_columns
+            or not set(parent_columns) <= allowed_columns
+        ):
             raise ValueError("Unsupported BM25 relationship column")
 
         selected_columns = ", ".join((child_column, *parent_columns))
@@ -325,14 +316,11 @@ class PersistentBM25Index:
             for column in (child_column, *parent_columns)
         )
         rows = self.connection.execute(
-            f"SELECT DISTINCT {selected_columns} FROM products "
-            f"WHERE {required_values}"
+            f"SELECT DISTINCT {selected_columns} FROM products WHERE {required_values}"
         ).fetchall()
         relationships: dict[str, set[tuple[str, ...]]] = {}
         for row in rows:
-            normalized_child = " ".join(
-                str(row[child_column]).casefold().split()
-            )
+            normalized_child = " ".join(str(row[child_column]).casefold().split())
             relationships.setdefault(normalized_child, set()).add(
                 tuple(row[column] for column in parent_columns)
             )
@@ -347,20 +335,14 @@ class PersistentBM25Index:
             "subcategory_name",
             ("main_category_name",),
         )
-        return {
-            subcategory: parent[0]
-            for subcategory, parent in relationships.items()
-        }
+        return {subcategory: parent[0] for subcategory, parent in relationships.items()}
 
     def city_state_index(self) -> dict[str, str]:
         relationships = self._unique_relationship_index(
             "city_name",
             ("state_name",),
         )
-        return {
-            city: state[0]
-            for city, state in relationships.items()
-        }
+        return {city: state[0] for city, state in relationships.items()}
 
     def locality_location_index(self) -> dict[str, dict[str, str]]:
         relationships = self._unique_relationship_index(
@@ -412,7 +394,7 @@ class PersistentBM25Index:
                 SELECT p.*, bm25(products_fts) AS rank
                 FROM products_fts
                 JOIN products AS p ON p.rowid = products_fts.rowid
-                WHERE {' AND '.join(conditions)}
+                WHERE {" AND ".join(conditions)}
                 ORDER BY rank
                 LIMIT ?
                 """,
@@ -534,11 +516,7 @@ class PersistentBM25Index:
             conditions.append(f"doc_id NOT IN ({placeholders})")
             params.extend(excluded)
 
-        where_clause = (
-            f"WHERE {' AND '.join(conditions)}"
-            if conditions
-            else ""
-        )
+        where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
         order_clause = {
             "price_asc": (
                 "CASE WHEN rental_fee IS NULL OR rental_fee <= ? "

@@ -102,9 +102,7 @@ class AnalyticsRefreshService:
         source_rows: dict[str, int] = {}
         try:
             data = self.source.load(company)
-            source_rows = {
-                name: int(len(frame)) for name, frame in data.items()
-            }
+            source_rows = {name: int(len(frame)) for name, frame in data.items()}
             generated_at = datetime.now(UTC).isoformat()
 
             LOGGER.info(
@@ -195,9 +193,7 @@ class AnalyticsRefreshService:
                 ).dropna()
                 if not parsed.empty:
                     watermarks.append(parsed.max())
-            source_watermark = (
-                max(watermarks).isoformat() if watermarks else None
-            )
+            source_watermark = max(watermarks).isoformat() if watermarks else None
             version = self.store.publish(
                 run_id=run_id,
                 company_id=company.company_id,

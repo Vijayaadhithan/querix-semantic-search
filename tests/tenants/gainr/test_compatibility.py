@@ -517,9 +517,7 @@ def test_deterministic_result_uses_full_catalog_pagination(tmp_path):
     monitor = adapter.product_search_service.monitor_status()
     assert monitor["completed"] == 1
     assert monitor["recent"][0]["execution_path"] == "deterministic_filter"
-    assert [
-        event["step"] for event in monitor["recent"][0]["timeline"]
-    ] == [
+    assert [event["step"] for event in monitor["recent"][0]["timeline"]] == [
         "plan",
         "database_filter",
         "response_map",
@@ -553,9 +551,7 @@ def test_semantic_result_hydrates_only_requested_twenty_row_page(
         page,
         page_size,
     ):
-        selected = product_ids[
-            (page - 1) * page_size : page * page_size
-        ]
+        selected = product_ids[(page - 1) * page_size : page * page_size]
         hydrated_pages.append(list(selected))
         return (
             [{"id": str(product_id)} for product_id in selected],
@@ -637,7 +633,7 @@ def test_ranked_page_query_preserves_order_total_and_relations(
                 {
                     "id": 8,
                     "name": "Owner",
-                }
+                },
             ]
 
     class Connection:
@@ -707,9 +703,7 @@ def test_pooled_relation_hydration_runs_independent_queries_concurrently(
             with lock:
                 active -= 1
             if "FROM `ads_attributes`" in sql:
-                self.rows = [
-                    {"ads_id": 2, "attribute_id": 959, "value": "hourly"}
-                ]
+                self.rows = [{"ads_id": 2, "attribute_id": 959, "value": "hourly"}]
             elif "service_ad_count" in sql:
                 self.rows = [{"user_id": 7, "service_ad_count": 3}]
             else:
@@ -934,14 +928,12 @@ def test_recent_searches_are_isolated_by_user(tmp_path):
     adapter.remember_search("user-b", "camera")
     adapter.remember_search(None, "must not be shared")
 
-    assert [
-        item["value"]
-        for item in adapter.recent_searches("user-a")["data"]
-    ] == ["bike"]
-    assert [
-        item["value"]
-        for item in adapter.recent_searches("user-b")["data"]
-    ] == ["camera"]
+    assert [item["value"] for item in adapter.recent_searches("user-a")["data"]] == [
+        "bike"
+    ]
+    assert [item["value"] for item in adapter.recent_searches("user-b")["data"]] == [
+        "camera"
+    ]
     assert adapter.recent_searches(None)["data"] == []
 
 
@@ -968,12 +960,8 @@ def test_recent_search_response_matches_gainr_contract(tmp_path, monkeypatch):
     assert list(response) == ["status", "data"]
     assert response["status"] is True
     assert [
-        (item["value"], item["is_prosper"])
-        for item in response["data"]
+        (item["value"], item["is_prosper"]) for item in response["data"]
     ] == expected
-    assert all(
-        list(item) == ["id", "value", "is_prosper"]
-        for item in response["data"]
-    )
+    assert all(list(item) == ["id", "value", "is_prosper"] for item in response["data"])
     assert all(isinstance(item["id"], int) for item in response["data"])
     assert len({item["id"] for item in response["data"]}) == 10

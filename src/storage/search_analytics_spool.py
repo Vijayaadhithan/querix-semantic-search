@@ -8,7 +8,7 @@ import sqlite3
 import threading
 import time
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -28,8 +28,8 @@ _SCHEMA_VERSION = 4
 
 def _utc_iso(value: datetime) -> str:
     if value.tzinfo is None:
-        value = value.replace(tzinfo=timezone.utc)
-    return value.astimezone(timezone.utc).isoformat()
+        value = value.replace(tzinfo=UTC)
+    return value.astimezone(UTC).isoformat()
 
 
 def serialize_search_analytics_event(event: SearchAnalyticsEvent) -> str:
@@ -297,7 +297,7 @@ class SQLiteSearchAnalyticsSpoolStore:
                             item.company_id,
                             payload_json,
                             _utc_iso(item.created_at),
-                            datetime.now(timezone.utc).isoformat(),
+                            datetime.now(UTC).isoformat(),
                         ),
                     )
                     connection.commit()

@@ -25,6 +25,7 @@ from tenants.gainr.repository import GainrDatabaseRepository
 
 PERFORMANCE_LOGGER = logging.getLogger("uvicorn.error")
 
+
 class GainrCompatibilityService:
     def __init__(
         self,
@@ -267,13 +268,15 @@ class GainrCompatibilityService:
                 ignored[field_name] = effective[field_name]
             effective[field_name] = value
         if explicit.ad_type:
-            ignored["target_ad_type"] = planned["query_plan"].get(
-                "target_ad_type"
-            )
-        return planned, effective, {
-            "auto_filters": auto_filters,
-            "ignored_auto_filters": ignored,
-        }
+            ignored["target_ad_type"] = planned["query_plan"].get("target_ad_type")
+        return (
+            planned,
+            effective,
+            {
+                "auto_filters": auto_filters,
+                "ignored_auto_filters": ignored,
+            },
+        )
 
     def filter_results(
         self,
@@ -321,9 +324,7 @@ class GainrCompatibilityService:
             {str(value) for value in request.filter.ad_type}
             if request.filter.ad_type
             else {
-                "2"
-                if planned["query_plan"].get("target_ad_type") == "wanted"
-                else "1"
+                "2" if planned["query_plan"].get("target_ad_type") == "wanted" else "1"
             }
         )
         database_only_filters = bool(
@@ -345,9 +346,7 @@ class GainrCompatibilityService:
                 sort_order=planned["query_plan"].get("sort_order"),
                 allowed_ad_types=allowed_ad_types,
             )
-            database_ms = (
-                time.perf_counter() - database_started
-            ) * 1000
+            database_ms = (time.perf_counter() - database_started) * 1000
             route = "deterministic"
             usage_store = self.product_search_service.usage_store
             usage_started = time.perf_counter()
@@ -381,18 +380,12 @@ class GainrCompatibilityService:
                 request.searchTerm,
                 capacity_acquired=True,
                 limit=self.product_search_service.max_results,
-                ranking_window=(
-                    self.profile.compatibility.semantic_ranked_window
-                ),
+                ranking_window=(self.profile.compatibility.semantic_ranked_window),
                 planned_result=planned,
                 resolved_filters=effective,
                 allowed_ad_types=allowed_ad_types,
                 **(
-                    {
-                        "speculative_embedding_future": (
-                            speculative_embedding_future
-                        )
-                    }
+                    {"speculative_embedding_future": (speculative_embedding_future)}
                     if speculative_embedding_future is not None
                     else {}
                 ),
@@ -421,9 +414,7 @@ class GainrCompatibilityService:
                     page=request.page,
                     page_size=page_size,
                 )
-                hydration_ms = (
-                    time.perf_counter() - hydration_started
-                ) * 1000
+                hydration_ms = (time.perf_counter() - hydration_started) * 1000
             else:
                 eligibility_source = "engine_rows"
                 eligibility_started = time.perf_counter()
@@ -447,9 +438,7 @@ class GainrCompatibilityService:
                     ):
                         continue
                     eligible_ids.append(product_id)
-                eligibility_ms = (
-                    time.perf_counter() - eligibility_started
-                ) * 1000
+                eligibility_ms = (time.perf_counter() - eligibility_started) * 1000
                 total = len(eligible_ids)
                 start = (request.page - 1) * page_size
                 hydration_started = time.perf_counter()
@@ -459,9 +448,7 @@ class GainrCompatibilityService:
                     request.filter,
                     allowed_ad_types,
                 )
-                hydration_ms = (
-                    time.perf_counter() - hydration_started
-                ) * 1000
+                hydration_ms = (time.perf_counter() - hydration_started) * 1000
             window_limited = (
                 len(result.get("product_ids", []))
                 >= self.product_search_service.max_results
@@ -481,9 +468,7 @@ class GainrCompatibilityService:
             }
         card_mapping_started = time.perf_counter()
         cards = [self._card(row) for row in rows]
-        card_mapping_ms = (
-            time.perf_counter() - card_mapping_started
-        ) * 1000
+        card_mapping_ms = (time.perf_counter() - card_mapping_started) * 1000
         response: dict[str, Any] = {
             "status": True,
             "message": "",
@@ -499,9 +484,7 @@ class GainrCompatibilityService:
                 "explicit_filters": request.filter.model_dump(),
                 "effective_filters": effective,
                 "total_results": total,
-                "result_window_limited": (
-                    route == "semantic" and window_limited
-                ),
+                "result_window_limited": (route == "semantic" and window_limited),
                 "usage": usage,
             }
         recent_started = time.perf_counter()
@@ -676,9 +659,7 @@ class GainrCompatibilityService:
         attributes = [
             {
                 "ads_id": self._integer(attribute.get("ads_id")),
-                "attribute_id": self._integer(
-                    attribute.get("attribute_id")
-                ),
+                "attribute_id": self._integer(attribute.get("attribute_id")),
                 "value": self._integer(attribute.get("value")),
             }
             for attribute in row.get("__ads_attributes", [])
@@ -688,10 +669,7 @@ class GainrCompatibilityService:
         is_verified = False
         if verified_user is not None:
             is_verified = (
-                self._integer(
-                    verified_user.get("is_aadhaar_gst_verified")
-                )
-                == 1
+                self._integer(verified_user.get("is_aadhaar_gst_verified")) == 1
             )
             compact_user = {
                 "prosper_id": verified_user.get("prosper_id"),
@@ -700,9 +678,7 @@ class GainrCompatibilityService:
                     verified_user.get("is_aadhaar_gst_verified")
                 ),
             }
-            card["is_aadhar_gst_verified_count"] = (
-                1 if is_verified else 0
-            )
+            card["is_aadhar_gst_verified_count"] = 1 if is_verified else 0
         card.update(
             {
                 "ads_attributes": attributes,
@@ -720,9 +696,7 @@ class GainrCompatibilityService:
                 "ads_likes": None,
                 "user": compact_user,
                 "boost_ad": None,
-                "is_aadhar_gst_verified": (
-                    verified_user if is_verified else None
-                ),
+                "is_aadhar_gst_verified": (verified_user if is_verified else None),
             }
         )
         return card
@@ -753,9 +727,7 @@ class GainrCompatibilityService:
         ]
         item_id = int(time.time() * 1000)
         existing_ids = {
-            int(item["id"])
-            for item in items
-            if str(item.get("id", "")).isdigit()
+            int(item["id"]) for item in items if str(item.get("id", "")).isdigit()
         }
         while item_id in existing_ids:
             item_id += 1
@@ -764,9 +736,7 @@ class GainrCompatibilityService:
             {
                 "id": item_id,
                 "value": value,
-                "is_prosper": int(
-                    bool(re.fullmatch(r"[A-Za-z]{2}\d+", value))
-                ),
+                "is_prosper": int(bool(re.fullmatch(r"[A-Za-z]{2}\d+", value))),
             },
         )
         items = items[: self.profile.compatibility.recent_limit]

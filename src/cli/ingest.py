@@ -91,10 +91,7 @@ def main() -> None:
         "--mysql-batch-size",
         type=int,
         default=MYSQL_BATCH_SIZE,
-        help=(
-            "database rows per vector/BM25 batch "
-            f"(default: {MYSQL_BATCH_SIZE})"
-        ),
+        help=(f"database rows per vector/BM25 batch (default: {MYSQL_BATCH_SIZE})"),
     )
     parser.add_argument(
         "--embed-batch-size",
@@ -115,9 +112,7 @@ def main() -> None:
     parser.add_argument(
         "--mysql-replace-source",
         action="store_true",
-        help=(
-            "clear this company's vector/BM25 source before authoritative rebuild"
-        ),
+        help=("clear this company's vector/BM25 source before authoritative rebuild"),
     )
     parser.add_argument(
         "--mysql-force-reembed",
@@ -146,9 +141,7 @@ def main() -> None:
         list_tenant_vectors(tenant)
         return
     if args.delete:
-        if not confirm(
-            f"Delete tenant vectors for source {args.delete!r}?", args.yes
-        ):
+        if not confirm(f"Delete tenant vectors for source {args.delete!r}?", args.yes):
             print("Cancelled.")
             return
         deleted = delete_tenant_source(tenant, args.delete)

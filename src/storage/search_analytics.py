@@ -8,7 +8,7 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any, Protocol
 
 from storage.mysql import (
@@ -76,21 +76,23 @@ def sanitize_search_analytics_context(value: Any) -> dict[str, Any]:
             item = item.strip()[:191]
             if item:
                 sanitized[name] = item
-        elif isinstance(item, bool):
-            sanitized[name] = item
-        elif isinstance(item, (int, float)) and math.isfinite(float(item)):
+        elif (
+            isinstance(item, bool)
+            or isinstance(item, (int, float))
+            and math.isfinite(float(item))
+        ):
             sanitized[name] = item
     return sanitized
 
 
 def utc_now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def mysql_utc(value: datetime) -> datetime:
     if value.tzinfo is None:
-        value = value.replace(tzinfo=timezone.utc)
-    return value.astimezone(timezone.utc).replace(tzinfo=None)
+        value = value.replace(tzinfo=UTC)
+    return value.astimezone(UTC).replace(tzinfo=None)
 
 
 @dataclass(frozen=True)
@@ -164,13 +166,15 @@ def create_search_analytics_schema(
     history = quote_mysql_identifier(search_history_table)
     usage = quote_mysql_identifier(api_usage_table)
     pymysql = require_pymysql()
-    with mysql_connection(
-        cursorclass=pymysql.cursors.DictCursor,
-        config=config,
-    ) as connection:
-        with connection.cursor() as cursor:
-            cursor.execute(
-                f"""
+    with (
+        mysql_connection(
+            cursorclass=pymysql.cursors.DictCursor,
+            config=config,
+        ) as connection,
+        connection.cursor() as cursor,
+    ):
+        cursor.execute(
+            f"""
                 CREATE TABLE IF NOT EXISTS {history} (
                     id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
                     request_id CHAR(32) CHARACTER SET ascii
@@ -182,9 +186,9 @@ def create_search_analytics_schema(
                     KEY idx_search_created (created_at)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
                 """
-            )
-            cursor.execute(
-                f"""
+        )
+        cursor.execute(
+            f"""
                 CREATE TABLE IF NOT EXISTS {usage} (
                     id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
                     request_id CHAR(32) CHARACTER SET ascii
@@ -215,13 +219,13 @@ def create_search_analytics_schema(
                     )
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
                 """
-            )
-            _migrate_search_analytics_schema(
-                cursor,
-                company_id=company_id,
-                search_history_table=search_history_table,
-                api_usage_table=api_usage_table,
-            )
+        )
+        _migrate_search_analytics_schema(
+            cursor,
+            company_id=company_id,
+            search_history_table=search_history_table,
+            api_usage_table=api_usage_table,
+        )
 
 
 def _table_columns(cursor, table_name: str) -> set[str]:
@@ -602,29 +606,29 @@ def search_analytics_schema_status(
             "created_at",
         },
     }
-    with mysql_connection(
-        cursorclass=pymysql.cursors.DictCursor,
-        config=config,
-    ) as connection:
-        with connection.cursor() as cursor:
-            placeholders = ", ".join("%s" for _ in expected)
-            cursor.execute(
-                f"""
+    with (
+        mysql_connection(
+            cursorclass=pymysql.cursors.DictCursor,
+            config=config,
+        ) as connection,
+        connection.cursor() as cursor,
+    ):
+        placeholders = ", ".join("%s" for _ in expected)
+        cursor.execute(
+            f"""
                 SELECT table_name, column_name
                 FROM information_schema.columns
                 WHERE table_schema = DATABASE()
                   AND table_name IN ({placeholders})
                 """,
-                tuple(sorted(expected)),
-            )
-            present: dict[str, set[str]] = {}
-            for row in cursor.fetchall():
-                table_name = str(row.get("table_name") or row.get("TABLE_NAME") or "")
-                column_name = str(
-                    row.get("column_name") or row.get("COLUMN_NAME") or ""
-                )
-                if table_name and column_name:
-                    present.setdefault(table_name, set()).add(column_name)
+            tuple(sorted(expected)),
+        )
+        present: dict[str, set[str]] = {}
+        for row in cursor.fetchall():
+            table_name = str(row.get("table_name") or row.get("TABLE_NAME") or "")
+            column_name = str(row.get("column_name") or row.get("COLUMN_NAME") or "")
+            if table_name and column_name:
+                present.setdefault(table_name, set()).add(column_name)
     return {
         table: columns.issubset(present.get(table, set()))
         for table, columns in sorted(expected.items())

@@ -47,9 +47,7 @@ def _engine_dependency(name: str, default):
     """Honor patches made through the public ``search.engine`` module."""
     engine_module = sys.modules.get("search.engine")
     return (
-        getattr(engine_module, name, default)
-        if engine_module is not None
-        else default
+        getattr(engine_module, name, default) if engine_module is not None else default
     )
 
 
@@ -287,17 +285,13 @@ class SearchEngineSupportMixin:
 
         database_started = time.perf_counter()
         products = (
-            self._fetch_products(cached["product_ids"])
-            if hydrate_products
-            else []
+            self._fetch_products(cached["product_ids"]) if hydrate_products else []
         )
         primary_identities = {
-            str(product_id)
-            for product_id in cached["primary_product_ids"]
+            str(product_id) for product_id in cached["primary_product_ids"]
         }
         deterministic = (
-            cached["query_plan"].get("execution_path")
-            == "deterministic_filter"
+            cached["query_plan"].get("execution_path") == "deterministic_filter"
         )
         products = [
             {
@@ -307,8 +301,7 @@ class SearchEngineSupportMixin:
                     if deterministic
                     else (
                         "ranked"
-                        if str(product.get(self.result_id_column))
-                        in primary_identities
+                        if str(product.get(self.result_id_column)) in primary_identities
                         else "related"
                     )
                 ),
@@ -376,20 +369,16 @@ class SearchEngineSupportMixin:
             "resolved_filters": result["resolved_filters"],
             "unresolved_filters": result["unresolved_filters"],
             "product_ids": [
-                str(product_id)
-                for product_id in result.get("product_ids", [])
+                str(product_id) for product_id in result.get("product_ids", [])
             ],
             "primary_product_ids": [
-                str(product_id)
-                for product_id in result.get("primary_product_ids", [])
+                str(product_id) for product_id in result.get("primary_product_ids", [])
             ],
             "hybrid_product_ids": [
-                str(product_id)
-                for product_id in result.get("hybrid_product_ids", [])
+                str(product_id) for product_id in result.get("hybrid_product_ids", [])
             ],
             "related_product_ids": [
-                str(product_id)
-                for product_id in result.get("related_product_ids", [])
+                str(product_id) for product_id in result.get("related_product_ids", [])
             ],
             "reranker_provider": result.get("reranker_provider", "none"),
         }
@@ -421,7 +410,7 @@ class SearchEngineSupportMixin:
         if self.shared_plan_cache is None:
             return None
         shared_key = hashlib.sha256(
-            f"{QUERY_PLAN_CACHE_SCHEMA_VERSION}\0{key}".encode("utf-8")
+            f"{QUERY_PLAN_CACHE_SCHEMA_VERSION}\0{key}".encode()
         ).hexdigest()
         result = self.shared_plan_cache.get_json(
             self._cache_namespace("query_plan"),
@@ -449,7 +438,7 @@ class SearchEngineSupportMixin:
         self._cache_memory_plan(key, result)
         if self.shared_plan_cache is not None:
             shared_key = hashlib.sha256(
-                f"{QUERY_PLAN_CACHE_SCHEMA_VERSION}\0{key}".encode("utf-8")
+                f"{QUERY_PLAN_CACHE_SCHEMA_VERSION}\0{key}".encode()
             ).hexdigest()
             self.shared_plan_cache.set_json(
                 self._cache_namespace("query_plan"),
@@ -503,17 +492,15 @@ class SearchEngineSupportMixin:
         )
         direct_rejection_reason = "deterministic_match"
         if query_plan is None and self.direct_semantic_fast_path:
-            query_plan, direct_rejection_reason = (
-                _engine_dependency(
-                    "direct_semantic_query_plan",
-                    direct_semantic_query_plan,
-                )(
-                    query,
-                    self.filter_value_index,
-                    self.planner_query_aliases,
-                    analysis_cache,
-                    self.search_policy,
-                )
+            query_plan, direct_rejection_reason = _engine_dependency(
+                "direct_semantic_query_plan",
+                direct_semantic_query_plan,
+            )(
+                query,
+                self.filter_value_index,
+                self.planner_query_aliases,
+                analysis_cache,
+                self.search_policy,
             )
         if query_plan is None:
             query_plan = (
@@ -577,14 +564,10 @@ class SearchEngineSupportMixin:
         )
         elapsed = time.perf_counter() - started
         log_method = (
-            LOGGER.warning
-            if query_plan.get("fallback_reason")
-            else LOGGER.info
+            LOGGER.warning if query_plan.get("fallback_reason") else LOGGER.info
         )
         model_label = query_metrics.get("model")
-        attempted_label = ",".join(
-            query_metrics.get("attempted_models", [])
-        )
+        attempted_label = ",".join(query_metrics.get("attempted_models", []))
         if query_plan["execution_path"] in {
             "deterministic_filter",
             "direct_semantic",
@@ -603,11 +586,7 @@ class SearchEngineSupportMixin:
             "filters=%s unresolved=%d route_reason=%s reason=%s "
             "duration_ms=%.0f",
             trace_id,
-            (
-                "provider_fallback"
-                if query_plan.get("fallback_reason")
-                else "complete"
-            ),
+            ("provider_fallback" if query_plan.get("fallback_reason") else "complete"),
             query_plan["execution_path"],
             model_label,
             attempted_label,

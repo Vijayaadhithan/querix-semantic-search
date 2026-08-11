@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import sqlite3
 import threading
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 
 def current_month_utc() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m")
+    return datetime.now(UTC).strftime("%Y-%m")
 
 
 def validate_month(value: str) -> str:
@@ -82,7 +82,7 @@ class MonthlyUsageStore:
             max(int(output_tokens), 0),
             max(int(total_tokens), 0),
         )
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         with self._lock:
             self._connection.execute(
                 """
@@ -161,14 +161,10 @@ class MonthlyUsageStore:
             "month_utc": month_utc,
             "requests": sum(row["requests"] for row in rows),
             "searches": sum(
-                row["requests"]
-                for row in rows
-                if row["operation"] == "search"
+                row["requests"] for row in rows if row["operation"] == "search"
             ),
             "model_requests": sum(
-                row["requests"]
-                for row in rows
-                if row["operation"] != "search"
+                row["requests"] for row in rows if row["operation"] != "search"
             ),
             "input_tokens": sum(row["input_tokens"] for row in rows),
             "output_tokens": sum(row["output_tokens"] for row in rows),

@@ -28,16 +28,11 @@ def build_engine(company: str) -> ProductSearchEngine:
         planner_prompt_context=profile.planner_prompt_context,
         planner_query_aliases=profile.planner_query_aliases,
         vector_post_filter_metadata=False,
-        semantic_related_tail_enabled=(
-            profile.retrieval.semantic_related_tail_enabled
-        ),
+        semantic_related_tail_enabled=(profile.retrieval.semantic_related_tail_enabled),
         semantic_related_tail_requires_explicit_category=(
-            profile.retrieval
-            .semantic_related_tail_requires_explicit_category
+            profile.retrieval.semantic_related_tail_requires_explicit_category
         ),
-        reranker_relative_score_floor=(
-            profile.retrieval.reranker_relative_score_floor
-        ),
+        reranker_relative_score_floor=(profile.retrieval.reranker_relative_score_floor),
         reranker_min_score_by_provider=(
             profile.retrieval.reranker_min_score_by_provider
         ),
@@ -50,14 +45,9 @@ def build_engine(company: str) -> ProductSearchEngine:
 def print_search_result(result: dict, engine: ProductSearchEngine) -> None:
     query_plan = result["query_plan"]
     visible_plan = {
-        key: value
-        for key, value in query_plan.items()
-        if key != "fallback_reason"
+        key: value for key, value in query_plan.items() if key != "fallback_reason"
     }
-    print(
-        "Query plan: "
-        f"{json.dumps(visible_plan, ensure_ascii=False)}"
-    )
+    print(f"Query plan: {json.dumps(visible_plan, ensure_ascii=False)}")
     if result["unresolved_filters"]:
         print(
             "Unresolved filters: "
@@ -118,10 +108,7 @@ def main():
     bm25_count = engine.bm25_index.count()
     if not bm25_count:
         command = f"python -m cli.ingest --company {args.company} --bm25-only"
-        print(
-            "No persistent BM25 product index found. Run: "
-            + command
-        )
+        print("No persistent BM25 product index found. Run: " + command)
         engine.close()
         return
 

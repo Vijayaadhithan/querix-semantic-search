@@ -118,9 +118,7 @@ GEMINI_QUERY_RPM = int(
     )
 )
 if GROQ_QUERY_RPM <= 0 or GEMINI_QUERY_RPM <= 0:
-    raise ValueError(
-        "GROQ_QUERY_RPM and GEMINI_QUERY_RPM must be greater than zero."
-    )
+    raise ValueError("GROQ_QUERY_RPM and GEMINI_QUERY_RPM must be greater than zero.")
 _query_extract_models_env = os.getenv("QUERY_EXTRACT_MODELS")
 _query_extract_models = (
     [model.strip() for model in _query_extract_models_env.split(",") if model.strip()]

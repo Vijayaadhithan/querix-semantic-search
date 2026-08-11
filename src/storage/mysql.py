@@ -53,11 +53,14 @@ class MySQLRuntimeConfig:
     index_namespace: str = ""
 
     def __post_init__(self) -> None:
-        if min(
-            self.connect_timeout_seconds,
-            self.read_timeout_seconds,
-            self.write_timeout_seconds,
-        ) <= 0:
+        if (
+            min(
+                self.connect_timeout_seconds,
+                self.read_timeout_seconds,
+                self.write_timeout_seconds,
+            )
+            <= 0
+        ):
             raise ValueError("MySQL connection timeouts must be greater than zero")
         if self.statement_timeout_ms < 0:
             raise ValueError("MySQL statement_timeout_ms must not be negative")
@@ -71,8 +74,7 @@ class MySQLRuntimeConfig:
             raise ValueError("MySQL pool_timeout_seconds must be greater than zero")
         if self.pool_validation_interval_seconds <= 0:
             raise ValueError(
-                "MySQL pool_validation_interval_seconds must be greater "
-                "than zero"
+                "MySQL pool_validation_interval_seconds must be greater than zero"
             )
         if self.tls_mode not in {
             "disable",
@@ -155,8 +157,7 @@ def mysql_connection(
     }
     if config.statement_timeout_ms:
         connection_options["init_command"] = (
-            "SET SESSION MAX_EXECUTION_TIME="
-            f"{config.statement_timeout_ms}"
+            f"SET SESSION MAX_EXECUTION_TIME={config.statement_timeout_ms}"
         )
     ssl_context = _mysql_ssl_context(config)
     if config.tls_mode == "disable":
@@ -201,13 +202,15 @@ def fetch_mysql_columns(
     config = resolved_mysql_config(config)
     table = table or config.search_table
     pymysql = require_pymysql()
-    with mysql_connection(
-        cursorclass=pymysql.cursors.DictCursor,
-        config=config,
-    ) as connection:
-        with connection.cursor() as cursor:
-            cursor.execute(f"SHOW COLUMNS FROM {quote_mysql_identifier(table)}")
-            return [row["Field"] for row in cursor.fetchall()]
+    with (
+        mysql_connection(
+            cursorclass=pymysql.cursors.DictCursor,
+            config=config,
+        ) as connection,
+        connection.cursor() as cursor,
+    ):
+        cursor.execute(f"SHOW COLUMNS FROM {quote_mysql_identifier(table)}")
+        return [row["Field"] for row in cursor.fetchall()]
 
 
 def detect_mysql_primary_key(
@@ -224,18 +227,19 @@ def detect_mysql_primary_key(
         return override
 
     pymysql = require_pymysql()
-    with mysql_connection(
-        cursorclass=pymysql.cursors.DictCursor,
-        config=config,
-    ) as connection:
-        with connection.cursor() as cursor:
-            cursor.execute(
-                f"SHOW KEYS FROM {quote_mysql_identifier(table)} "
-                "WHERE Key_name = 'PRIMARY'"
-            )
-            keys = cursor.fetchall()
-            if keys:
-                return keys[0]["Column_name"]
+    with (
+        mysql_connection(
+            cursorclass=pymysql.cursors.DictCursor,
+            config=config,
+        ) as connection,
+        connection.cursor() as cursor,
+    ):
+        cursor.execute(
+            f"SHOW KEYS FROM {quote_mysql_identifier(table)} WHERE Key_name = 'PRIMARY'"
+        )
+        keys = cursor.fetchall()
+        if keys:
+            return keys[0]["Column_name"]
 
     return next((name for name in MYSQL_ID_CANDIDATES if name in columns), None)
 
@@ -257,16 +261,18 @@ def count_mysql_rows(
     if active_condition := mysql_active_condition(config):
         conditions.insert(0, active_condition)
     where_clause = " AND ".join(conditions)
-    with mysql_connection(
-        cursorclass=pymysql.cursors.DictCursor,
-        config=config,
-    ) as connection:
-        with connection.cursor() as cursor:
-            cursor.execute(
-                f"SELECT COUNT(*) AS row_count FROM {quote_mysql_identifier(table)} "
-                f"WHERE {where_clause}"
-            )
-            return int(cursor.fetchone()["row_count"])
+    with (
+        mysql_connection(
+            cursorclass=pymysql.cursors.DictCursor,
+            config=config,
+        ) as connection,
+        connection.cursor() as cursor,
+    ):
+        cursor.execute(
+            f"SELECT COUNT(*) AS row_count FROM {quote_mysql_identifier(table)} "
+            f"WHERE {where_clause}"
+        )
+        return int(cursor.fetchone()["row_count"])
 
 
 def iter_mysql_rows(
@@ -286,9 +292,7 @@ def iter_mysql_rows(
     quoted_content = quote_mysql_identifier(content_column)
     quoted_table = quote_mysql_identifier(table)
     quoted_primary_key = (
-        quote_mysql_identifier(primary_key_column)
-        if primary_key_column
-        else None
+        quote_mysql_identifier(primary_key_column) if primary_key_column else None
     )
     emitted = 0
     last_primary_key = None
@@ -311,10 +315,7 @@ def iter_mysql_rows(
         if quoted_primary_key and has_last_primary_key:
             conditions.append(f"{quoted_primary_key} > %s")
             params.append(last_primary_key)
-        query = (
-            f"SELECT * FROM {quoted_table} "
-            f"WHERE {' AND '.join(conditions)}"
-        )
+        query = f"SELECT * FROM {quoted_table} WHERE {' AND '.join(conditions)}"
         if quoted_primary_key:
             query += f" ORDER BY {quoted_primary_key}"
         query += " LIMIT %s"
@@ -326,13 +327,15 @@ def iter_mysql_rows(
         # Fetch the complete page and close the database connection before
         # yielding any row. Ingestion can then spend minutes embedding the
         # page without leaving a streaming MySQL socket idle.
-        with mysql_connection(
-            cursorclass=pymysql.cursors.DictCursor,
-            config=config,
-        ) as connection:
-            with connection.cursor() as cursor:
-                cursor.execute(query, params)
-                rows = list(cursor.fetchall())
+        with (
+            mysql_connection(
+                cursorclass=pymysql.cursors.DictCursor,
+                config=config,
+            ) as connection,
+            connection.cursor() as cursor,
+        ):
+            cursor.execute(query, params)
+            rows = list(cursor.fetchall())
         if not rows:
             break
 

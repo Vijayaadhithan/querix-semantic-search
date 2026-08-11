@@ -1,5 +1,5 @@
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
@@ -147,7 +147,7 @@ def test_search_analytics_writer_inserts_parent_and_provider_rows(monkeypatch):
             "unapproved_internal_value": 999.0,
         },
         context={"city": "Chennai", "target_ad_type": "offer"},
-        created_at=datetime(2026, 7, 29, 3, 0, tzinfo=timezone.utc),
+        created_at=datetime(2026, 7, 29, 3, 0, tzinfo=UTC),
         api_usage=(
             SearchApiUsageEvent(
                 provider="groq",
@@ -219,7 +219,7 @@ def spool_event(request_id="b" * 32, query="family bike"):
         result_cache_hit=False,
         timings_ms={"total_server_ms": 1234.5, "planning_ms": 100.25},
         context={"city": "Chennai"},
-        created_at=datetime(2026, 7, 29, 3, 0, tzinfo=timezone.utc),
+        created_at=datetime(2026, 7, 29, 3, 0, tzinfo=UTC),
         api_usage=(
             SearchApiUsageEvent(
                 provider="groq",

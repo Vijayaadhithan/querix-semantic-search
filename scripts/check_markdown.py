@@ -76,9 +76,7 @@ def local_link_errors(root: Path, source: Path) -> list[str]:
         if parsed.fragment and destination.suffix.casefold() == ".md":
             fragment = unquote(parsed.fragment).casefold()
             if fragment not in markdown_anchors(destination):
-                errors.append(
-                    f"{source.relative_to(root)}: missing anchor: {target}"
-                )
+                errors.append(f"{source.relative_to(root)}: missing anchor: {target}")
     return errors
 
 

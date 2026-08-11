@@ -5,10 +5,11 @@ import json
 import sqlite3
 import threading
 import uuid
+from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 
 def utc_now_iso() -> str:
@@ -42,9 +43,7 @@ def encode_query_cursor(created_at: str, request_id: str) -> str:
 def decode_query_cursor(cursor: str) -> tuple[str, str]:
     try:
         padding = "=" * (-len(cursor) % 4)
-        payload = json.loads(
-            base64.urlsafe_b64decode(cursor + padding).decode()
-        )
+        payload = json.loads(base64.urlsafe_b64decode(cursor + padding).decode())
         if payload.get("v") != 1:
             raise ValueError("Unsupported cursor version")
         created_at = str(payload["created_at"])
@@ -206,10 +205,7 @@ class AnalyticsSnapshotStore:
         version = uuid.uuid4().hex
         query_values = []
         for company_record, internal_record in query_records:
-            categories = [
-                str(value)
-                for value in company_record.get("categories", [])
-            ]
+            categories = [str(value) for value in company_record.get("categories", [])]
             query_values.append(
                 (
                     company_id,
@@ -322,11 +318,7 @@ class AnalyticsSnapshotStore:
         *,
         internal: bool,
     ) -> dict[str, Any] | None:
-        field = (
-            "internal_dashboard_json"
-            if internal
-            else "company_dashboard_json"
-        )
+        field = "internal_dashboard_json" if internal else "company_dashboard_json"
         with self._connection() as connection:
             row = connection.execute(
                 f"""
@@ -420,13 +412,9 @@ class AnalyticsSnapshotStore:
                 )
                 """
             )
-            values.extend(
-                [cursor_created, cursor_created, cursor_request]
-            )
+            values.extend([cursor_created, cursor_created, cursor_request])
         if query:
-            clauses.append(
-                "LOWER(records.query_text) LIKE ? ESCAPE '\\'"
-            )
+            clauses.append("LOWER(records.query_text) LIKE ? ESCAPE '\\'")
             escaped = (
                 query.casefold()
                 .replace("\\", "\\\\")
@@ -466,7 +454,7 @@ class AnalyticsSnapshotStore:
                 FROM analytics_query_records AS records
                 INNER JOIN analytics_snapshots AS snapshots
                     ON snapshots.company_id = records.company_id
-                WHERE {' AND '.join(clauses)}
+                WHERE {" AND ".join(clauses)}
                 ORDER BY records.created_at DESC, records.request_id DESC
                 LIMIT ?
                 """,
@@ -484,9 +472,7 @@ class AnalyticsSnapshotStore:
         )
         return {
             "company_id": company_id,
-            "items": [
-                json.loads(row["payload_json"]) for row in visible
-            ],
+            "items": [json.loads(row["payload_json"]) for row in visible],
             "returned": len(visible),
             "has_more": has_more,
             "next_cursor": next_cursor,
@@ -525,9 +511,7 @@ class AnalyticsSnapshotStore:
                 {
                     "generated_at": snapshot["generated_at"],
                     "source_watermark": snapshot["source_watermark"],
-                    "source_rows": json.loads(
-                        snapshot["source_rows_json"]
-                    ),
+                    "source_rows": json.loads(snapshot["source_rows_json"]),
                 }
                 if snapshot is not None
                 else None

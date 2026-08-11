@@ -8,9 +8,7 @@ from scripts.warm_search_paths import prewarm_file, warm_bm25
 
 def _bm25_index(path: Path) -> None:
     with sqlite3.connect(path) as connection:
-        connection.execute(
-            "CREATE VIRTUAL TABLE products_fts USING fts5(content)"
-        )
+        connection.execute("CREATE VIRTUAL TABLE products_fts USING fts5(content)")
         connection.executemany(
             "INSERT INTO products_fts(content) VALUES (?)",
             [

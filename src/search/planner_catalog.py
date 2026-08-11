@@ -33,9 +33,7 @@ class CatalogValueMap(dict):
         pattern_text = category_term_pattern if allow_plural else re.escape
         self.match_patterns = tuple(
             (
-                re.compile(
-                    rf"(?<!\w){pattern_text(normalized_value)}(?!\w)"
-                ),
+                re.compile(rf"(?<!\w){pattern_text(normalized_value)}(?!\w)"),
                 actual_value,
             )
             for normalized_value, actual_value in self.longest_first
@@ -60,7 +58,7 @@ def default_query_plan(query: str, fallback_reason: str | None = None) -> dict:
         "keyword_query": query,
         "target_ad_type": "offer",
         "sort_order": None,
-        "filters": {key: None for key in QUERY_FILTER_KEYS},
+        "filters": dict.fromkeys(QUERY_FILTER_KEYS),
         "inferred_categories": {
             "main_category": None,
             "subcategory": None,
@@ -146,10 +144,7 @@ def is_explicit_category_request(query: str, value: str) -> bool:
     term = category_term_pattern(value)
     attribute = (
         "(?:"
-        + "|".join(
-            re.escape(prefix)
-            for prefix in sorted(CATEGORY_ATTRIBUTE_PREFIXES)
-        )
+        + "|".join(re.escape(prefix) for prefix in sorted(CATEGORY_ATTRIBUTE_PREFIXES))
         + ")"
     )
     article = r"(?:a|an|the|some)?\s*"
@@ -196,10 +191,7 @@ def is_category_attribute_usage(
 
 
 def is_generic_location_value(value: str | None) -> bool:
-    return bool(
-        value
-        and normalize_filter_value(value) in GENERIC_LOCATION_VALUES
-    )
+    return bool(value and normalize_filter_value(value) in GENERIC_LOCATION_VALUES)
 
 
 def parse_query_plan(content: str, original_query: str) -> dict:
@@ -216,10 +208,7 @@ def parse_query_plan(content: str, original_query: str) -> dict:
     if not isinstance(raw_filters, dict):
         raw_filters = {}
 
-    filters = {
-        key: optional_text(raw_filters.get(key))
-        for key in QUERY_FILTER_FIELDS
-    }
+    filters = {key: optional_text(raw_filters.get(key)) for key in QUERY_FILTER_FIELDS}
     inferred_categories = {
         "main_category": None,
         "subcategory": None,
@@ -236,12 +225,8 @@ def parse_query_plan(content: str, original_query: str) -> dict:
         value = filters[parent_key]
         if value is not None and not text_mentions_filter(original_query, value):
             filters[parent_key] = None
-    filters["min_rental_fee"] = optional_number(
-        raw_filters.get("min_rental_fee")
-    )
-    filters["max_rental_fee"] = optional_number(
-        raw_filters.get("max_rental_fee")
-    )
+    filters["min_rental_fee"] = optional_number(raw_filters.get("min_rental_fee"))
+    filters["max_rental_fee"] = optional_number(raw_filters.get("max_rental_fee"))
     minimum = filters["min_rental_fee"]
     maximum = filters["max_rental_fee"]
     if minimum is not None and maximum is not None and minimum > maximum:
@@ -333,9 +318,7 @@ def _category_concept_token(token: str) -> str:
 def category_catalog_matches(query: str, values: dict) -> list[dict]:
     """Return category concepts mentioned in a query, including safe variants."""
     query_tokens = re.findall(r"[^\W_]+", normalize_filter_value(query))
-    normalized_query_tokens = [
-        _category_concept_token(token) for token in query_tokens
-    ]
+    normalized_query_tokens = [_category_concept_token(token) for token in query_tokens]
     matches = []
     for actual_value in values.values():
         value_tokens = re.findall(
@@ -372,21 +355,17 @@ def category_catalog_matches(query: str, values: dict) -> list[dict]:
                 }
                 for token in query_tokens[:start]
             )
-            followed_by_constraint = (
-                end < len(query_tokens)
-                and query_tokens[end]
-                in {
-                    "at",
-                    "equipped",
-                    "for",
-                    "having",
-                    "in",
-                    "near",
-                    "under",
-                    "with",
-                    "without",
-                }
-            )
+            followed_by_constraint = end < len(query_tokens) and query_tokens[end] in {
+                "at",
+                "equipped",
+                "for",
+                "having",
+                "in",
+                "near",
+                "under",
+                "with",
+                "without",
+            }
             matches.append(
                 {
                     "value": actual_value,
@@ -431,9 +410,7 @@ class QueryAnalysis:
             query,
             query_aliases,
         )
-        self.query_was_normalized = (
-            self.query.casefold() != query.casefold()
-        )
+        self.query_was_normalized = self.query.casefold() != query.casefold()
         self.exact_values = {}
         self.category_is_explicit = {}
         self.category_matches = {}
@@ -462,9 +439,8 @@ class QueryAnalysis:
                     key,
                     value_index[key],
                 )
-            if (
-                key in {"state", "city", "locality"}
-                and is_generic_location_value(exact_value)
+            if key in {"state", "city", "locality"} and is_generic_location_value(
+                exact_value
             ):
                 exact_value = None
             clear_model_location_filter = bool(
@@ -482,21 +458,16 @@ class QueryAnalysis:
             self.category_is_explicit[key] = bool(
                 category_matches and category_matches[0]["explicit"]
             )
-            self.clear_model_location_filter[key] = (
-                clear_model_location_filter
-            )
+            self.clear_model_location_filter[key] = clear_model_location_filter
         main_matches = self.category_matches.get("main_category") or []
         subcategory_matches = self.category_matches.get("subcategory") or []
         if main_matches and subcategory_matches:
             main_match = main_matches[0]
             subcategory_match = subcategory_matches[0]
-            overlaps = (
-                int(main_match["start"]) < int(subcategory_match["end"])
-                and int(subcategory_match["start"]) < int(main_match["end"])
-            )
-            if overlaps and int(main_match["width"]) > int(
-                subcategory_match["width"]
-            ):
+            overlaps = int(main_match["start"]) < int(subcategory_match["end"]) and int(
+                subcategory_match["start"]
+            ) < int(main_match["end"])
+            if overlaps and int(main_match["width"]) > int(subcategory_match["width"]):
                 # Prefer the complete head concept ("Musical Instruments")
                 # over a shorter overlapping catalog value (Books -> "Music").
                 self.exact_values["subcategory"] = None
@@ -512,13 +483,10 @@ class QueryAnalysis:
     def fuzzy_location(self, value_index: dict):
         if not self._fuzzy_location_ready:
             fuzzy_location = find_fuzzy_location(self.query, value_index)
-            if (
-                fuzzy_location is not None
-                and is_category_attribute_usage(
-                    self.query,
-                    fuzzy_location[1],
-                    value_index,
-                )
+            if fuzzy_location is not None and is_category_attribute_usage(
+                self.query,
+                fuzzy_location[1],
+                value_index,
             ):
                 fuzzy_location = None
             self._fuzzy_location = fuzzy_location
@@ -543,9 +511,7 @@ def query_analysis(
         # retain the exact surface text used by each pass.
         analysis.original_query = query
         analysis.query = normalized_query
-        analysis.query_was_normalized = (
-            normalized_query.casefold() != query.casefold()
-        )
+        analysis.query_was_normalized = normalized_query.casefold() != query.casefold()
         return analysis
     analysis = QueryAnalysis(
         query,
@@ -617,8 +583,7 @@ def edit_distance(left: str, right: str) -> int:
                 min(
                     current[-1] + 1,
                     previous[right_index] + 1,
-                    previous[right_index - 1]
-                    + (left_character != right_character),
+                    previous[right_index - 1] + (left_character != right_character),
                 )
             )
         previous = current
@@ -755,12 +720,15 @@ def correct_explicit_query_typos(
     key_priority = {"city": 3, "state": 2, "locality": 1}
     for phrase in location_phrases(corrected):
         for key in ("city", "state", "locality"):
-            if canonical_catalog_value(
-                key,
-                phrase,
-                value_index[key],
-                allow_fuzzy=False,
-            ) is not None:
+            if (
+                canonical_catalog_value(
+                    key,
+                    phrase,
+                    value_index[key],
+                    allow_fuzzy=False,
+                )
+                is not None
+            ):
                 continue
             match = typo_catalog_match(phrase, value_index[key])
             if match is not None:
@@ -782,9 +750,7 @@ def correct_explicit_query_typos(
             corrected,
             count=1,
         )
-        corrections.append(
-            {"field": key, "input": source, "value": actual}
-        )
+        corrections.append({"field": key, "input": source, "value": actual})
 
     return corrected, corrections
 
@@ -808,9 +774,7 @@ def infer_keyword_subcategory(keyword_query: str, values: dict) -> str | None:
         # not imply the catalog category "Fridge Mechanic" unless mechanic is
         # also present. Exact one-word concepts and fully supported phrases
         # remain eligible as soft hints.
-        if len(category_tokens) > 1 and not category_tokens.issubset(
-            query_tokens
-        ):
+        if len(category_tokens) > 1 and not category_tokens.issubset(query_tokens):
             continue
         for token in query_tokens.intersection(category_tokens):
             token_categories.setdefault(token, set()).add(actual_value)
@@ -968,8 +932,7 @@ def extract_duration_filter(query: str, values: dict) -> str | None:
     for canonical_value, pattern in DURATION_PATTERNS:
         if re.search(pattern, normalized_query):
             return (
-                values.get(normalize_filter_value(canonical_value))
-                or canonical_value
+                values.get(normalize_filter_value(canonical_value)) or canonical_value
             )
     return None
 
@@ -983,9 +946,7 @@ def query_filter_value_index(bm25_index: PersistentBM25Index) -> dict:
         )
         for query_key, metadata_key in QUERY_FILTER_FIELDS.items()
     }
-    value_index["_subcategory_main_category"] = (
-        bm25_index.subcategory_parent_index()
-    )
+    value_index["_subcategory_main_category"] = bm25_index.subcategory_parent_index()
     value_index["_city_state"] = bm25_index.city_state_index()
     value_index["_locality_location"] = bm25_index.locality_location_index()
     return value_index

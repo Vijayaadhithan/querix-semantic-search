@@ -54,9 +54,7 @@ def test_admin_log_buffer_is_bounded_and_supports_incremental_polling():
             after_id=warnings["next_after_id"],
         )
         assert remaining["has_more"] is False
-        assert [event["level"] for event in remaining["events"]] == [
-            "ERROR"
-        ]
+        assert [event["level"] for event in remaining["events"]] == ["ERROR"]
     finally:
         logger.removeHandler(buffer)
         logger.setLevel(original_level)
@@ -71,21 +69,11 @@ def test_successful_health_access_logs_are_omitted_but_failures_remain():
     logger.setLevel(logging.INFO)
     logger.addHandler(buffer)
     try:
-        logger.info(
-            '127.0.0.1:1234 - "GET /api/v1/ready HTTP/1.1" 200'
-        )
-        logger.info(
-            '127.0.0.1:1235 - "GET /api/v1/live HTTP/1.1" 200'
-        )
-        logger.warning(
-            '127.0.0.1:1236 - "GET /api/v1/ready HTTP/1.1" 503'
-        )
-        logger.info(
-            '127.0.0.1:1237 - "GET /api/v1/gainr/filter-result HTTP/1.1" 200'
-        )
-        logger.info(
-            '127.0.0.1:1238 - "GET /api/v1/missing HTTP/1.1" 404'
-        )
+        logger.info('127.0.0.1:1234 - "GET /api/v1/ready HTTP/1.1" 200')
+        logger.info('127.0.0.1:1235 - "GET /api/v1/live HTTP/1.1" 200')
+        logger.warning('127.0.0.1:1236 - "GET /api/v1/ready HTTP/1.1" 503')
+        logger.info('127.0.0.1:1237 - "GET /api/v1/gainr/filter-result HTTP/1.1" 200')
+        logger.info('127.0.0.1:1238 - "GET /api/v1/missing HTTP/1.1" 404')
 
         snapshot = buffer.snapshot(limit=10, minimum_level="INFO")
         assert snapshot["ordering"] == "oldest_to_newest"
@@ -136,8 +124,7 @@ def test_admin_log_buffer_keeps_only_concise_operational_info():
         ]
         assert all("step=plan" not in event["message"] for event in snapshot["events"])
         assert all(
-            "step=retrieve" not in event["message"]
-            for event in snapshot["events"]
+            "step=retrieve" not in event["message"] for event in snapshot["events"]
         )
     finally:
         logger.removeHandler(buffer)

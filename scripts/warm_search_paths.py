@@ -85,9 +85,7 @@ def warm_bm25(
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description=(
-            "Warm Ollama embeddings and representative HNSW/BM25 queries."
-        ),
+        description=("Warm Ollama embeddings and representative HNSW/BM25 queries."),
     )
     parser.add_argument("--company", default="gainr")
     parser.add_argument("--candidates", type=int, default=100)
@@ -109,9 +107,7 @@ def main() -> None:
         args.candidates,
     )
     query_ms = ", ".join(f"{value:.0f}" for value in bm25["query_ms"])
-    result_counts = ", ".join(
-        str(value) for value in bm25["result_counts"]
-    )
+    result_counts = ", ".join(str(value) for value in bm25["result_counts"])
     print(
         f"BM25 warm-up complete company={args.company} "
         f"file_bytes={int(bm25['file_bytes'])} "

@@ -135,20 +135,14 @@ def test_fixed_candidate_runs_reuse_one_candidate_set():
             top_k=None,
             trace_id="-",
         ):
-            self.rank_calls.append(
-                [item["metadata"]["id"] for item in candidates]
-            )
+            self.rank_calls.append([item["metadata"]["id"] for item in candidates])
             ordered = (
-                candidates
-                if len(self.rank_calls) % 2
-                else list(reversed(candidates))
+                candidates if len(self.rank_calls) % 2 else list(reversed(candidates))
             )
             return {
                 "results": ordered[:top_k],
                 "provider": "primary",
-                "attempts": [
-                    {"provider": "primary", "status": "success"}
-                ],
+                "attempts": [{"provider": "primary", "status": "success"}],
                 "degraded": False,
             }
 
@@ -160,10 +154,7 @@ def test_fixed_candidate_runs_reuse_one_candidate_set():
                 top_k=limit,
             )
             return {
-                "product_ids": [
-                    item["metadata"]["id"]
-                    for item in ranked["results"]
-                ],
+                "product_ids": [item["metadata"]["id"] for item in ranked["results"]],
                 "hybrid_tail_candidates": [],
                 "related_product_ids": [],
             }

@@ -21,6 +21,7 @@ from tenants.gainr.models import (
 
 logger = logging.getLogger("uvicorn.error")
 
+
 class GainrDatabaseRepository:
     """Gainr-only read adapter over its search-ready and result tables."""
 
@@ -33,12 +34,8 @@ class GainrDatabaseRepository:
         self.profile = profile
         self.config = profile.database
         self.database_pool = database_pool
-        self.search_table = quote_mysql_identifier(
-            self.config.search_table
-        )
-        self.result_table = quote_mysql_identifier(
-            self.config.result_table
-        )
+        self.search_table = quote_mysql_identifier(self.config.search_table)
+        self.result_table = quote_mysql_identifier(self.config.result_table)
         self.users_table = quote_mysql_identifier(
             self.profile.compatibility.users_table
         )
@@ -84,7 +81,7 @@ class GainrDatabaseRepository:
         prefix = f"{term}%"
         query = f"""
             SELECT DISTINCT name AS value
-            FROM {quote_mysql_identifier('sub_categories')}
+            FROM {quote_mysql_identifier("sub_categories")}
             WHERE name IS NOT NULL
               AND TRIM(name) <> ''
               AND name LIKE %s
@@ -95,23 +92,17 @@ class GainrDatabaseRepository:
                 name
             LIMIT %s
         """
-        with self.connection() as connection:
-            with connection.cursor() as cursor:
-                cursor.execute(
-                    query,
-                    (prefix, term, limit),
-                )
-                return [
-                    str(row["value"])
-                    for row in cursor.fetchall()
-                    if row.get("value")
-                ]
+        with self.connection() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                query,
+                (prefix, term, limit),
+            )
+            return [str(row["value"]) for row in cursor.fetchall() if row.get("value")]
 
     def filter_data(self, city_id: int) -> tuple[list[str], list[dict]]:
-        with self.connection() as connection:
-            with connection.cursor() as cursor:
-                cursor.execute(
-                    f"""
+        with self.connection() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                f"""
                     SELECT DISTINCT rental_duration
                     FROM {self.search_table}
                     WHERE city_id = %s
@@ -119,17 +110,14 @@ class GainrDatabaseRepository:
                       AND rental_duration IS NOT NULL
                       AND TRIM(rental_duration) <> ''
                     """,
-                    (city_id,),
-                )
-                durations = [
-                    str(row["rental_duration"])
-                    for row in cursor.fetchall()
-                ]
-                cursor.execute(
-                    f"""
+                (city_id,),
+            )
+            durations = [str(row["rental_duration"]) for row in cursor.fetchall()]
+            cursor.execute(
+                f"""
                     SELECT DISTINCT id AS locality_id,
                                     area AS locality_name
-                    FROM {quote_mysql_identifier('locations')}
+                    FROM {quote_mysql_identifier("locations")}
                     WHERE city_id = %s
                       AND id IS NOT NULL
                       AND area IS NOT NULL
@@ -137,15 +125,15 @@ class GainrDatabaseRepository:
                       AND (deleted_at IS NULL OR TRIM(deleted_at) = '')
                     ORDER BY area
                     """,
-                    (city_id,),
-                )
-                localities = [
-                    {
-                        "id": int(row["locality_id"]),
-                        "area": str(row["locality_name"]),
-                    }
-                    for row in cursor.fetchall()
-                ]
+                (city_id,),
+            )
+            localities = [
+                {
+                    "id": int(row["locality_id"]),
+                    "area": str(row["locality_name"]),
+                }
+                for row in cursor.fetchall()
+            ]
         durations = sorted(
             _unique(durations),
             key=lambda value: (
@@ -182,9 +170,7 @@ class GainrDatabaseRepository:
         fallback_term: str = "",
         allowed_ad_types: set[str] | None = None,
     ) -> tuple[str, list[Any]]:
-        conditions = [
-            "(a.deleted_at IS NULL OR TRIM(a.deleted_at) = '')"
-        ]
+        conditions = ["(a.deleted_at IS NULL OR TRIM(a.deleted_at) = '')"]
         if self.search_active_qualified_condition:
             conditions.insert(0, self.search_active_qualified_condition)
         params: list[Any] = []
@@ -264,14 +250,9 @@ class GainrDatabaseRepository:
                     "sr.id",
                     product_ids,
                 )
-        elif (
-            fallback_term
-            and not resolved_filters.get("categorical")
-        ):
+        elif fallback_term and not resolved_filters.get("categorical"):
             contains = f"%{fallback_term}%"
-            conditions.append(
-                "(sr.title LIKE %s OR sr.bm25_content LIKE %s)"
-            )
+            conditions.append("(sr.title LIKE %s OR sr.bm25_content LIKE %s)")
             params.extend((contains, contains))
         return " AND ".join(conditions), params
 
@@ -386,10 +367,7 @@ class GainrDatabaseRepository:
                     params,
                 )
                 rows = list(cursor.fetchall())
-            rows_by_id = {
-                str(row[self.config.result_id_column]): row
-                for row in rows
-            }
+            rows_by_id = {str(row[self.config.result_id_column]): row for row in rows}
             ordered = [
                 rows_by_id[str(product_id)]
                 for product_id in product_ids
@@ -425,13 +403,10 @@ class GainrDatabaseRepository:
         hydration_started = time.perf_counter()
         checkout_started = hydration_started
         parallel_relations = (
-            self.database_pool is not None
-            and self.config.pool_max_size >= 12
+            self.database_pool is not None and self.config.pool_max_size >= 12
         )
         with self.connection() as connection:
-            checkout_ms = round(
-                (time.perf_counter() - checkout_started) * 1000
-            )
+            checkout_ms = round((time.perf_counter() - checkout_started) * 1000)
             cards_started = time.perf_counter()
             rows = []
             total = 0
@@ -526,29 +501,19 @@ class GainrDatabaseRepository:
             product_ids=product_ids,
             allowed_ad_types=allowed_ad_types,
         )
-        with self.connection() as connection:
-            with connection.cursor() as cursor:
-                search_id = quote_mysql_identifier(
-                    self.config.search_id_column
-                )
-                cursor.execute(
-                    f"""
+        with self.connection() as connection, connection.cursor() as cursor:
+            search_id = quote_mysql_identifier(self.config.search_id_column)
+            cursor.execute(
+                f"""
                     SELECT sr.{search_id} AS __search_id
                     FROM {self.search_table} AS sr
                     JOIN {self.result_table} AS a ON a.id = sr.id
                     WHERE {where_clause}
                     """,
-                    params,
-                )
-                eligible = {
-                    str(row["__search_id"])
-                    for row in cursor.fetchall()
-                }
-        return [
-            product_id
-            for product_id in product_ids
-            if str(product_id) in eligible
-        ]
+                params,
+            )
+            eligible = {str(row["__search_id"]) for row in cursor.fetchall()}
+        return [product_id for product_id in product_ids if str(product_id) in eligible]
 
     def _attach_attributes(
         self,
@@ -569,11 +534,7 @@ class GainrDatabaseRepository:
         users = []
         timings: dict[str, int] = {}
         user_ids = _unique(
-            [
-                row.get("user_id")
-                for row in rows
-                if row.get("user_id") not in (None, "")
-            ]
+            [row.get("user_id") for row in rows if row.get("user_id") not in (None, "")]
         )
 
         def fetch_attributes(active_connection) -> list[dict]:
@@ -583,7 +544,7 @@ class GainrDatabaseRepository:
                     cursor.execute(
                         f"""
                         SELECT ads_id, attribute_id, value
-                        FROM {quote_mysql_identifier('ads_attributes')}
+                        FROM {quote_mysql_identifier("ads_attributes")}
                         WHERE ads_id IN ({placeholders})
                           AND (deleted_at IS NULL OR TRIM(deleted_at) = '')
                         ORDER BY id
@@ -592,9 +553,7 @@ class GainrDatabaseRepository:
                     )
                     return list(cursor.fetchall())
             finally:
-                timings["attributes"] = round(
-                    (time.perf_counter() - started) * 1000
-                )
+                timings["attributes"] = round((time.perf_counter() - started) * 1000)
 
         def fetch_service_counts(active_connection) -> list[dict]:
             if not user_ids:
@@ -629,8 +588,7 @@ class GainrDatabaseRepository:
                 return []
             user_placeholders = ", ".join("%s" for _ in user_ids)
             selected_fields = ", ".join(
-                quote_mysql_identifier(field)
-                for field in GAINR_USER_FIELDS
+                quote_mysql_identifier(field) for field in GAINR_USER_FIELDS
             )
             started = time.perf_counter()
             try:
@@ -645,9 +603,7 @@ class GainrDatabaseRepository:
                     )
                     return list(cursor.fetchall())
             finally:
-                timings["users"] = round(
-                    (time.perf_counter() - started) * 1000
-                )
+                timings["users"] = round((time.perf_counter() - started) * 1000)
 
         def run_with_connection(fetcher) -> list[dict]:
             with self.connection() as active_connection:
@@ -686,9 +642,7 @@ class GainrDatabaseRepository:
                     try:
                         service_counts = service_counts_future.result()
                     except Exception:
-                        logger.exception(
-                            "Gainr service count hydration failed"
-                        )
+                        logger.exception("Gainr service count hydration failed")
                 if users_future is not None:
                     try:
                         users = users_future.result()

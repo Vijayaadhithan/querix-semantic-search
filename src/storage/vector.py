@@ -80,8 +80,7 @@ def migrate_tenant_source(
         target_id=target_id,
         batch_size=batch_size,
         progress=lambda migrated, kept: print(
-            "Source migration progress: "
-            f"migrated={migrated} kept_target={kept}",
+            f"Source migration progress: migrated={migrated} kept_target={kept}",
             flush=True,
         ),
     )

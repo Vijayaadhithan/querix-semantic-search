@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from collections import Counter, defaultdict
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from math import ceil
 from statistics import mean
-from typing import Any, Iterable
+from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 PERIOD_OPTIONS = ("24h", "7d", "30d", "90d", "all", "custom")

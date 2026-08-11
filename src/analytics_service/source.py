@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import logging
 import ssl
+from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Iterator, Protocol
+from typing import Any, Protocol
 
 import pandas as pd
 
@@ -101,9 +102,7 @@ def _mysql_ssl_context(target: DatabaseTarget) -> ssl.SSLContext | None:
 @contextmanager
 def _connection(target: DatabaseTarget) -> Iterator[Any]:
     if not target.configured:
-        raise RuntimeError(
-            f"Analytics {target.backend} database is not configured"
-        )
+        raise RuntimeError(f"Analytics {target.backend} database is not configured")
     if target.backend == "mysql":
         import pymysql
 
@@ -160,11 +159,7 @@ class SqlAnalyticsDataSource:
         *,
         history_days: int | None = None,
     ) -> str:
-        quote = (
-            _quote_mysql
-            if target.backend == "mysql"
-            else _quote_postgres
-        )
+        quote = _quote_mysql if target.backend == "mysql" else _quote_postgres
         canonical_columns = spec.usecols or spec.required_columns
         selected = []
         for canonical in canonical_columns:
@@ -187,9 +182,7 @@ class SqlAnalyticsDataSource:
                 raise ValueError(
                     "Analytics SQL history_days must be between 1 and 3650"
                 )
-            created_at = quote(
-                mapping.columns.get("created_at", "created_at")
-            )
+            created_at = quote(mapping.columns.get("created_at", "created_at"))
             if target.backend == "mysql":
                 sql += (
                     f" WHERE {created_at} >= CURRENT_TIMESTAMP "
@@ -241,9 +234,7 @@ class SqlAnalyticsDataSource:
         return frames
 
     def load(self, company: CompanyAnalyticsConfig) -> dict[str, pd.DataFrame]:
-        company_names = tuple(
-            name for name in DATASET_SPECS if name != "api_usage"
-        )
+        company_names = tuple(name for name in DATASET_SPECS if name != "api_usage")
         data = self._load_group(
             company=company,
             target=company.database,

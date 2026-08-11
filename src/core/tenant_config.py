@@ -4,9 +4,10 @@ import hashlib
 import math
 import os
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 import yaml
 
@@ -62,24 +63,18 @@ class TenantRetrievalConfig:
     semantic_related_tail_enabled: bool = True
     semantic_related_tail_requires_explicit_category: bool = False
     reranker_relative_score_floor: float = 0.0
-    reranker_min_score_by_provider: dict[str, float] = field(
-        default_factory=dict
-    )
+    reranker_min_score_by_provider: dict[str, float] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not 0 <= self.reranker_relative_score_floor <= 1:
-            raise ValueError(
-                "reranker_relative_score_floor must be between 0 and 1"
-            )
+            raise ValueError("reranker_relative_score_floor must be between 0 and 1")
         for provider, score in self.reranker_min_score_by_provider.items():
             if not provider:
                 raise ValueError(
                     "reranker_min_score_by_provider keys must not be empty"
                 )
             if not math.isfinite(score):
-                raise ValueError(
-                    "reranker_min_score_by_provider values must be finite"
-                )
+                raise ValueError("reranker_min_score_by_provider values must be finite")
 
 
 @dataclass(frozen=True)
@@ -123,17 +118,12 @@ class TenantCompatibilityConfig:
             or self.semantic_ranked_window > 100
         ):
             raise ValueError(
-                "Compatibility semantic_ranked_window must be between "
-                "page_size and 100"
+                "Compatibility semantic_ranked_window must be between page_size and 100"
             )
         if self.suggestions_limit <= 0 or self.suggestions_limit > 50:
-            raise ValueError(
-                "Compatibility suggestions_limit must be between 1 and 50"
-            )
+            raise ValueError("Compatibility suggestions_limit must be between 1 and 50")
         if self.recent_limit <= 0 or self.recent_limit > 50:
-            raise ValueError(
-                "Compatibility recent_limit must be between 1 and 50"
-            )
+            raise ValueError("Compatibility recent_limit must be between 1 and 50")
         if self.recent_ttl_seconds <= 0:
             raise ValueError(
                 "Compatibility recent_ttl_seconds must be greater than zero"
@@ -162,15 +152,11 @@ class TenantAnalyticsConfig:
             ("api_usage_table", self.api_usage_table),
         ):
             if not identifier_pattern.fullmatch(value):
-                raise ValueError(
-                    f"Analytics {name} must be a safe MySQL identifier"
-                )
+                raise ValueError(f"Analytics {name} must be a safe MySQL identifier")
         if self.search_history_table == self.api_usage_table:
             raise ValueError("Analytics table names must be different")
         if self.queue_capacity <= 0 or self.queue_capacity > 10000:
-            raise ValueError(
-                "Analytics queue_capacity must be between 1 and 10000"
-            )
+            raise ValueError("Analytics queue_capacity must be between 1 and 10000")
 
 
 @dataclass(frozen=True)
@@ -188,15 +174,11 @@ class TenantProfile:
     planner_enabled: bool = True
     planner_prompt_context: str = ""
     planner_query_aliases: dict[str, str] = field(default_factory=dict)
-    retrieval: TenantRetrievalConfig = field(
-        default_factory=TenantRetrievalConfig
-    )
+    retrieval: TenantRetrievalConfig = field(default_factory=TenantRetrievalConfig)
     compatibility: TenantCompatibilityConfig = field(
         default_factory=TenantCompatibilityConfig
     )
-    analytics: TenantAnalyticsConfig = field(
-        default_factory=TenantAnalyticsConfig
-    )
+    analytics: TenantAnalyticsConfig = field(default_factory=TenantAnalyticsConfig)
 
 
 def validate_tenant_id(value: str) -> str:
@@ -259,9 +241,7 @@ def load_tenant_profile(path: Path) -> TenantProfile:
     path = path.resolve()
     raw = _read_yaml(path)
     company = dict(raw.get("company", {}))
-    company_id = validate_tenant_id(
-        str(company.get("id", path.stem))
-    )
+    company_id = validate_tenant_id(str(company.get("id", path.stem)))
     if company_id != path.stem:
         raise ValueError(
             f"Tenant profile {path.name} declares company.id={company_id!r}; "
@@ -273,19 +253,15 @@ def load_tenant_profile(path: Path) -> TenantProfile:
     search_policy = str(company.get("search_policy", "default")).strip().casefold()
     if not TENANT_ID_RE.fullmatch(search_policy):
         raise ValueError(
-            f"Tenant {company_id!r} has invalid search_policy "
-            f"{search_policy!r}"
+            f"Tenant {company_id!r} has invalid search_policy {search_policy!r}"
         )
     if search_policy not in supported_search_policies():
         raise ValueError(
-            f"Tenant {company_id!r} has unsupported search_policy "
-            f"{search_policy!r}"
+            f"Tenant {company_id!r} has unsupported search_policy {search_policy!r}"
         )
     planner = dict(raw.get("planner", {}))
     planner_enabled = bool(planner.get("enabled", True))
-    planner_prompt_context = str(
-        planner.get("prompt_context", "")
-    ).strip()
+    planner_prompt_context = str(planner.get("prompt_context", "")).strip()
     if len(planner_prompt_context) > 4000:
         raise ValueError(
             f"Tenant {company_id!r} planner prompt context exceeds 4000 characters"
@@ -318,8 +294,7 @@ def load_tenant_profile(path: Path) -> TenantProfile:
     backend = str(database.get("backend", "mysql")).strip().casefold()
     if backend not in {"mysql", "postgres"}:
         raise ValueError(
-            f"Tenant {company_id!r} has unsupported database backend "
-            f"{backend!r}."
+            f"Tenant {company_id!r} has unsupported database backend {backend!r}."
         )
     default_prefix = "POSTGRES" if backend == "postgres" else "MYSQL"
     default_port = "5432" if backend == "postgres" else "3306"
@@ -363,14 +338,10 @@ def load_tenant_profile(path: Path) -> TenantProfile:
         result_table=_identifier(database, "result_table", "ads"),
         result_id_column=_identifier(database, "result_id_column", "id"),
         result_type_column=_identifier(database, "result_type_column", "type"),
-        connect_timeout_seconds=int(
-            timeouts.get("connect_seconds", 10)
-        ),
+        connect_timeout_seconds=int(timeouts.get("connect_seconds", 10)),
         read_timeout_seconds=int(timeouts.get("read_seconds", 300)),
         write_timeout_seconds=int(timeouts.get("write_seconds", 300)),
-        statement_timeout_ms=int(
-            timeouts.get("statement_timeout_ms", 0)
-        ),
+        statement_timeout_ms=int(timeouts.get("statement_timeout_ms", 0)),
         pool_min_size=int(pool.get("min_size", 0)),
         pool_max_size=int(pool.get("max_size", 4)),
         pool_timeout_seconds=float(pool.get("timeout_seconds", 5)),
@@ -431,9 +402,7 @@ def load_tenant_profile(path: Path) -> TenantProfile:
         raise ValueError(f"Tenant {company_id!r} database user is empty")
 
     storage = dict(raw.get("storage", {}))
-    vector_backend = str(
-        storage.get("vector_backend", "pgvector")
-    ).strip().casefold()
+    vector_backend = str(storage.get("vector_backend", "pgvector")).strip().casefold()
     if vector_backend != "pgvector":
         raise ValueError(
             f"Tenant {company_id!r} must use vector_backend 'pgvector'; "
@@ -504,27 +473,16 @@ def load_tenant_profile(path: Path) -> TenantProfile:
     )
     pgvector_hnsw = dict(pgvector.get("hnsw", {}))
     pgvector_hnsw_m = int(pgvector_hnsw.get("m", 16))
-    pgvector_hnsw_ef_construction = int(
-        pgvector_hnsw.get("ef_construction", 64)
-    )
+    pgvector_hnsw_ef_construction = int(pgvector_hnsw.get("ef_construction", 64))
     pgvector_hnsw_ef_search = int(pgvector_hnsw.get("ef_search", 100))
-    pgvector_query_mode = str(
-        pgvector.get("query_mode", "legacy")
-    ).strip().casefold()
-    pgvector_prewarm_on_startup = bool(
-        pgvector.get("prewarm_on_startup", False)
-    )
-    pgvector_prewarm_mode = str(
-        pgvector.get("prewarm_mode", "read")
-    ).strip().casefold()
+    pgvector_query_mode = str(pgvector.get("query_mode", "legacy")).strip().casefold()
+    pgvector_prewarm_on_startup = bool(pgvector.get("prewarm_on_startup", False))
+    pgvector_prewarm_mode = str(pgvector.get("prewarm_mode", "read")).strip().casefold()
     if pgvector_hnsw_m <= 0:
-        raise ValueError(
-            f"Tenant {company_id!r} pgvector hnsw.m must be positive"
-        )
+        raise ValueError(f"Tenant {company_id!r} pgvector hnsw.m must be positive")
     if pgvector_hnsw_ef_construction <= 0:
         raise ValueError(
-            f"Tenant {company_id!r} pgvector hnsw.ef_construction "
-            "must be positive"
+            f"Tenant {company_id!r} pgvector hnsw.ef_construction must be positive"
         )
     if pgvector_hnsw_ef_search <= 0:
         raise ValueError(
@@ -542,8 +500,7 @@ def load_tenant_profile(path: Path) -> TenantProfile:
         )
     if not pgvector_database.database or not pgvector_database.user:
         raise ValueError(
-            f"Tenant {company_id!r} pgvector database and user must be "
-            "configured."
+            f"Tenant {company_id!r} pgvector database and user must be configured."
         )
     storage_config = TenantStorageConfig(
         bm25_path=_path(
@@ -587,11 +544,7 @@ def load_tenant_profile(path: Path) -> TenantProfile:
     }
     allowed_filter_types = {"keyword", "number", "datetime", "boolean"}
     invalid_filter_types = sorted(
-        {
-            value
-            for value in filter_schema.values()
-            if value not in allowed_filter_types
-        }
+        {value for value in filter_schema.values() if value not in allowed_filter_types}
     )
     if invalid_filter_types:
         raise ValueError(
@@ -613,9 +566,7 @@ def load_tenant_profile(path: Path) -> TenantProfile:
     request_mapping.update(
         {
             str(key).strip(): str(value).strip()
-            for key, value in dict(
-                payload.get("request_mapping", {})
-            ).items()
+            for key, value in dict(payload.get("request_mapping", {})).items()
             if str(key).strip() and str(value).strip()
         }
     )
@@ -641,8 +592,7 @@ def load_tenant_profile(path: Path) -> TenantProfile:
     min_scores = retrieval.get("reranker_min_score_by_provider", {})
     if not isinstance(min_scores, dict):
         raise ValueError(
-            f"Tenant {company_id!r} reranker_min_score_by_provider "
-            "must be a mapping"
+            f"Tenant {company_id!r} reranker_min_score_by_provider must be a mapping"
         )
     retrieval_config = TenantRetrievalConfig(
         adaptive_vector_post_filter_metadata=bool(
@@ -669,29 +619,19 @@ def load_tenant_profile(path: Path) -> TenantProfile:
         },
     )
     api = dict(raw.get("api", {}))
-    endpoint_slug = validate_tenant_id(
-        str(api.get("endpoint_slug", company_id))
-    )
+    endpoint_slug = validate_tenant_id(str(api.get("endpoint_slug", company_id)))
     api_key_envs = tuple(
-        str(value).strip()
-        for value in api.get("key_envs", ())
-        if str(value).strip()
+        str(value).strip() for value in api.get("key_envs", ()) if str(value).strip()
     )
     if not api_key_envs:
         api_key_envs = (f"{company_id.upper()}_API_KEY",)
     compatibility = dict(raw.get("compatibility", {}))
     compatibility_config = TenantCompatibilityConfig(
         adapter=str(compatibility.get("adapter", "")).strip().casefold(),
-        users_table=str(
-            compatibility.get("users_table", "users")
-        ).strip(),
+        users_table=str(compatibility.get("users_table", "users")).strip(),
         page_size=int(compatibility.get("page_size", 20)),
-        semantic_ranked_window=int(
-            compatibility.get("semantic_ranked_window", 40)
-        ),
-        suggestions_limit=int(
-            compatibility.get("suggestions_limit", 8)
-        ),
+        semantic_ranked_window=int(compatibility.get("semantic_ranked_window", 40)),
+        suggestions_limit=int(compatibility.get("suggestions_limit", 8)),
         recent_limit=int(compatibility.get("recent_limit", 10)),
         recent_ttl_seconds=int(
             compatibility.get(
@@ -699,19 +639,11 @@ def load_tenant_profile(path: Path) -> TenantProfile:
                 60 * 60 * 24 * 90,
             )
         ),
-        min_fee_field=str(
-            compatibility.get("min_fee_field", "min_fee")
-        ).strip(),
-        max_fee_field=str(
-            compatibility.get("max_fee_field", "max_fee")
-        ).strip(),
+        min_fee_field=str(compatibility.get("min_fee_field", "min_fee")).strip(),
+        max_fee_field=str(compatibility.get("max_fee_field", "max_fee")).strip(),
         fixed_fee_id=int(compatibility.get("fixed_fee_id", 1)),
-        negotiable_fee_id=int(
-            compatibility.get("negotiable_fee_id", 0)
-        ),
-        emit_search_meta=bool(
-            compatibility.get("emit_search_meta", True)
-        ),
+        negotiable_fee_id=int(compatibility.get("negotiable_fee_id", 0)),
+        emit_search_meta=bool(compatibility.get("emit_search_meta", True)),
         image_path=str(compatibility.get("image_path", "")).strip(),
     )
     analytics = dict(raw.get("analytics", {}))
@@ -821,9 +753,7 @@ def validate_tenant_isolation(profiles: Iterable[TenantProfile]) -> None:
 
         database = profile.storage.pgvector_database
         if database is None:
-            raise ValueError(
-                f"Tenant {profile.company_id!r} has no pgvector database."
-            )
+            raise ValueError(f"Tenant {profile.company_id!r} has no pgvector database.")
         vector_key = (
             database.host,
             database.port,

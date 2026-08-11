@@ -68,7 +68,9 @@ def _category_fulfillment(merged: pd.DataFrame) -> dict[str, Any]:
                 "avg_latency_ms": round(sum(latency_values) / len(latency_values), 1),
             }
         )
-    rows.sort(key=lambda item: (item["zero_result_rate"], item["searches"]), reverse=True)
+    rows.sort(
+        key=lambda item: (item["zero_result_rate"], item["searches"]), reverse=True
+    )
     return {
         "rows": rows,
         "labels": [row["category"] for row in rows],
@@ -109,10 +111,10 @@ def _complexity_performance(merged: pd.DataFrame) -> dict[str, Any]:
         count = int(aggregate["count"])
         latencies = aggregate["latency"]
         counts.append(count)
-        avg_latency.append(round(sum(latencies) / len(latencies), 1) if latencies else 0)
-        zero_rate.append(
-            round(int(aggregate["zero"]) / count * 100, 1) if count else 0
+        avg_latency.append(
+            round(sum(latencies) / len(latencies), 1) if latencies else 0
         )
+        zero_rate.append(round(int(aggregate["zero"]) / count * 100, 1) if count else 0)
     return {
         "labels": list(labels),
         "avg_latency_values": avg_latency,
@@ -129,7 +131,12 @@ def _path_outcomes(merged: pd.DataFrame) -> dict[str, Any]:
         count = len(frame)
         zero = int((frame["total_results"].fillna(0) == 0).sum())
         failures = int(
-            (~frame["status"].fillna("missing").str.casefold().isin(["success", "successful", "ok"])).sum()
+            (
+                ~frame["status"]
+                .fillna("missing")
+                .str.casefold()
+                .isin(["success", "successful", "ok"])
+            ).sum()
         )
         rows.append(
             {

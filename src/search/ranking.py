@@ -145,19 +145,12 @@ class SearchRankingMixin:
             )
             if provider_floor is not None:
                 cutoffs.append(provider_floor)
-            if (
-                self.reranker_relative_score_floor > 0
-                and top_score > 0
-            ):
-                cutoffs.append(
-                    top_score * self.reranker_relative_score_floor
-                )
+            if self.reranker_relative_score_floor > 0 and top_score > 0:
+                cutoffs.append(top_score * self.reranker_relative_score_floor)
             if cutoffs:
                 cutoff = max(cutoffs)
                 results = [
-                    result
-                    for result in results
-                    if float(result["score"]) >= cutoff
+                    result for result in results if float(result["score"]) >= cutoff
                 ]
         LOGGER.info(
             "[search:%s] step=rerank status=complete provider=%s results=%d "

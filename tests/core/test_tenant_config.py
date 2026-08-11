@@ -135,20 +135,13 @@ def test_tenant_profiles_resolve_separate_storage_and_api_keys(
     assert profiles["alpha"].database.pool_min_size == 1
     assert profiles["alpha"].database.pool_max_size == 3
     assert profiles["alpha"].database.pool_timeout_seconds == 2.5
-    assert (
-        profiles["alpha"].database.pool_validation_interval_seconds
-        == 120
-    )
+    assert profiles["alpha"].database.pool_validation_interval_seconds == 120
     assert profiles["alpha"].database.index_namespace == "alpha_index"
     assert profiles["alpha"].database.tls_mode == "disable"
     assert profiles["alpha"].retrieval.semantic_related_tail_enabled is True
+    assert profiles["alpha"].retrieval.adaptive_vector_post_filter_metadata is False
     assert (
-        profiles["alpha"].retrieval.adaptive_vector_post_filter_metadata
-        is False
-    )
-    assert (
-        profiles["alpha"]
-        .retrieval.semantic_related_tail_requires_explicit_category
+        profiles["alpha"].retrieval.semantic_related_tail_requires_explicit_category
         is False
     )
     assert profiles["alpha"].retrieval.reranker_relative_score_floor == 0.0
@@ -280,14 +273,9 @@ def test_tenant_profile_loads_company_specific_retrieval_policy(
     profile = discover_tenant_profiles(tmp_path)["alpha"]
 
     assert profile.retrieval.semantic_related_tail_enabled is False
-    assert (
-        profile.retrieval.semantic_related_tail_requires_explicit_category
-        is True
-    )
+    assert profile.retrieval.semantic_related_tail_requires_explicit_category is True
     assert profile.retrieval.reranker_relative_score_floor == 0.3
-    assert profile.retrieval.reranker_min_score_by_provider == {
-        "voyage-2.5": 0.05
-    }
+    assert profile.retrieval.reranker_min_score_by_provider == {"voyage-2.5": 0.05}
 
 
 def test_tenant_registry_rejects_shared_api_key(tmp_path, monkeypatch):

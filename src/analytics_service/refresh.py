@@ -54,9 +54,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     settings = AnalyticsSettings.from_env()
     registry = load_analytics_registry(settings.tenant_config_dir)
     company_ids = (
-        sorted(registry.companies)
-        if args.all
-        else list(dict.fromkeys(args.companies))
+        sorted(registry.companies) if args.all else list(dict.fromkeys(args.companies))
     )
     missing = [
         company_id
@@ -65,8 +63,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     ]
     if missing:
         raise SystemExit(
-            "Unknown or analytics-disabled companies: "
-            + ", ".join(missing)
+            "Unknown or analytics-disabled companies: " + ", ".join(missing)
         )
     source = (
         CsvAnalyticsDataSource(args.csv_data_dir)

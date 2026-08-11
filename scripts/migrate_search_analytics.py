@@ -21,8 +21,7 @@ from storage.search_analytics import (
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
-            "Create or migrate durable tenant history and internal "
-            "API-usage tables."
+            "Create or migrate durable tenant history and internal API-usage tables."
         ),
     )
     parser.add_argument("--company", default="gainr")
@@ -30,9 +29,7 @@ def main() -> None:
 
     profile = load_tenant_registry(require_api_keys=False).get(args.company)
     if not profile.analytics.enabled:
-        raise SystemExit(
-            f"Search analytics is disabled for company {args.company!r}."
-        )
+        raise SystemExit(f"Search analytics is disabled for company {args.company!r}.")
     if not isinstance(profile.database, MySQLRuntimeConfig):
         raise SystemExit(
             "Search analytics migration currently supports MySQL tenants only."

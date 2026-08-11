@@ -319,79 +319,81 @@ class PgVectorCollection:
         migrated = 0
         kept_target = 0
         while True:
-            with postgres_connection(
-                self.config,
-                dict_rows=True,
-                autocommit=False,
-            ) as connection:
-                with connection.cursor() as cursor:
-                    cursor.execute(
-                        f"""
+            with (
+                postgres_connection(
+                    self.config,
+                    dict_rows=True,
+                    autocommit=False,
+                ) as connection,
+                connection.cursor() as cursor,
+            ):
+                cursor.execute(
+                    f"""
                         SELECT id, metadata
                         FROM {self._qualified()}
                         WHERE metadata ->> 'source_file' = %s
                         ORDER BY id
                         LIMIT %s
                         """,
-                        (source_name, batch_size),
-                    )
-                    rows = cursor.fetchall()
-                    if not rows:
-                        connection.rollback()
-                        break
+                    (source_name, batch_size),
+                )
+                rows = cursor.fetchall()
+                if not rows:
+                    connection.rollback()
+                    break
 
-                    prepared = []
-                    for row in rows:
-                        metadata = dict(row["metadata"] or {})
-                        primary_key = metadata.get("primary_key_value")
-                        if primary_key is None:
-                            raise RuntimeError(
-                                "Cannot migrate a vector without "
-                                "metadata.primary_key_value."
-                            )
-                        new_id = target_id(str(primary_key))
-                        metadata["source_file"] = target_source_name
-                        metadata["source_database"] = target_database
-                        prepared.append((str(row["id"]), new_id, metadata))
-
-                    target_ids = [new_id for _, new_id, _ in prepared]
-                    cursor.execute(
-                        f"SELECT id FROM {self._qualified()} WHERE id = ANY(%s)",
-                        (target_ids,),
-                    )
-                    existing_targets = {
-                        str(existing["id"]) for existing in cursor.fetchall()
-                    }
-                    conflicting_old_ids = [
-                        old_id
-                        for old_id, new_id, _ in prepared
-                        if new_id in existing_targets
-                    ]
-                    if conflicting_old_ids:
-                        cursor.execute(
-                            f"DELETE FROM {self._qualified()} WHERE id = ANY(%s)",
-                            (conflicting_old_ids,),
+                prepared = []
+                for row in rows:
+                    metadata = dict(row["metadata"] or {})
+                    primary_key = metadata.get("primary_key_value")
+                    if primary_key is None:
+                        raise RuntimeError(
+                            "Cannot migrate a vector without "
+                            "metadata.primary_key_value."
                         )
+                    new_id = target_id(str(primary_key))
+                    metadata["source_file"] = target_source_name
+                    metadata["source_database"] = target_database
+                    prepared.append((str(row["id"]), new_id, metadata))
 
-                    updates = [
-                        (new_id, json.dumps(metadata), old_id)
-                        for old_id, new_id, metadata in prepared
-                        if new_id not in existing_targets
-                    ]
-                    if updates:
-                        cursor.executemany(
-                            f"""
+                target_ids = [new_id for _, new_id, _ in prepared]
+                cursor.execute(
+                    f"SELECT id FROM {self._qualified()} WHERE id = ANY(%s)",
+                    (target_ids,),
+                )
+                existing_targets = {
+                    str(existing["id"]) for existing in cursor.fetchall()
+                }
+                conflicting_old_ids = [
+                    old_id
+                    for old_id, new_id, _ in prepared
+                    if new_id in existing_targets
+                ]
+                if conflicting_old_ids:
+                    cursor.execute(
+                        f"DELETE FROM {self._qualified()} WHERE id = ANY(%s)",
+                        (conflicting_old_ids,),
+                    )
+
+                updates = [
+                    (new_id, json.dumps(metadata), old_id)
+                    for old_id, new_id, metadata in prepared
+                    if new_id not in existing_targets
+                ]
+                if updates:
+                    cursor.executemany(
+                        f"""
                             UPDATE {self._qualified()}
                             SET id = %s, metadata = %s::jsonb
                             WHERE id = %s
                             """,
-                            updates,
-                        )
-                    connection.commit()
-                    migrated += len(updates)
-                    kept_target += len(conflicting_old_ids)
-                    if progress is not None:
-                        progress(migrated, kept_target)
+                        updates,
+                    )
+                connection.commit()
+                migrated += len(updates)
+                kept_target += len(conflicting_old_ids)
+                if progress is not None:
+                    progress(migrated, kept_target)
         return migrated, kept_target
 
     def upsert(

@@ -1,5 +1,3 @@
-
-
 from search import reranker
 from search.reranker import (
     FallbackReranker,
@@ -39,9 +37,7 @@ def test_voyage_scores_are_restored_to_input_order(monkeypatch):
         model="rerank-2.5-lite",
     )
 
-    scores = provider.compute_score(
-        [["query", "first"], ["query", "second"]]
-    )
+    scores = provider.compute_score([["query", "first"], ["query", "second"]])
 
     assert scores == [0.2, 0.9]
     assert captured["json"]["return_documents"] is False
@@ -92,9 +88,7 @@ def test_hosted_reranker_truncates_each_document_before_sending(monkeypatch):
         max_document_chars=5,
     )
 
-    provider.compute_score(
-        [["full query", "abcdefgh"], ["full query", "12345678"]]
-    )
+    provider.compute_score([["full query", "abcdefgh"], ["full query", "12345678"]])
 
     assert captured["json"]["query"] == "full query"
     assert captured["json"]["documents"] == ["abcde", "12345"]
@@ -145,16 +139,15 @@ def test_openrouter_nemotron_is_loaded_between_voyage_models(monkeypatch):
         "voyage-2.5-lite",
     ]
     openrouter = chain.providers[1]
-    assert openrouter.model == (
-        "nvidia/llama-nemotron-rerank-vl-1b-v2:free"
-    )
-    assert [
-        limiter.requests_per_window
-        for limiter in openrouter.request_limiters
-    ] == [20, 50]
-    assert [
-        limiter.window_seconds for limiter in openrouter.request_limiters
-    ] == [60, 86400]
+    assert openrouter.model == ("nvidia/llama-nemotron-rerank-vl-1b-v2:free")
+    assert [limiter.requests_per_window for limiter in openrouter.request_limiters] == [
+        20,
+        50,
+    ]
+    assert [limiter.window_seconds for limiter in openrouter.request_limiters] == [
+        60,
+        86400,
+    ]
 
 
 def test_hosted_reranker_enforces_daily_request_budget(monkeypatch):

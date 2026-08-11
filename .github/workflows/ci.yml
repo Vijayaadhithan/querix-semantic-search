@@ -40,6 +40,9 @@ jobs:
       - name: Lint Python
         run: uv run --frozen --group analytics ruff check src scripts tests
 
+      - name: Check Python formatting
+        run: uv run --frozen --group analytics ruff format --check src scripts tests
+
       - name: Validate Markdown
         run: uv run --frozen --group analytics python scripts/check_markdown.py
 

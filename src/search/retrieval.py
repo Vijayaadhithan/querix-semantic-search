@@ -122,9 +122,7 @@ def vector_search(
             if embedding_provider is not None
             else embed_text(query)
         )
-        metrics["embedding_ms"] = (
-            time.perf_counter() - embedding_started
-        ) * 1000
+        metrics["embedding_ms"] = (time.perf_counter() - embedding_started) * 1000
         metrics["embedding_prefetch_reused"] = False
     else:
         metrics["embedding_ms"] = 0.0
@@ -141,12 +139,9 @@ def vector_search(
         )
         if where_filter is not None and post_filter_metadata == "adaptive":
             query_options["where"] = where_filter
-            query_options["exact_filter_max_rows"] = (
-                VECTOR_EXACT_FILTER_MAX_ROWS
-            )
+            query_options["exact_filter_max_rows"] = VECTOR_EXACT_FILTER_MAX_ROWS
             query_options["post_filter_n_results"] = min(
-                max(candidate_k, top_k)
-                * VECTOR_POST_FILTER_OVERFETCH_FACTOR,
+                max(candidate_k, top_k) * VECTOR_POST_FILTER_OVERFETCH_FACTOR,
                 VECTOR_POST_FILTER_MAX_CANDIDATES,
                 row_count,
             )
@@ -155,8 +150,7 @@ def vector_search(
             # tables. Retrieve a bounded HNSW window and enforce the exact
             # constraints with metadata_matches_filters below.
             query_options["n_results"] = min(
-                max(candidate_k, top_k)
-                * VECTOR_POST_FILTER_OVERFETCH_FACTOR,
+                max(candidate_k, top_k) * VECTOR_POST_FILTER_OVERFETCH_FACTOR,
                 VECTOR_POST_FILTER_MAX_CANDIDATES,
                 row_count,
             )
@@ -303,8 +297,7 @@ def related_tail_product_ids(
             category_filters[metadata_key] = value
 
     has_price_filter = any(
-        key in resolved_filters
-        for key in ("min_rental_fee", "max_rental_fee")
+        key in resolved_filters for key in ("min_rental_fee", "max_rental_fee")
     )
     if not categorical and not category_filters and not has_price_filter:
         return []
@@ -312,16 +305,11 @@ def related_tail_product_ids(
     expected_types = (
         {str(value) for value in allowed_ad_types}
         if allowed_ad_types is not None
-        else {
-            WANTED_AD_TYPE
-            if target_ad_type == "wanted"
-            else OFFER_AD_TYPE
-        }
+        else {WANTED_AD_TYPE if target_ad_type == "wanted" else OFFER_AD_TYPE}
     )
     include_unpriced = expected_types == {WANTED_AD_TYPE}
     excluded_products = {
-        str(product_id)
-        for product_id in (exclude_product_ids or set())
+        str(product_id) for product_id in (exclude_product_ids or set())
     }
     seen_products = set(excluded_products)
     product_ids = []
@@ -383,9 +371,7 @@ def merge_results(
                 }
             elif source not in merged[item["id"]]["source"].split("+"):
                 merged[item["id"]]["source"] += f"+{source}"
-            merged[item["id"]]["fusion_score"] += weight / (
-                rrf_constant + rank
-            )
+            merged[item["id"]]["fusion_score"] += weight / (rrf_constant + rank)
 
     inferred_categories = inferred_categories or {}
     metadata_keys = {
@@ -450,11 +436,7 @@ def filter_candidates_by_ad_type(
     expected_types = (
         {str(value) for value in allowed_ad_types}
         if allowed_ad_types is not None
-        else {
-            WANTED_AD_TYPE
-            if target_ad_type == "wanted"
-            else OFFER_AD_TYPE
-        }
+        else {WANTED_AD_TYPE if target_ad_type == "wanted" else OFFER_AD_TYPE}
     )
     product_ids = extract_product_ids(
         candidates,

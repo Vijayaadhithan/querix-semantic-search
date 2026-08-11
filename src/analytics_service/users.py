@@ -56,13 +56,9 @@ def _credential_record_from_env() -> CredentialRecord:
         raise ValueError("Analytics credential role is invalid")
     company_id = values[CREDENTIAL_COMPANY_ENV] or None
     if role == COMPANY_USER and company_id is None:
-        raise ValueError(
-            "Company analytics credentials require a company id"
-        )
+        raise ValueError("Company analytics credentials require a company id")
     if role == INTERNAL_ADMIN and company_id is not None:
-        raise ValueError(
-            "Internal analytics credentials cannot include a company id"
-        )
+        raise ValueError("Internal analytics credentials cannot include a company id")
     return CredentialRecord(
         username=values[CREDENTIAL_USERNAME_ENV],
         password=values[CREDENTIAL_PASSWORD_ENV],
@@ -101,9 +97,7 @@ def _generate_credentials_file(
     if path.exists() and not replace:
         raise FileExistsError(path)
     write_path = (
-        path.with_name(f".{path.name}.{secrets.token_hex(8)}.tmp")
-        if replace
-        else path
+        path.with_name(f".{path.name}.{secrets.token_hex(8)}.tmp") if replace else path
     )
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
     descriptor = os.open(write_path, flags, 0o600)
@@ -131,8 +125,7 @@ def _sync_credential_record(
         (
             user
             for user in store.list_users()
-            if str(user["username"]).casefold()
-            == record.username.casefold()
+            if str(user["username"]).casefold() == record.username.casefold()
         ),
         None,
     )
@@ -144,10 +137,7 @@ def _sync_credential_record(
             company_id=record.company_id,
         )
         return "created"
-    if (
-        existing["role"] != record.role
-        or existing["company_id"] != record.company_id
-    ):
+    if existing["role"] != record.role or existing["company_id"] != record.company_id:
         raise ValueError(
             "Credential binding does not match the existing analytics user"
         )
@@ -232,18 +222,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     store = AnalyticsAuthStore(
         settings.snapshot_db_path,
         session_ttl_seconds=settings.session_ttl_seconds,
-        company_session_idle_seconds=(
-            settings.company_session_idle_seconds
-        ),
-        company_session_absolute_seconds=(
-            settings.company_session_absolute_seconds
-        ),
-        internal_session_idle_seconds=(
-            settings.internal_session_idle_seconds
-        ),
-        internal_session_absolute_seconds=(
-            settings.internal_session_absolute_seconds
-        ),
+        company_session_idle_seconds=(settings.company_session_idle_seconds),
+        company_session_absolute_seconds=(settings.company_session_absolute_seconds),
+        internal_session_idle_seconds=(settings.internal_session_idle_seconds),
+        internal_session_absolute_seconds=(settings.internal_session_absolute_seconds),
         max_login_attempts=settings.login_max_attempts,
         lock_seconds=settings.login_lock_seconds,
         password_min_length=settings.password_min_length,
@@ -256,15 +238,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             company = registry.resolve_company(args.company)
             if company is None:
                 raise SystemExit(
-                    "Company is unknown or analytics is disabled: "
-                    f"{args.company}"
+                    f"Company is unknown or analytics is disabled: {args.company}"
                 )
             company_id = company.company_id
         else:
             if args.company:
-                raise SystemExit(
-                    "--company cannot be used for internal_admin."
-                )
+                raise SystemExit("--company cannot be used for internal_admin.")
             company_id = None
         password = _password_from_input(
             confirm=not args.password_stdin,
@@ -319,9 +298,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         try:
             record = _credential_record_from_env()
             if record.role == COMPANY_USER:
-                registry = load_analytics_registry(
-                    settings.tenant_config_dir
-                )
+                registry = load_analytics_registry(settings.tenant_config_dir)
                 if registry.resolve_company(record.company_id or "") is None:
                     raise ValueError(
                         "Credential company is unknown or analytics is disabled"

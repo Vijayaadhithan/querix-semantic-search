@@ -115,10 +115,7 @@ class DatabaseConnectionPool:
                     id(connection),
                     0.0,
                 )
-            if (
-                time.monotonic() - last_validated
-                < self.validation_interval_seconds
-            ):
+            if time.monotonic() - last_validated < self.validation_interval_seconds:
                 return True
             connection.ping(reconnect=False)
             self._mark_validated(connection)
@@ -169,9 +166,7 @@ class DatabaseConnectionPool:
         created = 0
         while True:
             with self._lock:
-                needs_connection = (
-                    not self._closed and self._created < self.min_size
-                )
+                needs_connection = not self._closed and self._created < self.min_size
             if not needs_connection:
                 break
             try:

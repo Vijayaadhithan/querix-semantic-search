@@ -61,10 +61,7 @@ def check_ollama() -> bool:
     try:
         response = requests.get(f"{OLLAMA_BASE_URL}/api/tags", timeout=3)
         response.raise_for_status()
-        models = {
-            item.get("name")
-            for item in response.json().get("models", [])
-        }
+        models = {item.get("name") for item in response.json().get("models", [])}
     except (requests.RequestException, ValueError) as exc:
         return report("Ollama", False, type(exc).__name__)
     installed = EMBED_MODEL in models
@@ -106,16 +103,15 @@ def check_database(profile=None) -> bool:
             connection_context = postgres_connection(config)
         else:
             connection_context = mysql_connection(config=config)
-        with connection_context as connection:
-            with connection.cursor() as cursor:
-                tables = []
-                for table in (search_table, result_table):
-                    if isinstance(config, PostgresRuntimeConfig):
-                        qualified = qualified_table(config, table)
-                    else:
-                        qualified = quote_mysql_identifier(table)
-                    cursor.execute(f"SELECT COUNT(*) FROM {qualified}")
-                    tables.append(f"{table}={int(cursor.fetchone()[0])}")
+        with connection_context as connection, connection.cursor() as cursor:
+            tables = []
+            for table in (search_table, result_table):
+                if isinstance(config, PostgresRuntimeConfig):
+                    qualified = qualified_table(config, table)
+                else:
+                    qualified = quote_mysql_identifier(table)
+                cursor.execute(f"SELECT COUNT(*) FROM {qualified}")
+                tables.append(f"{table}={int(cursor.fetchone()[0])}")
     except Exception as exc:
         return report(
             "Company database",
@@ -140,9 +136,7 @@ def check_reranker() -> bool:
     for provider in RERANK_PROVIDER_ORDER:
         if provider in {"voyage", "voyage-2.5", "voyage-2.5-lite"}:
             if VOYAGE_API_KEY:
-                available.append(
-                    "voyage-2.5" if provider == "voyage" else provider
-                )
+                available.append("voyage-2.5" if provider == "voyage" else provider)
         elif provider == "openrouter-nemotron" and OPENROUTER_API_KEY:
             available.append(provider)
     return report(
@@ -205,11 +199,7 @@ def check_search_analytics(profile=None) -> bool:
     return report(
         "Search analytics",
         not missing,
-        (
-            detail
-            if not missing
-            else "missing: " + ", ".join(missing)
-        ),
+        (detail if not missing else "missing: " + ", ".join(missing)),
     )
 
 
@@ -302,10 +292,7 @@ def main() -> int:
     if profile:
         print(f"Company: {profile.company_id}")
     api_key_configured = (
-        any(
-            os.getenv(name, "").strip()
-            for name in profile.api_key_envs
-        )
+        any(os.getenv(name, "").strip() for name in profile.api_key_envs)
         if profile
         else True
     )

@@ -3,7 +3,7 @@ import re
 import threading
 import uuid
 from collections import deque
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 LOG_LEVELS = {
@@ -24,9 +24,7 @@ _AUTHORIZATION_SECRET = re.compile(
     r"(?:\"[^\"]*\"|'[^']*'|[^\s,;]+)"
 )
 _BEARER_SECRET = re.compile(r"(?i)(\bbearer\s+)[^\s,;]+")
-_URL_CREDENTIALS = re.compile(
-    r"(?i)(\b[a-z][a-z0-9+.-]*://[^:/\s]+:)[^@\s]+(@)"
-)
+_URL_CREDENTIALS = re.compile(r"(?i)(\b[a-z][a-z0-9+.-]*://[^:/\s]+:)[^@\s]+(@)")
 _CONTROL_CHARACTERS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]+")
 _HTTP_STATUS = re.compile(r"\s(\d{3})(?:\s+[A-Z][A-Z ]*)?$")
 
@@ -101,7 +99,7 @@ class AdminLogBuffer(logging.Handler):
                 "id": 0,
                 "timestamp_utc": datetime.fromtimestamp(
                     record.created,
-                    timezone.utc,
+                    UTC,
                 ).isoformat(),
                 "level": record.levelname,
                 "kind": kind,

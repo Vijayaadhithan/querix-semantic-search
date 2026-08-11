@@ -3,9 +3,10 @@ import hmac
 import logging
 import threading
 import time
+from collections.abc import Callable
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
-from typing import Any, Callable
+from datetime import UTC, datetime, timezone
+from typing import Any
 
 import requests
 from fastapi import FastAPI, Header, HTTPException, Query, Response
@@ -145,9 +146,7 @@ def create_app(
                 redis_cache
             )
             application.state.search_service = None
-            application.state.pgvector_prewarm = (
-                pool.prewarm_pgvector_indexes()
-            )
+            application.state.pgvector_prewarm = pool.prewarm_pgvector_indexes()
         elif service is None:
             redis_cache = create_redis_cache(
                 REDIS_ENABLED,
@@ -164,14 +163,10 @@ def create_app(
             application.state.search_service = service
 
         preload_reranker = (
-            API_PRELOAD_RERANKER
-            if preload_models is None
-            else preload_models
+            API_PRELOAD_RERANKER if preload_models is None else preload_models
         )
         preload_embedding = (
-            API_PRELOAD_EMBEDDING
-            if preload_models is None
-            else preload_models
+            API_PRELOAD_EMBEDDING if preload_models is None else preload_models
         )
         if preload_reranker:
             LOGGER.info("Initializing the configured reranker chain...")
@@ -202,9 +197,7 @@ def create_app(
                 embedding_warmup["embedding_model"].get("total_ms", 0.0),
             )
         if pool is not None:
-            application.state.planner_catalog_prewarm = (
-                pool.prewarm_planner_catalogs()
-            )
+            application.state.planner_catalog_prewarm = pool.prewarm_planner_catalogs()
         admin_log_buffer = AdminLogBuffer(API_ADMIN_LOG_BUFFER_SIZE)
         application.state.admin_log_buffer = admin_log_buffer
         captured_loggers = [
@@ -214,22 +207,28 @@ def create_app(
         ]
         for captured_logger in captured_loggers:
             captured_logger.addHandler(admin_log_buffer)
-        pgvector_status = ",".join(
-            f"{company_id}:{result.get('status', 'unknown')}"
-            for company_id, result in sorted(
-                getattr(application.state, "pgvector_prewarm", {}).items()
+        pgvector_status = (
+            ",".join(
+                f"{company_id}:{result.get('status', 'unknown')}"
+                for company_id, result in sorted(
+                    getattr(application.state, "pgvector_prewarm", {}).items()
+                )
             )
-        ) or "not_configured"
-        planner_status = ",".join(
-            f"{company_id}:{result.get('status', 'unknown')}"
-            for company_id, result in sorted(
-                getattr(
-                    application.state,
-                    "planner_catalog_prewarm",
-                    {},
-                ).items()
+            or "not_configured"
+        )
+        planner_status = (
+            ",".join(
+                f"{company_id}:{result.get('status', 'unknown')}"
+                for company_id, result in sorted(
+                    getattr(
+                        application.state,
+                        "planner_catalog_prewarm",
+                        {},
+                    ).items()
+                )
             )
-        ) or "not_configured"
+            or "not_configured"
+        )
         LOGGER.info(
             "startup_warmup status=complete pgvector=%s reranker=%s "
             "embedding=%s planner_catalog=%s",
@@ -296,10 +295,8 @@ def create_app(
                 headers={"WWW-Authenticate": "ApiKey"},
             )
         if company_endpoint is not None:
-            endpoint_profile = (
-                application.state.tenant_registry.resolve_endpoint(
-                    company_endpoint
-                )
+            endpoint_profile = application.state.tenant_registry.resolve_endpoint(
+                company_endpoint
             )
             if endpoint_profile is None:
                 raise HTTPException(
@@ -401,9 +398,7 @@ def create_app(
         company_endpoint: str,
     ) -> ProductSearchService:
         require_admin_key(admin_key)
-        profile = application.state.tenant_registry.resolve_endpoint(
-            company_endpoint
-        )
+        profile = application.state.tenant_registry.resolve_endpoint(company_endpoint)
         if profile is None:
             raise HTTPException(status_code=404, detail="Unknown company endpoint.")
         return application.state.tenant_service_pool.get(profile.company_id)
@@ -417,9 +412,7 @@ def create_app(
                 status_code=404,
                 detail="Company endpoints require tenant mode.",
             )
-        profile = application.state.tenant_registry.resolve_endpoint(
-            company_endpoint
-        )
+        profile = application.state.tenant_registry.resolve_endpoint(company_endpoint)
         if profile is None:
             raise HTTPException(
                 status_code=404,
@@ -428,9 +421,7 @@ def create_app(
         if profile.compatibility.adapter == "gainr_legacy":
             raise HTTPException(
                 status_code=404,
-                detail=(
-                    "This tenant uses the compatibility filter-result endpoint."
-                ),
+                detail=("This tenant uses the compatibility filter-result endpoint."),
             )
         mapping = profile.payload.request_mapping or {
             "query": "query",
@@ -501,8 +492,7 @@ def create_app(
         except RuntimeError as exc:
             record_processing_failure(exc)
             LOGGER.exception(
-                "search_request status=failed company=%s error_type=%s "
-                "query_chars=%d",
+                "search_request status=failed company=%s error_type=%s query_chars=%d",
                 company_endpoint or "legacy",
                 type(exc).__name__,
                 len(request.query or ""),
@@ -511,8 +501,7 @@ def create_app(
         except Exception as exc:
             record_processing_failure(exc)
             LOGGER.exception(
-                "search_request status=failed company=%s error_type=%s "
-                "query_chars=%d",
+                "search_request status=failed company=%s error_type=%s query_chars=%d",
                 company_endpoint or "legacy",
                 type(exc).__name__,
                 len(request.query or ""),
@@ -527,8 +516,7 @@ def create_app(
             if (
                 cached is not None
                 and API_READINESS_CACHE_SECONDS > 0
-                and now - cached["created_monotonic"]
-                < API_READINESS_CACHE_SECONDS
+                and now - cached["created_monotonic"] < API_READINESS_CACHE_SECONDS
             ):
                 return JSONResponse(
                     {**cached["payload"], "cached": True},
@@ -542,9 +530,7 @@ def create_app(
                 pool = application.state.tenant_service_pool
                 for company_id in registry.profiles:
                     try:
-                        checks[company_id] = pool.get(
-                            company_id
-                        ).readiness()
+                        checks[company_id] = pool.get(company_id).readiness()
                     except Exception as exc:
                         checks[company_id] = {
                             "ok": False,
@@ -552,9 +538,7 @@ def create_app(
                             "error_type": type(exc).__name__,
                         }
             else:
-                checks["legacy"] = (
-                    application.state.search_service.readiness()
-                )
+                checks["legacy"] = application.state.search_service.readiness()
 
             ollama = {"ok": True, "checked": False}
             if application.state.check_ollama_readiness:
@@ -565,8 +549,7 @@ def create_app(
                     )
                     response.raise_for_status()
                     names = {
-                        model.get("name")
-                        for model in response.json().get("models", [])
+                        model.get("name") for model in response.json().get("models", [])
                     }
                     ollama = {
                         "ok": EMBED_MODEL in names,
@@ -581,16 +564,14 @@ def create_app(
                         "error_type": type(exc).__name__,
                     }
             checks["ollama"] = ollama
-            ready_now = all(
-                check.get("ok", False) for check in checks.values()
-            )
+            ready_now = all(check.get("ok", False) for check in checks.values())
             payload = {
                 "status": "ok" if ready_now else "not_ready",
                 "tenant_mode": tenant_mode,
                 "configured_companies": (
                     len(registry.profiles) if registry is not None else 1
                 ),
-                "checked_at_utc": datetime.now(timezone.utc).isoformat(),
+                "checked_at_utc": datetime.now(UTC).isoformat(),
                 "cache_seconds": API_READINESS_CACHE_SECONDS,
                 "cached": False,
             }
@@ -671,19 +652,13 @@ def create_app(
             companies.append(
                 {
                     "company_id": company_id,
-                    "endpoint_slug": (
-                        profile.endpoint_slug or profile.company_id
-                    ),
+                    "endpoint_slug": (profile.endpoint_slug or profile.company_id),
                     "loaded": service is not None,
                     "health": (
-                        service.health().model_dump()
-                        if service is not None
-                        else None
+                        service.health().model_dump() if service is not None else None
                     ),
                     "searches": (
-                        service.monitor_status()
-                        if service is not None
-                        else None
+                        service.monitor_status() if service is not None else None
                     ),
                 }
             )

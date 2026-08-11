@@ -41,9 +41,7 @@ class RerankerPacer:
     def wait(self) -> None:
         now = time.monotonic()
         if self.last_started is not None:
-            remaining = self.minimum_interval_seconds - (
-                now - self.last_started
-            )
+            remaining = self.minimum_interval_seconds - (now - self.last_started)
             if remaining > 0:
                 time.sleep(remaining)
         self.last_started = time.monotonic()
@@ -99,9 +97,7 @@ def source_filter_clause(
     if not isinstance(expected, dict):
         return f"{identifier} = %s", [expected]
     if len(expected) != 1:
-        raise ValueError(
-            f"Source filter {column!r} must contain exactly one operator."
-        )
+        raise ValueError(f"Source filter {column!r} must contain exactly one operator.")
     operator, value = next(iter(expected.items()))
     sql_operators = {
         "$lt": "<",
@@ -120,9 +116,7 @@ def source_filter_clause(
             return "1 = 0", []
         placeholders = ", ".join(["%s"] * len(values))
         return f"{identifier} IN ({placeholders})", values
-    raise ValueError(
-        f"Unsupported source filter operator {operator!r} for {column!r}."
-    )
+    raise ValueError(f"Unsupported source filter operator {operator!r} for {column!r}.")
 
 
 def matching_ids_from_search_table(
@@ -139,8 +133,7 @@ def matching_ids_from_search_table(
     )
     placeholders = ", ".join(["%s"] * len(result_ids))
     clauses = [
-        f"{quote_identifier(config, config.search_id_column)} "
-        f"IN ({placeholders})"
+        f"{quote_identifier(config, config.search_id_column)} IN ({placeholders})"
     ]
     if isinstance(config, MySQLRuntimeConfig):
         if active_condition := mysql_active_condition(config):
@@ -159,17 +152,16 @@ def matching_ids_from_search_table(
         if isinstance(config, PostgresRuntimeConfig)
         else mysql_connection(config=config)
     )
-    with context as connection:
-        with connection.cursor() as cursor:
-            cursor.execute(
-                f"""
+    with context as connection, connection.cursor() as cursor:
+        cursor.execute(
+            f"""
                 SELECT {quote_identifier(config, config.search_id_column)}
                 FROM {table}
-                WHERE {' AND '.join(clauses)}
+                WHERE {" AND ".join(clauses)}
                 """,
-                params,
-            )
-            return {str(row[0]) for row in cursor.fetchall()}
+            params,
+        )
+        return {str(row[0]) for row in cursor.fetchall()}
 
 
 def matching_ids_from_filter_groups(
@@ -216,8 +208,7 @@ def load_plan_snapshot(
             continue
         if payload.get(key) != value:
             raise ValueError(
-                f"Plan snapshot {path} has stale {key!r}; "
-                "rerun with --refresh-plans."
+                f"Plan snapshot {path} has stale {key!r}; rerun with --refresh-plans."
             )
     if not isinstance(payload.get("plans"), dict):
         raise ValueError(f"Plan snapshot {path} has no plans object.")
@@ -229,9 +220,7 @@ def snapshot_planned_result(planned: dict) -> dict:
         "query_plan": deepcopy(planned["query_plan"]),
         "resolved_filters": deepcopy(planned["resolved_filters"]),
         "unresolved_filters": deepcopy(planned["unresolved_filters"]),
-        "query_model_metrics": deepcopy(
-            planned.get("query_model_metrics") or {}
-        ),
+        "query_model_metrics": deepcopy(planned.get("query_model_metrics") or {}),
         "seconds": float(planned.get("seconds", 0.0)),
         "plan_cache_hit": bool(planned.get("plan_cache_hit")),
     }
@@ -275,10 +264,7 @@ def reranker_record(ranked: dict) -> dict:
         "degraded": bool(ranked.get("degraded")),
         "error_type": ranked.get("error_type"),
         "attempts": attempts,
-        "fallbacks": sum(
-            attempt.get("status") == "fallback"
-            for attempt in attempts
-        ),
+        "fallbacks": sum(attempt.get("status") == "fallback" for attempt in attempts),
     }
 
 
@@ -293,10 +279,9 @@ def result_ids_from_rank(
         search_table=engine.search_table,
         search_id_column=engine.search_id_column,
     )
-    return [
-        str(value)
-        for value in dict.fromkeys((*primary_ids, *continuation_ids))
-    ][:result_limit]
+    return [str(value) for value in dict.fromkeys((*primary_ids, *continuation_ids))][
+        :result_limit
+    ]
 
 
 def run_with_fixed_candidates(
@@ -415,10 +400,7 @@ def run_with_fixed_candidates(
             )
             for ranked in ranked_runs
         ],
-        "reranker_runs": [
-            reranker_record(ranked)
-            for ranked in ranked_runs
-        ],
+        "reranker_runs": [reranker_record(ranked) for ranked in ranked_runs],
     }
 
 
@@ -433,9 +415,7 @@ def relevant_ids_for_case(
     if not filter_groups and (
         case.get("expected_filters") or case.get("source_filters")
     ):
-        filter_groups = [
-            case.get("expected_filters") or case.get("source_filters")
-        ]
+        filter_groups = [case.get("expected_filters") or case.get("source_filters")]
     if filter_groups:
         return matching_ids_from_filter_groups(
             profile.database,
@@ -455,11 +435,7 @@ def evaluate_fixed_case(
         dict.fromkeys(
             (
                 *fixed["candidate_ids"],
-                *(
-                    value
-                    for result_ids in result_runs
-                    for value in result_ids
-                ),
+                *(value for result_ids in result_runs for value in result_ids),
             )
         )
     )
@@ -470,23 +446,19 @@ def evaluate_fixed_case(
     )
     if case.get("expected_empty"):
         reciprocal_ranks = [
-            1.0 if not result_ids else 0.0
-            for result_ids in result_runs
+            1.0 if not result_ids else 0.0 for result_ids in result_runs
         ]
         precision_3 = [0.0 for _result_ids in result_runs]
         hit_10 = [False for _result_ids in result_runs]
     else:
         reciprocal_ranks = [
-            reciprocal_rank(result_ids, relevant_ids)
-            for result_ids in result_runs
+            reciprocal_rank(result_ids, relevant_ids) for result_ids in result_runs
         ]
         precision_3 = [
-            precision_at_k(result_ids, relevant_ids, 3)
-            for result_ids in result_runs
+            precision_at_k(result_ids, relevant_ids, 3) for result_ids in result_runs
         ]
         hit_10 = [
-            bool(set(result_ids[:10]) & relevant_ids)
-            for result_ids in result_runs
+            bool(set(result_ids[:10]) & relevant_ids) for result_ids in result_runs
         ]
     median_rr = float(median(reciprocal_ranks))
     median_precision_3 = float(median(precision_3))
@@ -497,12 +469,9 @@ def evaluate_fixed_case(
         if relevant_ids
         else (1.0 if case.get("expected_empty") else 0.0)
     )
-    forbidden_ids = {
-        str(value) for value in case.get("forbidden_ids", [])
-    }
+    forbidden_ids = {str(value) for value in case.get("forbidden_ids", [])}
     forbidden_by_run = [
-        sorted(set(result_ids[:10]) & forbidden_ids)
-        for result_ids in result_runs
+        sorted(set(result_ids[:10]) & forbidden_ids) for result_ids in result_runs
     ]
     failures = []
     expected_execution_path = case.get("expected_execution_path")
@@ -510,9 +479,7 @@ def evaluate_fixed_case(
         expected_execution_path is not None
         and fixed["execution_path"] != expected_execution_path
     ):
-        failures.append(
-            "execution_path!=" + str(expected_execution_path)
-        )
+        failures.append("execution_path!=" + str(expected_execution_path))
     minimum_rr = float(case.get("min_reciprocal_rank", 0.0))
     if median_rr < minimum_rr:
         failures.append(f"median_rr<{minimum_rr:.3f}")
@@ -525,13 +492,9 @@ def evaluate_fixed_case(
     minimum_results = int(case.get("min_result_count", 0))
     if any(len(result_ids) < minimum_results for result_ids in result_runs):
         failures.append(f"result_count<{minimum_results}")
-    minimum_candidate_recall = float(
-        case.get("min_candidate_recall", 0.0)
-    )
+    minimum_candidate_recall = float(case.get("min_candidate_recall", 0.0))
     if candidate_recall < minimum_candidate_recall:
-        failures.append(
-            f"candidate_recall<{minimum_candidate_recall:.3f}"
-        )
+        failures.append(f"candidate_recall<{minimum_candidate_recall:.3f}")
     if any(forbidden_by_run):
         failures.append("forbidden_id_in_top_10")
     if not case.get("expected_empty") and median_rr <= 0:
@@ -602,8 +565,7 @@ def main() -> None:
         "--reranker-delay-seconds",
         type=float,
         help=(
-            "minimum delay between hosted reranker calls "
-            "(default: suite setting or 0)"
+            "minimum delay between hosted reranker calls (default: suite setting or 0)"
         ),
     )
     parser.add_argument(
@@ -657,16 +619,11 @@ def main() -> None:
         planner_prompt_context=profile.planner_prompt_context,
         planner_query_aliases=profile.planner_query_aliases,
         vector_post_filter_metadata=False,
-        semantic_related_tail_enabled=(
-            profile.retrieval.semantic_related_tail_enabled
-        ),
+        semantic_related_tail_enabled=(profile.retrieval.semantic_related_tail_enabled),
         semantic_related_tail_requires_explicit_category=(
-            profile.retrieval
-            .semantic_related_tail_requires_explicit_category
+            profile.retrieval.semantic_related_tail_requires_explicit_category
         ),
-        reranker_relative_score_floor=(
-            profile.retrieval.reranker_relative_score_floor
-        ),
+        reranker_relative_score_floor=(profile.retrieval.reranker_relative_score_floor),
         reranker_min_score_by_provider=(
             profile.retrieval.reranker_min_score_by_provider
         ),
@@ -696,14 +653,8 @@ def main() -> None:
             )
             report = evaluate_fixed_case(profile, case, fixed)
             case_reports.append(report)
-            providers = [
-                run["provider"]
-                for run in report["reranker_runs"]
-            ]
-            fallback_count = sum(
-                run["fallbacks"]
-                for run in report["reranker_runs"]
-            )
+            providers = [run["provider"] for run in report["reranker_runs"]]
+            fallback_count = sum(run["fallbacks"] for run in report["reranker_runs"])
             print(
                 f"{'PASS' if report['success'] else 'FAIL'} "
                 f"{case['name']}: path={report['execution_path']} "
@@ -728,37 +679,21 @@ def main() -> None:
         )
 
     run_mrrs = [
-        mean(
-            report["reciprocal_ranks"][run_index]
-            for report in case_reports
-        )
+        mean(report["reciprocal_ranks"][run_index] for report in case_reports)
         for run_index in range(runs)
     ]
     median_mrr = float(median(run_mrrs)) if run_mrrs else 0.0
-    minimum_median_mrr = float(
-        suite_settings.get("minimum_median_mrr", 0.0)
-    )
+    minimum_median_mrr = float(suite_settings.get("minimum_median_mrr", 0.0))
     reranker_fallbacks = sum(
-        run["fallbacks"]
-        for report in case_reports
-        for run in report["reranker_runs"]
+        run["fallbacks"] for report in case_reports for run in report["reranker_runs"]
     )
-    planner_fallbacks = sum(
-        report["fallbacks"]
-        for report in planner_reports
-    )
-    max_reranker_fallbacks = int(
-        suite_settings.get("max_reranker_fallbacks", 0)
-    )
+    planner_fallbacks = sum(report["fallbacks"] for report in planner_reports)
+    max_reranker_fallbacks = int(suite_settings.get("max_reranker_fallbacks", 0))
     suite_failures = []
     if median_mrr < minimum_median_mrr:
-        suite_failures.append(
-            f"median_mrr<{minimum_median_mrr:.3f}"
-        )
+        suite_failures.append(f"median_mrr<{minimum_median_mrr:.3f}")
     if reranker_fallbacks > max_reranker_fallbacks:
-        suite_failures.append(
-            f"reranker_fallbacks>{max_reranker_fallbacks}"
-        )
+        suite_failures.append(f"reranker_fallbacks>{max_reranker_fallbacks}")
     passed = sum(report["success"] for report in case_reports)
     success = passed == len(case_reports) and not suite_failures
     summary = {

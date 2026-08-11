@@ -1,4 +1,3 @@
-
 import pytest
 
 from search.policy import DefaultSearchPolicy

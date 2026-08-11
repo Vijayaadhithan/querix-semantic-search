@@ -92,13 +92,9 @@ def test_structured_chat_uses_generate_content_json_schema(monkeypatch):
     )
 
     assert content == '{"query":"camera"}'
-    assert captured["url"].endswith(
-        "/models/gemma-4-26b-a4b-it:generateContent"
-    )
+    assert captured["url"].endswith("/models/gemma-4-26b-a4b-it:generateContent")
     assert captured["headers"]["X-goog-api-key"] == "test-key"
-    assert captured["json"]["systemInstruction"] == {
-        "parts": [{"text": "system"}]
-    }
+    assert captured["json"]["systemInstruction"] == {"parts": [{"text": "system"}]}
     assert captured["json"]["generationConfig"] == {
         "temperature": 0,
         "responseMimeType": "application/json",
@@ -144,8 +140,7 @@ def test_worker_sessions_share_the_provider_connection_pool(monkeypatch):
     assert len(sessions) == 2
     assert sessions[0] is not sessions[1]
     assert all(
-        session.adapters["https://"] is provider._http_adapter
-        for session in sessions
+        session.adapters["https://"] is provider._http_adapter for session in sessions
     )
 
 
@@ -298,9 +293,7 @@ def test_strip_json_fence_accepts_gemma_markdown_wrapper():
     assert strip_json_fence('```json\n{"query":"camera"}\n```') == (
         '{"query":"camera"}'
     )
-    assert strip_json_fence('{"query":"camera"}\n```') == (
-        '{"query":"camera"}'
-    )
+    assert strip_json_fence('{"query":"camera"}\n```') == ('{"query":"camera"}')
 
 
 def test_default_structured_chat_falls_back_for_unavailable_models(monkeypatch):
@@ -385,9 +378,7 @@ def test_default_structured_chat_routes_prefixed_model_to_groq(monkeypatch):
 
     assert content == '{"query":"camera"}'
     assert groq_provider.calls == ["openai/gpt-oss-20b"]
-    assert gemini_client.last_gemini_metrics()["model"] == (
-        "groq:openai/gpt-oss-20b"
-    )
+    assert gemini_client.last_gemini_metrics()["model"] == ("groq:openai/gpt-oss-20b")
     assert gemini_client.last_gemini_metrics()["provider"] == "groq"
 
 
