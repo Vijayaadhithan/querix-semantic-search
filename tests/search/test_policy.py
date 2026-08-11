@@ -48,6 +48,19 @@ def test_gainr_policy_is_selected_explicitly():
     assert policy.rerank_context(QUERY_PLAN)
 
 
+def test_gainr_academic_teacher_overrides_subject_product_category():
+    policy = GainrSearchPolicy()
+
+    intent = policy.category_intent(
+        "mathematics teacher",
+        {"mathematics": "Mathematics", "teacher": "Teacher"},
+    )
+
+    assert intent is not None
+    assert intent.subcategory == "Teacher"
+    assert intent.override_explicit_conflict is True
+
+
 def test_unknown_policy_is_rejected_without_falling_back():
     with pytest.raises(ValueError, match="Unsupported search policy"):
         build_search_policy("unknown")

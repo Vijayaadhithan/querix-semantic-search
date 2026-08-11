@@ -942,6 +942,16 @@ def test_gainr_service_intents_are_hard_category_boundaries(tmp_path):
                 main_category_name="Personal & Home Services",
                 subcategory_name="Electrician",
             ),
+            product_row(
+                "mathematics-book",
+                main_category_name="Books",
+                subcategory_name="Mathematics",
+            ),
+            product_row(
+                "mathematics-teacher",
+                main_category_name="Education Field",
+                subcategory_name="Teacher",
+            ),
         ]
     )
     value_index = query_filter_value_index(index)
@@ -967,6 +977,11 @@ def test_gainr_service_intents_are_hard_category_boundaries(tmp_path):
         value_index,
         search_policy=policy,
     )
+    teacher = deterministic_filter_query_plan(
+        "mathematics teacher",
+        value_index,
+        search_policy=policy,
+    )
 
     assert massage["execution_path"] == "deterministic_filter"
     assert massage["sort_order"] == "price_asc"
@@ -976,6 +991,8 @@ def test_gainr_service_intents_are_hard_category_boundaries(tmp_path):
     assert pipes["filters"]["subcategory"] == "Plumber"
     assert wiring["filters"]["subcategory"] == "Electrician"
     assert equipment["filters"]["subcategory"] == "Massage Chair"
+    assert teacher["filters"]["subcategory"] == "Teacher"
+    assert teacher["filters"]["main_category"] == "Education Field"
     index.close()
 
 

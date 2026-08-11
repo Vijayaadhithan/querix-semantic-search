@@ -106,6 +106,11 @@ _MASSAGE_EQUIPMENT_TERMS = {
     "massager",
 }
 _SERVICE_WRAPPER_TERMS = {"anyone", "can", "somebody", "someone", "who"}
+_ACADEMIC_SUBJECT_TEACHER_PATTERN = re.compile(
+    r"\b(?:account(?:ancy|ing)|biology|chemistry|computer\s+science|economics|"
+    r"english|geography|history|math(?:ematic)?s?|physics|science)\s+"
+    r"(?:teacher|tutor)\b"
+)
 _CATEGORY_INTENT_RULES = (
     (
         ("massage therapist", "freelancer massage therapist"),
@@ -197,6 +202,14 @@ _CATEGORY_INTENT_RULES = (
         ),
     ),
     (
+        ("teacher", "online teacher", "tutor"),
+        (re.compile(r"\bteacher\b"),),
+    ),
+    (
+        ("tutor", "home tutor", "online tutor"),
+        (re.compile(r"\btutor\b"),),
+    ),
+    (
         ("maid",),
         (
             re.compile(r"\b(?:house[\s-]+maid|domestic\s+(?:help|worker))\b"),
@@ -271,7 +284,7 @@ def _candidate_text(candidate: dict) -> str:
 class GainrSearchPolicy:
     """Gainr marketplace interpretation without coupling it to the engine."""
 
-    cache_key = "gainr-marketplace-v2"
+    cache_key = "gainr-marketplace-v3"
 
     @staticmethod
     def _is_vehicle_travel_request(query: str) -> bool:
@@ -363,6 +376,27 @@ class GainrSearchPolicy:
     ) -> CategoryIntent | None:
         normalized = normalize_filter_value(query)
         tokens = _tokens(normalized)
+        academic_match = _ACADEMIC_SUBJECT_TEACHER_PATTERN.search(normalized)
+        if academic_match is not None:
+            role = "tutor" if "tutor" in academic_match.group(0) else "teacher"
+            preferred = (
+                ("tutor", "home tutor", "online tutor")
+                if role == "tutor"
+                else ("teacher", "online teacher", "tutor")
+            )
+            actual = next(
+                (values.get(target) for target in preferred if values.get(target)),
+                None,
+            )
+            if actual is not None:
+                return CategoryIntent(
+                    subcategory=actual,
+                    consumed_tokens=frozenset(_tokens(academic_match.group(0))),
+                    # Subject names can also be product subcategories (for
+                    # example Books > Mathematics). The explicit role makes
+                    # the service intent unambiguous in this narrow case.
+                    override_explicit_conflict=True,
+                )
         for targets, patterns in _CATEGORY_INTENT_RULES:
             if targets[0] == "massage therapist" and (
                 tokens & _MASSAGE_EQUIPMENT_TERMS

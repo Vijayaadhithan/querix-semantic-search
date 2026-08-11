@@ -220,6 +220,7 @@ def enrich_query_plan(
             and analysis.category_is_explicit.get("subcategory", False)
             and normalize_filter_value(explicit_subcategory)
             != normalize_filter_value(category_intent.subcategory)
+            and not category_intent.override_explicit_conflict
         )
     ):
         # High-confidence tenant phrases such as "body massage" or

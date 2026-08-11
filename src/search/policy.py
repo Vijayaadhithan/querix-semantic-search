@@ -8,6 +8,7 @@ class CategoryIntent:
 
     subcategory: str
     consumed_tokens: frozenset[str]
+    override_explicit_conflict: bool = False
 
 
 class SearchPolicy(Protocol):
