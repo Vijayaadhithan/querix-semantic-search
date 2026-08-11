@@ -605,21 +605,18 @@ def test_ranked_page_query_preserves_order_total_and_relations(
         def fetchall(self):
             if self.result_index == 1:
                 return [
-                    {"__search_id": 1},
-                    {"__search_id": 2},
-                ]
-            if self.result_index == 2:
-                return [
                     {
                         "id": 2,
                         "user_id": 7,
+                        "__eligible_total": 2,
                     },
                     {
                         "id": 1,
                         "user_id": 8,
+                        "__eligible_total": 2,
                     },
                 ]
-            if self.result_index == 3:
+            if self.result_index == 2:
                 return [
                     {
                         "ads_id": 2,
@@ -627,7 +624,7 @@ def test_ranked_page_query_preserves_order_total_and_relations(
                         "value": "hourly",
                     }
                 ]
-            if self.result_index == 4:
+            if self.result_index == 3:
                 return [
                     {"user_id": 7, "service_ad_count": 3},
                     {"user_id": 8, "service_ad_count": 1},
@@ -677,13 +674,11 @@ def test_ranked_page_query_preserves_order_total_and_relations(
         }
     ]
     assert rows[1]["__ads_attributes"] == []
-    assert "AS __search_id" in executions[0][0]
+    assert "COUNT(*) OVER () AS __eligible_total" in executions[0][0]
+    assert "ORDER BY FIELD(sr.id" in executions[0][0]
     assert "`sr`.`is_search_active` = 1" in executions[0][0]
-    assert "COUNT(*) OVER ()" not in executions[0][0]
-    assert executions[0][1] == (456, "1", 2, 1)
+    assert executions[0][1] == (456, "1", 2, 1, 2, 1, 20, 0)
     assert executions[1][1] == (2, 1)
-    assert "`sr`.`is_search_active` = 1" in executions[1][0]
-    assert executions[2][1] == (2, 1)
 
 
 def test_pooled_relation_hydration_runs_independent_queries_concurrently(

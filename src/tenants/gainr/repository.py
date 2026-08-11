@@ -432,62 +432,46 @@ class GainrDatabaseRepository:
             checkout_ms = round(
                 (time.perf_counter() - checkout_started) * 1000
             )
-            eligibility_started = time.perf_counter()
+            cards_started = time.perf_counter()
+            rows = []
+            total = 0
+            rank_placeholders = ", ".join("%s" for _ in ranked_ids)
             with connection.cursor() as cursor:
-                search_id = quote_mysql_identifier(
-                    self.config.search_id_column
-                )
                 cursor.execute(
                     f"""
-                    SELECT sr.{search_id} AS __search_id
+                    SELECT a.*, sr.city_name AS __city_name,
+                           sr.locality_name AS __locality_name,
+                           COUNT(*) OVER () AS __eligible_total
                     FROM {self.search_table} AS sr
                     JOIN {self.result_table} AS a ON a.id = sr.id
                     WHERE {where_clause}
+                    ORDER BY FIELD(sr.id, {rank_placeholders})
+                    LIMIT %s OFFSET %s
                     """,
-                    where_params,
+                    (*where_params, *ranked_ids, page_size, offset),
                 )
-                eligible = {
-                    str(row["__search_id"])
-                    for row in cursor.fetchall()
-                }
-            eligible_ids = [
-                product_id
-                for product_id in ranked_ids
-                if str(product_id) in eligible
-            ]
-            eligibility_ms = round(
-                (time.perf_counter() - eligibility_started) * 1000
-            )
-            total = len(eligible_ids)
-            page_ids = eligible_ids[offset : offset + page_size]
-
-            cards_started = time.perf_counter()
-            rows = []
-            if page_ids:
-                page_placeholders = ", ".join("%s" for _ in page_ids)
+                rows = list(cursor.fetchall())
+            if rows:
+                total = int(rows[0].get("__eligible_total") or 0)
+                for row in rows:
+                    row.pop("__eligible_total", None)
+            elif offset:
+                # A page beyond the last result has no window row carrying the
+                # total. Preserve the legacy pagination contract for that rare
+                # case with a count-only fallback.
                 with connection.cursor() as cursor:
                     cursor.execute(
                         f"""
-                        SELECT a.*, sr.city_name AS __city_name,
-                               sr.locality_name AS __locality_name
+                        SELECT COUNT(*) AS total
                         FROM {self.search_table} AS sr
                         JOIN {self.result_table} AS a ON a.id = sr.id
-                        WHERE sr.id IN ({page_placeholders})
-                          {self.search_active_qualified_filter}
+                        WHERE {where_clause}
                         """,
-                        page_ids,
+                        where_params,
                     )
-                    hydrated = list(cursor.fetchall())
-                rows_by_id = {
-                    str(row[self.config.result_id_column]): row
-                    for row in hydrated
-                }
-                rows = [
-                    rows_by_id[str(product_id)]
-                    for product_id in page_ids
-                    if str(product_id) in rows_by_id
-                ]
+                    total = int(cursor.fetchone()["total"])
             cards_ms = round((time.perf_counter() - cards_started) * 1000)
+            eligibility_ms = 0
             relation_timings = (
                 {}
                 if parallel_relations
