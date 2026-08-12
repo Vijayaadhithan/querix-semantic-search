@@ -101,7 +101,7 @@ GROQ_API_BASE_URL = os.getenv(
     "GROQ_API_BASE_URL",
     "https://api.groq.com/openai/v1",
 ).rstrip("/")
-GROQ_TIMEOUT_SECONDS = float(os.getenv("GROQ_TIMEOUT_SECONDS", "5"))
+GROQ_TIMEOUT_SECONDS = float(os.getenv("GROQ_TIMEOUT_SECONDS", "3"))
 if GROQ_TIMEOUT_SECONDS <= 0:
     raise ValueError("GROQ_TIMEOUT_SECONDS must be greater than zero.")
 QUERY_EXTRACT_CONFIG = CONFIG.get("query_extraction", {})
@@ -126,7 +126,9 @@ _query_extract_models = (
     else QUERY_EXTRACT_CONFIG.get("models")
 )
 if not _query_extract_models:
-    _query_extract_models = [QUERY_EXTRACT_CONFIG.get("model", "gemma-4-26b-a4b-it")]
+    _query_extract_models = [
+        QUERY_EXTRACT_CONFIG.get("model", "groq:openai/gpt-oss-20b")
+    ]
 elif isinstance(_query_extract_models, str):
     _query_extract_models = [_query_extract_models]
 QUERY_EXTRACT_MODELS = tuple(
@@ -136,6 +138,18 @@ if not QUERY_EXTRACT_MODELS:
     raise ValueError("query_extraction.models must contain at least one model.")
 QUERY_EXTRACT_MODEL = QUERY_EXTRACT_MODELS[0]
 QUERY_EXTRACT_TEMPERATURE = float(QUERY_EXTRACT_CONFIG.get("temperature", 0))
+QUERY_EXTRACT_MAX_OUTPUT_TOKENS = int(
+    QUERY_EXTRACT_CONFIG.get("max_output_tokens", 384)
+)
+if not 64 <= QUERY_EXTRACT_MAX_OUTPUT_TOKENS <= 4096:
+    raise ValueError("query_extraction.max_output_tokens must be between 64 and 4096.")
+GEMINI_THINKING_LEVEL = (
+    str(QUERY_EXTRACT_CONFIG.get("gemini_thinking_level", "minimal")).strip().lower()
+)
+if GEMINI_THINKING_LEVEL not in {"minimal", "low", "medium", "high"}:
+    raise ValueError(
+        "query_extraction.gemini_thinking_level must be minimal, low, medium, or high."
+    )
 QUERY_EXTRACT_TIMEOUT_SECONDS = float(
     os.getenv(
         "GEMINI_TIMEOUT_SECONDS",

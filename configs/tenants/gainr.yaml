@@ -258,6 +258,9 @@ analytics:
 # generic configurable /search contract.
 compatibility:
   adapter: gainr_legacy
+  # The ETL-owned snapshot contains the complete public card projection. The
+  # API must not fan out to ads, users, or ads_attributes during a search.
+  serves_cards_from_search_ready: true
   users_table: users
   page_size: 20
   # Keep the first frontend page inside the bounded hosted rerank window. Later

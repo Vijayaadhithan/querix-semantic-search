@@ -40,7 +40,6 @@ def test_configured_query_model_fallback_order():
     assert QUERY_EXTRACT_MODELS == (
         "groq:openai/gpt-oss-20b",
         "gemini-3.1-flash-lite",
-        "gemma-4-26b-a4b-it",
     )
 
 
@@ -84,7 +83,7 @@ def test_structured_chat_uses_generate_content_json_schema(monkeypatch):
     )
 
     content = provider.structured_chat(
-        "gemma-4-26b-a4b-it",
+        "gemini-3.1-flash-lite",
         "system",
         "user",
         schema,
@@ -92,15 +91,17 @@ def test_structured_chat_uses_generate_content_json_schema(monkeypatch):
     )
 
     assert content == '{"query":"camera"}'
-    assert captured["url"].endswith("/models/gemma-4-26b-a4b-it:generateContent")
+    assert captured["url"].endswith("/models/gemini-3.1-flash-lite:generateContent")
     assert captured["headers"]["X-goog-api-key"] == "test-key"
     assert captured["json"]["systemInstruction"] == {"parts": [{"text": "system"}]}
     assert captured["json"]["generationConfig"] == {
         "temperature": 0,
+        "maxOutputTokens": 384,
         "responseMimeType": "application/json",
         "responseJsonSchema": schema,
+        "thinkingConfig": {"thinkingLevel": "minimal"},
     }
-    assert captured["timeout"] == 5
+    assert captured["timeout"] == 3
     assert provider.last_chat_metrics["total_ms"] >= 0
 
 
@@ -203,13 +204,14 @@ def test_groq_structured_chat_uses_responses_json_schema(monkeypatch):
     assert captured["url"].endswith("/openai/v1/responses")
     assert captured["headers"]["Authorization"] == "Bearer test-key"
     assert captured["json"]["reasoning"] == {"effort": "low"}
+    assert captured["json"]["max_output_tokens"] == 384
     assert captured["json"]["text"]["format"] == {
         "type": "json_schema",
         "name": "query_plan",
         "strict": True,
         "schema": schema,
     }
-    assert captured["timeout"] == 5
+    assert captured["timeout"] == 3
     assert provider.last_chat_metrics["total_tokens"] == 120
 
 

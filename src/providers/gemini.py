@@ -12,10 +12,12 @@ from core.settings import (
     GEMINI_API_BASE_URL,
     GEMINI_API_KEY,
     GEMINI_QUERY_RPM,
+    GEMINI_THINKING_LEVEL,
     GROQ_API_BASE_URL,
     GROQ_API_KEY,
     GROQ_QUERY_RPM,
     GROQ_TIMEOUT_SECONDS,
+    QUERY_EXTRACT_MAX_OUTPUT_TOKENS,
     QUERY_EXTRACT_MODELS,
     QUERY_EXTRACT_TIMEOUT_SECONDS,
     REDIS_ENABLED,
@@ -168,8 +170,12 @@ class GeminiProvider:
                     ],
                     "generationConfig": {
                         "temperature": temperature,
+                        "maxOutputTokens": QUERY_EXTRACT_MAX_OUTPUT_TOKENS,
                         "responseMimeType": "application/json",
                         "responseJsonSchema": schema,
+                        "thinkingConfig": {
+                            "thinkingLevel": GEMINI_THINKING_LEVEL,
+                        },
                     },
                 },
                 timeout=self.timeout_seconds,
@@ -305,6 +311,7 @@ class GroqProvider:
                     "schema": schema,
                 }
             },
+            "max_output_tokens": QUERY_EXTRACT_MAX_OUTPUT_TOKENS,
         }
         if model.startswith("openai/gpt-oss-"):
             request_body["reasoning"] = {"effort": "low"}
@@ -504,7 +511,7 @@ def structured_chat(
         last_error.reason if last_error is not None else "unknown",
     )
     raise RuntimeError(
-        "All configured Google query models are unavailable "
+        "All configured query models are unavailable "
         f"(last_reason={last_error.reason if last_error else 'unknown'})."
     ) from last_error
 

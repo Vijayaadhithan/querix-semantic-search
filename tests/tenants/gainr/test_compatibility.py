@@ -678,6 +678,82 @@ def test_ranked_page_query_preserves_order_total_and_relations(
     assert executions[1][1] == (2, 1)
 
 
+def test_search_ready_ranked_page_uses_one_query_and_embedded_card_relations(
+    tmp_path,
+    monkeypatch,
+):
+    repository = GainrDatabaseRepository(
+        profile(tmp_path, serves_cards_from_search_ready=True)
+    )
+    executions = []
+
+    class Cursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def execute(self, sql, params):
+            executions.append((sql, tuple(params)))
+
+        def fetchall(self):
+            return [
+                {
+                    "id": 2,
+                    "user_id": 7,
+                    "city_name": "Mumbai",
+                    "locality_name": "City",
+                    "service_ad_count": 3,
+                    "ads_attributes_json": (
+                        '[{"ads_id":2,"attribute_id":959,"value":12121}]'
+                    ),
+                    "user_prosper_id": "AA0007",
+                    "user_name": "Public User",
+                    "user_photo": "profile.jpg",
+                    "user_is_aadhaar_gst_verified": 1,
+                    "__eligible_total": 1,
+                    "__rank_order": 1,
+                }
+            ]
+
+    class Connection:
+        def cursor(self):
+            return Cursor()
+
+    @contextmanager
+    def connection():
+        yield Connection()
+
+    monkeypatch.setattr(repository, "connection", connection)
+
+    rows, total = repository.hydrate_ranked_page(
+        [2, 1],
+        {"categorical": {"city_id": 456}},
+        GainrSearchFilter(),
+        {"1"},
+        page=1,
+        page_size=20,
+    )
+
+    assert total == 1
+    assert len(executions) == 1
+    assert "JOIN `ads`" not in executions[0][0]
+    assert "FROM `users`" not in executions[0][0]
+    assert "FROM `ads_attributes`" not in executions[0][0]
+    assert executions[0][1] == (2, 1, 456, "1", 2, 1, 20, 0)
+    assert rows[0]["__ads_attributes"] == [
+        {"ads_id": 2, "attribute_id": 959, "value": 12121}
+    ]
+    assert rows[0]["__user"] == {
+        "id": 7,
+        "prosper_id": "AA0007",
+        "name": "Public User",
+        "photo": "profile.jpg",
+        "is_aadhaar_gst_verified": 1,
+    }
+
+
 def test_pooled_relation_hydration_runs_independent_queries_concurrently(
     tmp_path,
 ):
@@ -825,8 +901,11 @@ def test_card_hydrates_compact_and_verified_user_contract(tmp_path):
     }
     assert card["is_aadhar_gst_verified_count"] == 1
     assert card["is_aadhar_gst_verified"]["id"] == 297952
-    assert card["is_aadhar_gst_verified"]["available_credit"] == 0
     assert card["is_aadhar_gst_verified"]["name"] == "Verified User"
+    assert "available_credit" not in card["is_aadhar_gst_verified"]
+    assert "email" not in card["is_aadhar_gst_verified"]
+    assert "phone" not in card["is_aadhar_gst_verified"]
+    assert "fcm_token" not in card["is_aadhar_gst_verified"]
 
 
 def test_card_keeps_full_verification_null_for_ordinary_user(tmp_path):

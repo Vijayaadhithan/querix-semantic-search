@@ -30,6 +30,8 @@ class SearchPolicy(Protocol):
 
     def infer_main_category(self, query: str, values: dict) -> str | None: ...
 
+    def allows_descriptive_direct_semantic(self, query: str) -> bool: ...
+
     def adjust_candidates(
         self,
         query_plan: dict,
@@ -62,6 +64,9 @@ class DefaultSearchPolicy:
 
     def infer_main_category(self, query: str, values: dict) -> str | None:
         return None
+
+    def allows_descriptive_direct_semantic(self, query: str) -> bool:
+        return False
 
     def adjust_candidates(
         self,

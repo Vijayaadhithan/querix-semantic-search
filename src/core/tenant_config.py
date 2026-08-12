@@ -100,6 +100,7 @@ class TenantCompatibilityConfig:
     negotiable_fee_id: int = 0
     emit_search_meta: bool = True
     image_path: str = ""
+    serves_cards_from_search_ready: bool = False
 
     def __post_init__(self) -> None:
         supported_adapters = set(supported_compatibility_adapters())
@@ -645,6 +646,9 @@ def load_tenant_profile(path: Path) -> TenantProfile:
         negotiable_fee_id=int(compatibility.get("negotiable_fee_id", 0)),
         emit_search_meta=bool(compatibility.get("emit_search_meta", True)),
         image_path=str(compatibility.get("image_path", "")).strip(),
+        serves_cards_from_search_ready=bool(
+            compatibility.get("serves_cards_from_search_ready", False)
+        ),
     )
     analytics = dict(raw.get("analytics", {}))
     analytics_config = TenantAnalyticsConfig(

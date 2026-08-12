@@ -504,17 +504,28 @@ def direct_semantic_query_plan(
         analysis.query,
         value_index["subcategory"],
     )
-    if not (
+    descriptive_hook = getattr(
+        search_policy,
+        "allows_descriptive_direct_semantic",
+        None,
+    )
+    descriptive_direct = bool(descriptive_hook and descriptive_hook(analysis.query))
+    catalog_grounded = bool(
         any(
             analysis.exact_values.get(key) is not None
             for key in ("main_category", "subcategory")
         )
         or category_intent is not None
-    ):
+    )
+    if not descriptive_direct and not catalog_grounded:
         return None, "no_explicit_catalog_category"
-    if token_set & DIRECT_SEMANTIC_BLOCK_TOKENS:
+    blocked_tokens = token_set & DIRECT_SEMANTIC_BLOCK_TOKENS
+    complex_shape = any(
+        pattern.search(query) for pattern in DIRECT_SEMANTIC_COMPLEX_PATTERNS
+    )
+    if not descriptive_direct and blocked_tokens:
         return None, "complex_or_subjective_language"
-    if any(pattern.search(query) for pattern in DIRECT_SEMANTIC_COMPLEX_PATTERNS):
+    if not descriptive_direct and complex_shape:
         return None, "complex_query_shape"
 
     plan = enrich_query_plan(
@@ -533,7 +544,12 @@ def direct_semantic_query_plan(
     if non_category_filters or plan["target_ad_type"] != "offer":
         return None, "structured_intent_detected"
     plan["execution_path"] = "direct_semantic"
-    plan["route_reason"] = "objective_catalog_phrase"
+    plan["route_reason"] = (
+        "descriptive_marketplace_offer"
+        if descriptive_direct
+        and (not catalog_grounded or blocked_tokens or complex_shape)
+        else "objective_catalog_phrase"
+    )
     return plan, plan["route_reason"]
 
 

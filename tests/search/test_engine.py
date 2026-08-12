@@ -283,6 +283,24 @@ def test_direct_semantic_plan_rejects_queries_that_need_llm_reasoning(tmp_path):
     index.close()
 
 
+def test_gainr_descriptive_vehicle_offer_skips_hosted_planner(tmp_path):
+    index = build_index(tmp_path / "gainr-descriptive-vehicle.sqlite3")
+    value_index = query_filter_value_index(index)
+
+    plan, reason = direct_semantic_query_plan(
+        "comfortable car for long travel",
+        value_index,
+        search_policy=GainrSearchPolicy(),
+    )
+
+    assert reason == "descriptive_marketplace_offer"
+    assert plan["execution_path"] == "direct_semantic"
+    assert plan["filters"]["subcategory"] is None
+    assert plan["inferred_categories"]["main_category"] == "Automobiles"
+    assert "comfortable and safe long-distance travel" in plan["semantic_query"]
+    index.close()
+
+
 def test_engine_direct_semantic_route_skips_query_provider(tmp_path):
     index = build_index(tmp_path / "direct-semantic-engine.sqlite3")
     provider = CountingQueryProvider()

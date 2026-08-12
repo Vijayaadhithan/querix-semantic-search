@@ -272,7 +272,7 @@ def _candidate_text(candidate: dict) -> str:
 class GainrSearchPolicy:
     """Gainr marketplace interpretation without coupling it to the engine."""
 
-    cache_key = "gainr-marketplace-v3"
+    cache_key = "gainr-marketplace-v4"
 
     @staticmethod
     def _is_vehicle_travel_request(query: str) -> bool:
@@ -412,6 +412,15 @@ class GainrSearchPolicy:
         if not self._is_vehicle_travel_request(query):
             return None
         return values.get("automobiles")
+
+    def allows_descriptive_direct_semantic(self, query: str) -> bool:
+        """Let hybrid retrieval handle simple Gainr offer descriptions.
+
+        The generic planner has already rejected locations, prices, rental
+        durations, wanted-ad language, non-ASCII text, numeric constraints,
+        and known spelling normalization before this hook is consulted.
+        """
+        return bool(re.search(r"[a-z]", normalize_filter_value(query)))
 
     def adjust_candidates(
         self,

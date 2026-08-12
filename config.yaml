@@ -11,16 +11,18 @@ query_extraction:
   models:
     - groq:openai/gpt-oss-20b
     - gemini-3.1-flash-lite
-    - gemma-4-26b-a4b-it
   # Groq is the low-latency primary. Its 11th request in any rolling minute
   # skips directly to Gemini instead of waiting for an upstream 429.
   groq_requests_per_minute: 10
   gemini_requests_per_minute: 2000
   temperature: 0
-  # Per-model deadline. Timeouts advance to the next configured model.
-  # Avoid long provider tails. If both hosted planners are unavailable, the
-  # planner immediately retains the query in its safe default semantic plan.
-  timeout_seconds: 5
+  # Query plans are compact JSON. Bound provider output and keep Gemini's
+  # reasoning at its lowest supported level to control cost and tail latency.
+  max_output_tokens: 384
+  gemini_thinking_level: minimal
+  # Per-model deadline. Timeouts advance once from Groq to Gemini; if both
+  # hosted planners are unavailable, planning falls back safely.
+  timeout_seconds: 3
   deterministic_fast_path: true
   # Skip hosted planning only for short, objective, explicitly catalogued
   # phrases with no location, price, duration, wanted-ad, multilingual, or

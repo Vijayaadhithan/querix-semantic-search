@@ -1,3 +1,4 @@
+import json
 import logging
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -54,6 +55,9 @@ class GainrDatabaseRepository:
             if self.search_active_qualified_condition
             else ""
         )
+        self.serves_cards_from_search_ready = (
+            self.profile.compatibility.serves_cards_from_search_ready
+        )
         self._users_table_available: bool | None = None
 
     @contextmanager
@@ -79,6 +83,25 @@ class GainrDatabaseRepository:
 
     def suggestions(self, term: str, limit: int) -> list[str]:
         prefix = f"{term}%"
+        if self.serves_cards_from_search_ready:
+            query = f"""
+                SELECT DISTINCT subcategory_name AS value
+                FROM {self.search_table}
+                WHERE subcategory_name IS NOT NULL
+                  AND TRIM(subcategory_name) <> ''
+                  AND subcategory_name LIKE %s
+                  {self.search_active_filter}
+                ORDER BY
+                    CASE WHEN LOWER(subcategory_name) = LOWER(%s)
+                         THEN 0 ELSE 1 END,
+                    subcategory_name
+                LIMIT %s
+            """
+            with self.connection() as connection, connection.cursor() as cursor:
+                cursor.execute(query, (prefix, term, limit))
+                return [
+                    str(row["value"]) for row in cursor.fetchall() if row.get("value")
+                ]
         query = f"""
             SELECT DISTINCT name AS value
             FROM {quote_mysql_identifier("sub_categories")}
@@ -113,20 +136,36 @@ class GainrDatabaseRepository:
                 (city_id,),
             )
             durations = [str(row["rental_duration"]) for row in cursor.fetchall()]
-            cursor.execute(
-                f"""
-                    SELECT DISTINCT id AS locality_id,
-                                    area AS locality_name
-                    FROM {quote_mysql_identifier("locations")}
+            if self.serves_cards_from_search_ready:
+                cursor.execute(
+                    f"""
+                    SELECT DISTINCT locality_id,
+                                    locality_name
+                    FROM {self.search_table}
                     WHERE city_id = %s
-                      AND id IS NOT NULL
-                      AND area IS NOT NULL
-                      AND TRIM(area) <> ''
-                      AND (deleted_at IS NULL OR TRIM(deleted_at) = '')
-                    ORDER BY area
+                      {self.search_active_filter}
+                      AND locality_id IS NOT NULL
+                      AND locality_name IS NOT NULL
+                      AND TRIM(locality_name) <> ''
+                    ORDER BY locality_name
                     """,
-                (city_id,),
-            )
+                    (city_id,),
+                )
+            else:
+                cursor.execute(
+                    f"""
+                        SELECT DISTINCT id AS locality_id,
+                                        area AS locality_name
+                        FROM {quote_mysql_identifier("locations")}
+                        WHERE city_id = %s
+                          AND id IS NOT NULL
+                          AND area IS NOT NULL
+                          AND TRIM(area) <> ''
+                          AND (deleted_at IS NULL OR TRIM(deleted_at) = '')
+                        ORDER BY area
+                        """,
+                    (city_id,),
+                )
             localities = [
                 {
                     "id": int(row["locality_id"]),
@@ -170,7 +209,10 @@ class GainrDatabaseRepository:
         fallback_term: str = "",
         allowed_ad_types: set[str] | None = None,
     ) -> tuple[str, list[Any]]:
-        conditions = ["(a.deleted_at IS NULL OR TRIM(a.deleted_at) = '')"]
+        conditions = []
+        card_alias = "sr" if self.serves_cards_from_search_ready else "a"
+        if not self.serves_cards_from_search_ready:
+            conditions.append("(a.deleted_at IS NULL OR TRIM(a.deleted_at) = '')")
         if self.search_active_qualified_condition:
             conditions.insert(0, self.search_active_qualified_condition)
         params: list[Any] = []
@@ -210,7 +252,7 @@ class GainrDatabaseRepository:
             priced_clause = " AND ".join(priced_conditions)
             if allowed_ad_types is not None and "2" in allowed_ad_types:
                 conditions.append(
-                    "((a.type = %s AND "
+                    f"(({card_alias}.type = %s AND "
                     "(sr.rental_fee IS NULL OR sr.rental_fee <= 1)) "
                     f"OR ({priced_clause}))"
                 )
@@ -222,7 +264,7 @@ class GainrDatabaseRepository:
             self._append_condition(
                 conditions,
                 params,
-                "a.type",
+                f"{card_alias}.type",
                 sorted(allowed_ad_types),
             )
         if request_filter.fee:
@@ -237,7 +279,7 @@ class GainrDatabaseRepository:
                 self._append_condition(
                     conditions,
                     params,
-                    "a.is_rent_negotiable",
+                    f"{card_alias}.is_rent_negotiable",
                     negotiable_values,
                 )
         if product_ids is not None:
@@ -288,6 +330,41 @@ class GainrDatabaseRepository:
             ),
         }.get(sort_order, "sr.updated_at DESC, sr.id DESC")
         offset = (page - 1) * page_size
+
+        if self.serves_cards_from_search_ready:
+            rows: list[dict] = []
+            total = 0
+            with self.connection() as connection, connection.cursor() as cursor:
+                cursor.execute(
+                    f"""
+                    SELECT sr.*,
+                           sr.city_name AS __city_name,
+                           sr.locality_name AS __locality_name,
+                           COUNT(*) OVER () AS __eligible_total
+                    FROM {self.search_table} AS sr
+                    WHERE {where_clause}
+                    ORDER BY {order}
+                    LIMIT %s OFFSET %s
+                    """,
+                    (*params, page_size, offset),
+                )
+                rows = list(cursor.fetchall())
+                if rows:
+                    total = int(rows[0].pop("__eligible_total", 0) or 0)
+                    for row in rows[1:]:
+                        row.pop("__eligible_total", None)
+                elif offset:
+                    cursor.execute(
+                        f"""
+                        SELECT COUNT(*) AS total
+                        FROM {self.search_table} AS sr
+                        WHERE {where_clause}
+                        """,
+                        params,
+                    )
+                    total = int(cursor.fetchone()["total"])
+            self._attach_search_ready_relations(rows)
+            return rows, total
 
         def fetch_total(connection) -> int:
             with connection.cursor() as cursor:
@@ -356,16 +433,28 @@ class GainrDatabaseRepository:
         )
         with self.connection() as connection:
             with connection.cursor() as cursor:
-                cursor.execute(
-                    f"""
-                    SELECT a.*, sr.city_name AS __city_name,
-                           sr.locality_name AS __locality_name
-                    FROM {self.search_table} AS sr
-                    JOIN {self.result_table} AS a ON a.id = sr.id
-                    WHERE {where_clause}
-                    """,
-                    params,
-                )
+                if self.serves_cards_from_search_ready:
+                    cursor.execute(
+                        f"""
+                        SELECT sr.*,
+                               sr.city_name AS __city_name,
+                               sr.locality_name AS __locality_name
+                        FROM {self.search_table} AS sr
+                        WHERE {where_clause}
+                        """,
+                        params,
+                    )
+                else:
+                    cursor.execute(
+                        f"""
+                        SELECT a.*, sr.city_name AS __city_name,
+                               sr.locality_name AS __locality_name
+                        FROM {self.search_table} AS sr
+                        JOIN {self.result_table} AS a ON a.id = sr.id
+                        WHERE {where_clause}
+                        """,
+                        params,
+                    )
                 rows = list(cursor.fetchall())
             rows_by_id = {str(row[self.config.result_id_column]): row for row in rows}
             ordered = [
@@ -373,10 +462,13 @@ class GainrDatabaseRepository:
                 for product_id in product_ids
                 if str(product_id) in rows_by_id
             ]
-            # Reuse the connection that just completed the main hydration.
-            # Opening relation work across three pooled remote connections can
-            # make a small read pay idle-socket validation or reconnect costs.
-            self._attach_attributes(ordered, connection=connection)
+            if self.serves_cards_from_search_ready:
+                self._attach_search_ready_relations(ordered)
+            else:
+                # Reuse the connection that just completed the main hydration.
+                # Opening relation work across three pooled remote connections can
+                # make a small read pay idle-socket validation or reconnect costs.
+                self._attach_attributes(ordered, connection=connection)
         return ordered
 
     def hydrate_ranked_page(
@@ -400,6 +492,14 @@ class GainrDatabaseRepository:
             allowed_ad_types=allowed_ad_types,
         )
         offset = (page - 1) * page_size
+        if self.serves_cards_from_search_ready:
+            return self._hydrate_ranked_search_ready_page(
+                ranked_ids,
+                where_clause,
+                where_params,
+                offset=offset,
+                page_size=page_size,
+            )
         hydration_started = time.perf_counter()
         checkout_started = hydration_started
         parallel_relations = (
@@ -485,12 +585,102 @@ class GainrDatabaseRepository:
         )
         return rows, total
 
+    def _hydrate_ranked_search_ready_page(
+        self,
+        ranked_ids: list[Any],
+        where_clause: str,
+        where_params: list[Any],
+        *,
+        offset: int,
+        page_size: int,
+    ) -> tuple[list[dict], int]:
+        started = time.perf_counter()
+        rank_placeholders = ", ".join("%s" for _ in ranked_ids)
+        rows: list[dict] = []
+        total = 0
+        with self.connection() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                f"""
+                SELECT sr.*,
+                       sr.city_name AS __city_name,
+                       sr.locality_name AS __locality_name,
+                       COUNT(*) OVER () AS __eligible_total,
+                       FIELD(sr.id, {rank_placeholders}) AS __rank_order
+                FROM {self.search_table} AS sr
+                WHERE {where_clause}
+                ORDER BY __rank_order
+                LIMIT %s OFFSET %s
+                """,
+                (*ranked_ids, *where_params, page_size, offset),
+            )
+            rows = list(cursor.fetchall())
+            if rows:
+                total = int(rows[0].get("__eligible_total") or 0)
+                for row in rows:
+                    row.pop("__eligible_total", None)
+                    row.pop("__rank_order", None)
+            elif offset:
+                cursor.execute(
+                    f"""
+                    SELECT COUNT(*) AS total
+                    FROM {self.search_table} AS sr
+                    WHERE {where_clause}
+                    """,
+                    where_params,
+                )
+                total = int(cursor.fetchone()["total"])
+        self._attach_search_ready_relations(rows)
+        logger.info(
+            "Gainr search-ready hydration rows=%s total_ms=%s",
+            len(rows),
+            round((time.perf_counter() - started) * 1000),
+        )
+        return rows, total
+
+    @staticmethod
+    def _json_list(value: Any) -> list[dict]:
+        if isinstance(value, list):
+            return [dict(item) for item in value if isinstance(item, dict)]
+        if not isinstance(value, str) or not value.strip():
+            return []
+        try:
+            parsed = json.loads(value)
+        except (TypeError, ValueError):
+            logger.warning("Gainr search-ready relation JSON is invalid")
+            return []
+        if not isinstance(parsed, list):
+            return []
+        return [dict(item) for item in parsed if isinstance(item, dict)]
+
+    def _attach_search_ready_relations(self, rows: list[dict]) -> None:
+        for row in rows:
+            row["__ads_attributes"] = self._json_list(
+                row.pop("ads_attributes_json", None)
+            )
+            user_id = row.get("user_id")
+            if user_id in (None, ""):
+                row["__user"] = None
+                continue
+            row["__user"] = {
+                "id": user_id,
+                "prosper_id": row.pop("user_prosper_id", None),
+                "name": row.pop("user_name", None),
+                "photo": row.pop("user_photo", None),
+                "is_aadhaar_gst_verified": row.pop(
+                    "user_is_aadhaar_gst_verified",
+                    None,
+                ),
+            }
+
     def _attach_attributes(
         self,
         rows: list[dict],
         *,
         connection=None,
     ) -> dict[str, int]:
+        if self.serves_cards_from_search_ready:
+            self._attach_search_ready_relations(rows)
+            return {}
         product_ids = [
             row.get(self.config.result_id_column)
             for row in rows
