@@ -1046,7 +1046,14 @@ def test_gainr_repository_applies_legacy_category_and_attribute_filters(tmp_path
     assert "sr.category_type = %s" in where_clause
     assert where_clause.count("JSON_CONTAINS") == 2
     assert "a." not in where_clause
-    assert params == [4, 313, 1, "4897", '"automatic"', "1"]
+    assert params == [
+        4,
+        313,
+        1,
+        '{"value": 4897}',
+        '{"value": "automatic"}',
+        "1",
+    ]
 
 
 def test_gainr_wanted_budget_keeps_rows_without_a_published_budget(tmp_path):
