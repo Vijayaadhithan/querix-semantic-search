@@ -97,6 +97,46 @@ _FUNCTIONAL_VEHICLE_KEYWORDS = (
     "distance",
     "travel",
 )
+_TAMIL_LOAD_PATTERN = re.compile(r"[\u0b80-\u0bff].*(?:லாடு|லோடு|லாட்|லோட்)")
+_CARGO_INTENT_TERMS = {
+    "cargo",
+    "freight",
+    "goods",
+    "load",
+    "loading",
+    "move",
+    "moving",
+    "transport",
+}
+_CARGO_VEHICLE_TERMS = {
+    "cargo vehicle",
+    "goods auto",
+    "goods carrier",
+    "goods vehicle",
+    "lcv",
+    "load auto",
+    "mini truck",
+    "pickup",
+    "pickup truck",
+    "tata ace",
+    "tempo",
+    "truck",
+}
+_PASSENGER_VEHICLE_TERMS = {
+    "acting driver",
+    "bike",
+    "bus",
+    "cab",
+    "car",
+    "chauffeur",
+    "driver",
+    "passenger",
+    "scooter",
+    "taxi",
+    "tourist",
+    "tourister",
+    "traveller",
+}
 _MASSAGE_EQUIPMENT_TERMS = {
     "chair",
     "device",
@@ -253,6 +293,15 @@ def _vehicle_travel_intent(query_plan: dict | None) -> bool:
     )
 
 
+def _cargo_transport_intent(query_plan: dict | None) -> bool:
+    if not isinstance(query_plan, dict):
+        return False
+    query_text = " ".join(
+        str(query_plan.get(key) or "") for key in ("semantic_query", "keyword_query")
+    )
+    return bool(_tokens(query_text) & _CARGO_INTENT_TERMS)
+
+
 def _candidate_text(candidate: dict) -> str:
     metadata = candidate.get("metadata") or {}
     parts = [str(candidate.get("text") or "")]
@@ -272,7 +321,11 @@ def _candidate_text(candidate: dict) -> str:
 class GainrSearchPolicy:
     """Gainr marketplace interpretation without coupling it to the engine."""
 
-    cache_key = "gainr-marketplace-v4"
+    cache_key = "gainr-marketplace-v5"
+
+    @staticmethod
+    def _is_tamil_load_transport_request(query: str) -> bool:
+        return bool(_TAMIL_LOAD_PATTERN.search(query))
 
     @staticmethod
     def _is_vehicle_travel_request(query: str) -> bool:
@@ -290,6 +343,8 @@ class GainrSearchPolicy:
         )
 
     def rewrite_semantic_query(self, query: str, semantic_query: str) -> str:
+        if self._is_tamil_load_transport_request(query):
+            return "goods load transport truck mini truck cargo vehicle"
         if not self._is_vehicle_travel_request(query):
             return semantic_query
         context = (
@@ -301,6 +356,8 @@ class GainrSearchPolicy:
         return f"{semantic_query} {context}".strip()
 
     def rewrite_keyword_query(self, query: str, keyword_query: str) -> str:
+        if self._is_tamil_load_transport_request(query):
+            return "goods load transport truck mini truck cargo vehicle tata ace"
         normalized = normalize_filter_value(query)
         rough_terrain = re.search(r"\brough\s+terrain\b", normalized) or re.search(
             r"\boff[\s-]?road\b", normalized
@@ -427,7 +484,8 @@ class GainrSearchPolicy:
         query_plan: dict,
         candidates: list[dict],
     ) -> list[dict]:
-        if not _vehicle_travel_intent(query_plan):
+        cargo_transport = _cargo_transport_intent(query_plan)
+        if not cargo_transport and not _vehicle_travel_intent(query_plan):
             return candidates
         adjusted = []
         for candidate in candidates:
@@ -435,6 +493,21 @@ class GainrSearchPolicy:
             text = _candidate_text(item).casefold()
             metadata = item.get("metadata") or {}
             score = float(item.get("fusion_score") or 0.0)
+            if cargo_transport:
+                is_cargo_vehicle = contains_phrase(text, _CARGO_VEHICLE_TERMS)
+                is_passenger_vehicle = contains_phrase(
+                    text,
+                    _PASSENGER_VEHICLE_TERMS,
+                )
+                if is_cargo_vehicle:
+                    score += 0.12
+                if is_passenger_vehicle and not is_cargo_vehicle:
+                    score -= 0.10
+                if not is_cargo_vehicle and not is_passenger_vehicle:
+                    score -= 0.04
+                item["fusion_score"] = score
+                adjusted.append(item)
+                continue
             is_automobile = (
                 str(metadata.get("main_category_name") or "").casefold()
                 == "automobiles"
@@ -460,6 +533,15 @@ class GainrSearchPolicy:
         )
 
     def rerank_context(self, query_plan: dict | None) -> str | None:
+        if _cargo_transport_intent(query_plan):
+            return (
+                "Tenant domain intent: the user needs goods/load transport. "
+                "Prefer cargo vehicles, goods carriers, load autos, Tata Ace, "
+                "mini trucks, pickup trucks, LCVs, tempos, and trucks. Passenger "
+                "cars, cabs, taxis, bikes, tourist vehicles, and acting-driver-only "
+                "listings are irrelevant unless the listing is explicitly suitable "
+                "for carrying goods."
+            )
         if not _vehicle_travel_intent(query_plan):
             return None
         return (

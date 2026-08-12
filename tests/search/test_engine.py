@@ -1831,6 +1831,59 @@ def test_gainr_vehicle_travel_intent_demotes_vehicle_services():
     ]
 
 
+def test_gainr_tamil_load_queries_are_rewritten_as_goods_transport():
+    policy = GainrSearchPolicy()
+    queries = (
+        "சன்னை டு சலம் பாஸ்ட் லாடு இருந்தால் அழைக்கவும்",
+        "சன்னையில் இருந்து சலத்துக்கு லாடு இருந்தால் அழைக்கவும்",
+    )
+
+    for query in queries:
+        assert policy.rewrite_semantic_query(query, "passenger car") == (
+            "goods load transport truck mini truck cargo vehicle"
+        )
+        assert policy.rewrite_keyword_query(query, "car driver") == (
+            "goods load transport truck mini truck cargo vehicle tata ace"
+        )
+
+
+def test_gainr_goods_transport_prefers_cargo_over_passenger_vehicles():
+    query_plan = {
+        "semantic_query": "goods load transport truck mini truck cargo vehicle",
+        "keyword_query": "goods load transport truck mini truck cargo vehicle tata ace",
+    }
+    candidates = [
+        {
+            "id": "car",
+            "text": "Nissan Sunny Car for Daily Rent",
+            "metadata": {"main_category_name": "Automobiles"},
+            "fusion_score": 0.10,
+        },
+        {
+            "id": "driver",
+            "text": "Light Motor Vehicle Acting Driver for Daily Hire",
+            "metadata": {"main_category_name": "Automobiles"},
+            "fusion_score": 0.09,
+        },
+        {
+            "id": "truck",
+            "text": "Tata Ace Mini Truck for Daily Rent",
+            "metadata": {"main_category_name": "Automobiles"},
+            "fusion_score": 0.04,
+        },
+    ]
+
+    policy = GainrSearchPolicy()
+    adjusted = policy.adjust_candidates(query_plan, candidates)
+
+    assert [candidate["id"] for candidate in adjusted] == [
+        "truck",
+        "car",
+        "driver",
+    ]
+    assert "goods/load transport" in policy.rerank_context(query_plan)
+
+
 def test_gainr_vehicle_phrases_require_word_boundaries():
     assert contains_phrase("car for rent", {"car"})
     assert not contains_phrase("carpet cleaning", {"car"})
