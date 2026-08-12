@@ -321,9 +321,7 @@ def test_deployed_gainr_filter_payload_is_accepted_and_mapped(tmp_path):
         "locality_id": [156307],
         "rental_duration": ["Per Day"],
     }
-    assert search_kwargs["planned_result"]["query_plan"]["sort_order"] == (
-        "price_asc"
-    )
+    assert search_kwargs["planned_result"]["query_plan"]["sort_order"] == ("price_asc")
     assert repository.ranked_page_call is not None
     assert response["status"] is True
 

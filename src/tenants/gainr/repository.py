@@ -252,12 +252,8 @@ class GainrDatabaseRepository:
         if request_filter.attribute_value:
             attribute_conditions = []
             for value in request_filter.attribute_value:
-                attribute_conditions.append(
-                    "JSON_CONTAINS(sr.ads_attributes_json, %s)"
-                )
-                params.append(
-                    json.dumps({"value": value}, ensure_ascii=False)
-                )
+                attribute_conditions.append("JSON_CONTAINS(sr.ads_attributes_json, %s)")
+                params.append(json.dumps({"value": value}, ensure_ascii=False))
             conditions.append(f"({' OR '.join(attribute_conditions)})")
         minimum = resolved_filters.get("min_rental_fee")
         maximum = resolved_filters.get("max_rental_fee")
