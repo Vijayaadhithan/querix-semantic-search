@@ -143,6 +143,11 @@ class GainrSearchFilter(BaseModel):
     def validate_fee_types(cls, values: list[int]) -> list[int]:
         return _unique(values)
 
+    @field_validator("min_fee", "max_fee", mode="before")
+    @classmethod
+    def normalize_optional_fee(cls, value):
+        return None if value in (None, "") else value
+
     @field_validator("attribute_value", mode="before")
     @classmethod
     def normalize_attribute_values(cls, values):
