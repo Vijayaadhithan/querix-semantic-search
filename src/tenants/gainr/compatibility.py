@@ -453,7 +453,7 @@ class GainrCompatibilityService:
                 len(result.get("product_ids", []))
                 >= self.product_search_service.max_results
             )
-            route = "semantic"
+            route = execution_path
             usage_started = time.perf_counter()
             usage = self.product_search_service._record_usage(result)
             usage_ms = (time.perf_counter() - usage_started) * 1000
@@ -484,7 +484,9 @@ class GainrCompatibilityService:
                 "explicit_filters": request.filter.model_dump(),
                 "effective_filters": effective,
                 "total_results": total,
-                "result_window_limited": (route == "semantic" and window_limited),
+                "result_window_limited": (
+                    route in {"semantic", "direct_semantic"} and window_limited
+                ),
                 "usage": usage,
             }
         recent_started = time.perf_counter()
