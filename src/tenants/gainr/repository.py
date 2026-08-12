@@ -238,6 +238,25 @@ class GainrDatabaseRepository:
                     expression,
                     value,
                 )
+        category_type = request_filter.category_type
+        if category_type not in ("", None):
+            if category_type in (1, 2):
+                self._append_condition(
+                    conditions,
+                    params,
+                    "sr.category_type",
+                    category_type,
+                )
+            elif category_type == 3:
+                conditions.append("sr.boost_ad_count > 0")
+        if request_filter.attribute_value:
+            attribute_conditions = []
+            for value in request_filter.attribute_value:
+                attribute_conditions.append(
+                    "JSON_CONTAINS(sr.ads_attributes_json, %s, '$[*].value')"
+                )
+                params.append(json.dumps(value, ensure_ascii=False))
+            conditions.append(f"({' OR '.join(attribute_conditions)})")
         minimum = resolved_filters.get("min_rental_fee")
         maximum = resolved_filters.get("max_rental_fee")
         if minimum is not None or maximum is not None:

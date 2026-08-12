@@ -271,8 +271,10 @@ compatibility:
   recent_ttl_seconds: 7776000
   # Change only these two values if the production Network request uses
   # different price-range keys.
-  min_fee_field: min_fee
-  max_fee_field: max_fee
+  # Gainr's deployed clients use fee_min/fee_max. The adapter also accepts the
+  # canonical min_fee/max_fee names used by direct API callers.
+  min_fee_field: fee_min
+  max_fee_field: fee_max
   # Gainr UI contract: 1 = Fixed and 0 = Negotiable. These are translated to
   # ads.is_rent_negotiable values 0 and 1 respectively.
   fixed_fee_id: 1

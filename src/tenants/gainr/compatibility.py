@@ -229,6 +229,13 @@ class GainrCompatibilityService:
                 "city_id",
             ),
             (
+                explicit.category_id
+                if explicit.category_id not in ("", None)
+                else None,
+                ("main_category_name", "subcategory_name"),
+                "main_category_id",
+            ),
+            (
                 explicit.subcategory_id
                 if explicit.subcategory_id not in ("", None)
                 else None,
@@ -314,6 +321,12 @@ class GainrCompatibilityService:
             else None
         )
         planned, effective, meta = self._effective_plan(request)
+        explicit_sort_order = {
+            1: "price_asc",
+            2: "price_desc",
+        }.get(request.filter.sort_by)
+        if explicit_sort_order is not None:
+            planned["query_plan"]["sort_order"] = explicit_sort_order
         planning_ms = (time.perf_counter() - planning_started) * 1000
         page_size = self.profile.compatibility.page_size
         execution_path = planned["query_plan"].get(
@@ -332,6 +345,7 @@ class GainrCompatibilityService:
             or effective.get("min_rental_fee") is not None
             or effective.get("max_rental_fee") is not None
             or request.filter.fee
+            or request.filter.attribute_value
         )
         if execution_path == "deterministic_filter":
             if speculative_embedding_future is not None:

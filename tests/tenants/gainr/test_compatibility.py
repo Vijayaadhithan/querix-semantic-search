@@ -281,6 +281,84 @@ def test_explicit_filters_override_only_matching_auto_filters(tmp_path):
     }
 
 
+def test_deployed_gainr_filter_payload_is_accepted_and_mapped(tmp_path):
+    adapter, engine, repository = service(tmp_path)
+    request = adapter.parse_filter_result(
+        {
+            "searchTerm": "comfortable car for long travel",
+            "filter": {
+                "category_id": "4",
+                "subcategory_id": "313",
+                "category_type": "1",
+                "city_id": 129,
+                "attribute_value": ["4897", 5133],
+                "rental_duration": ["Per Day"],
+                "ad_type": [1],
+                "fee": [1],
+                "fee_max": "5000",
+                "fee_min": "500",
+                "locality_id": [156307],
+                "sort_by": "1",
+            },
+            "page": 2,
+        }
+    )
+
+    response = adapter.filter_results(request)
+
+    assert request.filter.category_id == 4
+    assert request.filter.subcategory_id == 313
+    assert request.filter.category_type == 1
+    assert request.filter.attribute_value == [4897, 5133]
+    assert request.filter.min_fee == 500
+    assert request.filter.max_fee == 5000
+    assert request.filter.sort_by == 1
+    search_kwargs = engine.calls[0][2]
+    assert search_kwargs["resolved_filters"]["categorical"] == {
+        "main_category_id": 4,
+        "subcategory_id": 313,
+        "city_id": 129,
+        "locality_id": [156307],
+        "rental_duration": ["Per Day"],
+    }
+    assert search_kwargs["planned_result"]["query_plan"]["sort_order"] == (
+        "price_asc"
+    )
+    assert repository.ranked_page_call is not None
+    assert response["status"] is True
+
+
+def test_deployed_gainr_empty_legacy_filter_fields_do_not_fail(tmp_path):
+    adapter, _, _ = service(tmp_path, execution_path="deterministic_filter")
+
+    request = adapter.parse_filter_result(
+        {
+            "searchTerm": "",
+            "filter": {
+                "category_id": "",
+                "subcategory_id": "",
+                "category_type": "",
+                "city_id": 129,
+                "attribute_value": [],
+                "rental_duration": [],
+                "ad_type": [],
+                "fee": [],
+                "fee_max": "",
+                "fee_min": "",
+                "locality_id": [],
+                "sort_by": "",
+            },
+            "page": 2,
+        }
+    )
+
+    response = adapter.filter_results(request)
+
+    assert response["current_page"] == 2
+    assert response["last_page"] == 3
+    assert len(response["data"]) == 1
+
+
 def test_filter_result_capacity_bounds_planning_and_hydration(tmp_path):
     adapter, engine, _repository = service(tmp_path)
     adapter.product_search_service._search_slots = threading.BoundedSemaphore(1)
@@ -944,6 +1022,31 @@ def test_gainr_repository_does_not_filter_ad_status(tmp_path):
     assert "a.status" not in where_clause
     assert "`sr`.`is_search_active` = 1" in where_clause
     assert params == ["1"]
+
+
+def test_gainr_repository_applies_legacy_category_and_attribute_filters(tmp_path):
+    repository = GainrDatabaseRepository(
+        profile(tmp_path, serves_cards_from_search_ready=True)
+    )
+    request_filter = GainrSearchFilter.model_validate(
+        {
+            "category_type": 1,
+            "attribute_value": [4897, "automatic"],
+        }
+    )
+
+    where_clause, params = repository._where_clause(
+        {"categorical": {"main_category_id": 4, "subcategory_id": 313}},
+        request_filter,
+        allowed_ad_types={"1"},
+    )
+
+    assert "sr.main_category_id = %s" in where_clause
+    assert "sr.subcategory_id = %s" in where_clause
+    assert "sr.category_type = %s" in where_clause
+    assert where_clause.count("JSON_CONTAINS") == 2
+    assert "a." not in where_clause
+    assert params == [4, 313, 1, "4897", '"automatic"', "1"]
 
 
 def test_gainr_wanted_budget_keeps_rows_without_a_published_budget(tmp_path):

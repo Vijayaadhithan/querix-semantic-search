@@ -1,6 +1,7 @@
 from typing import Any
 
 from pydantic import (
+    AliasChoices,
     BaseModel,
     ConfigDict,
     Field,
@@ -72,17 +73,37 @@ class GainrSearchFilter(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     city_id: int | None = Field(default=None, gt=0)
+    # These names are part of Gainr's existing web/mobile request contract.
+    # They deliberately remain confined to the Gainr compatibility adapter.
+    category_id: int | str | None = ""
     subcategory_id: int | str | None = ""
+    category_type: int | str | None = ""
     locality_id: list[int] = Field(default_factory=list)
     rental_duration: list[str] = Field(default_factory=list)
     ad_type: list[int] = Field(default_factory=list)
     fee: list[int] = Field(default_factory=list)
-    min_fee: float | None = Field(default=None, ge=0)
-    max_fee: float | None = Field(default=None, ge=0)
+    attribute_value: list[int | str] = Field(default_factory=list)
+    sort_by: int | str | None = ""
+    min_fee: float | None = Field(
+        default=None,
+        ge=0,
+        validation_alias=AliasChoices("min_fee", "fee_min"),
+    )
+    max_fee: float | None = Field(
+        default=None,
+        ge=0,
+        validation_alias=AliasChoices("max_fee", "fee_max"),
+    )
 
-    @field_validator("subcategory_id", mode="before")
+    @field_validator(
+        "category_id",
+        "subcategory_id",
+        "category_type",
+        "sort_by",
+        mode="before",
+    )
     @classmethod
-    def normalize_subcategory(cls, value):
+    def normalize_optional_numeric_id(cls, value):
         if value in (None, ""):
             return ""
         if isinstance(value, str):
@@ -91,7 +112,7 @@ class GainrSearchFilter(BaseModel):
                 return ""
             if value.isdigit():
                 return int(value)
-            raise ValueError("subcategory_id must be a numeric ID or an empty string")
+            raise ValueError("filter IDs must be numeric or an empty string")
         return value
 
     @field_validator("locality_id")
@@ -121,6 +142,24 @@ class GainrSearchFilter(BaseModel):
     @classmethod
     def validate_fee_types(cls, values: list[int]) -> list[int]:
         return _unique(values)
+
+    @field_validator("attribute_value", mode="before")
+    @classmethod
+    def normalize_attribute_values(cls, values):
+        if values in (None, ""):
+            return []
+        if not isinstance(values, list):
+            raise ValueError("attribute_value must be a list")
+        normalized = []
+        for value in values:
+            if isinstance(value, str):
+                value = value.strip()
+                if not value:
+                    continue
+                if value.isdigit():
+                    value = int(value)
+            normalized.append(value)
+        return _unique(normalized)
 
     @model_validator(mode="after")
     def validate_fee_range(self):
