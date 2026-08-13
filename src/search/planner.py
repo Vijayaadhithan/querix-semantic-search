@@ -94,9 +94,7 @@ _WANTED_INTENT_PATTERNS = (
         r"(?:have|own|offer|provide|supply|rent(?:ing)?\s+out|"
         r"leas(?:e|ing)\s+out)\b"
     ),
-    re.compile(
-        r"\b(?:rent|lease)\s+out\b"
-    ),
+    re.compile(r"\b(?:rent|lease)\s+out\b"),
     re.compile(
         r"\b(?:suppliers?|providers?|owners?|vendors?|sellers?|landlords?|"
         r"freelancers?)\b(?:\s+[a-z0-9'-]+){0,4}\s+"
