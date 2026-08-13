@@ -84,6 +84,46 @@ _WANTED_INTENT_PATTERNS = (
         r"\b(?:looking|searching)\s+for\s+"
         r"(?:people|persons?|buyers?|renters?|customers?|clients?)\b"
     ),
+    re.compile(
+        r"\bwho\s+(?:need(?:s|ed|ing)?|want(?:s|ed|ing)?|"
+        r"requir(?:e|es|ed|ing)|seek(?:s|ing)?)\b"
+    ),
+    re.compile(
+        r"\b(?:i|we)\s+(?:(?:currently|already|can|could|want\s+to|"
+        r"need\s+to|am|are)\s+){0,3}"
+        r"(?:have|own|offer|provide|supply|rent(?:ing)?\s+out|"
+        r"leas(?:e|ing)\s+out)\b"
+    ),
+    re.compile(
+        r"\b(?:rent|lease)\s+out\b"
+    ),
+    re.compile(
+        r"\b(?:suppliers?|providers?|owners?|vendors?|sellers?|landlords?|"
+        r"freelancers?)\b(?:\s+[a-z0-9'-]+){0,4}\s+"
+        r"(?:looking|searching)\s+for\s+"
+        r"(?:work|jobs?|buyers?|renters?|customers?|clients?|leads?)\b"
+    ),
+)
+_OFFER_INTENT_PATTERNS = (
+    re.compile(r"\b(?:offer|available)\s+(?:ads?|listings?)\b"),
+    re.compile(r"\b(?:ads?|listings?)\s+(?:offered|available)\b"),
+    re.compile(
+        r"\b(?:i|we)\b(?:\s+[a-z0-9'-]+){0,4}\s+"
+        rf"{_MARKETPLACE_DEMAND_PATTERN}\b"
+    ),
+    re.compile(
+        r"^\s*(?:need|want|require|seek|looking\s+for|searching\s+for|"
+        r"find\s+me|show\s+me|get\s+me)\b"
+    ),
+    re.compile(r"\b(?:do|can|could)\s+you\s+(?:have|find|show|provide)\b"),
+    re.compile(r"\b(?:for|available\s+for)\s+(?:rent|hire)\b"),
+)
+_AD_INTENT_SIGNAL_PATTERN = re.compile(
+    r"\b(?:wanted|requests?|requirements?|need(?:s|ed|ing)?|"
+    r"want(?:s|ed|ing)?|requir(?:e|es|ed|ing)|seek(?:s|ing)?|"
+    r"looking|searching|interested|have|own|offer|provide|supply|"
+    r"buyers?|renters?|customers?|clients?|suppliers?|providers?|"
+    r"owners?|vendors?|sellers?|landlords?|freelancers?)\b"
 )
 _NATURAL_REQUEST_PATTERN = re.compile(
     r"\b(?:i|im|we|me|my|our|us|you|your|please|people|persons?|someone|"
@@ -114,18 +154,31 @@ __all__ = (
 )
 
 
-def infer_target_ad_type(query: str) -> str:
+def _target_ad_type_inference(query: str) -> tuple[str, bool]:
+    """Return the ad perspective and whether local evidence is decisive.
+
+    A decisive result may safely bypass the hosted planner or correct a model
+    hallucination. Ambiguous marketplace language keeps the conservative offer
+    fallback, but the hosted planner is allowed to make the final decision.
+    """
     normalized = normalize_filter_value(query)
     third_person_trailing_demand = bool(
         re.search(r"\b(?:wanted|requests?|requirements?)\s*$", normalized)
         and not re.search(r"\b(?:i|we|you)\b", normalized)
     )
-    return (
-        "wanted"
-        if third_person_trailing_demand
-        or any(pattern.search(normalized) for pattern in _WANTED_INTENT_PATTERNS)
-        else "offer"
-    )
+    if third_person_trailing_demand or any(
+        pattern.search(normalized) for pattern in _WANTED_INTENT_PATTERNS
+    ):
+        return "wanted", True
+    if any(pattern.search(normalized) for pattern in _OFFER_INTENT_PATTERNS):
+        return "offer", True
+    if _AD_INTENT_SIGNAL_PATTERN.search(normalized):
+        return "offer", False
+    return "offer", True
+
+
+def infer_target_ad_type(query: str) -> str:
+    return _target_ad_type_inference(query)[0]
 
 
 def _has_natural_marketplace_intent(query: str) -> bool:
@@ -391,10 +444,15 @@ def enrich_query_plan(
     plan["filters"] = filters
     plan["inferred_categories"] = inferred_categories
     plan["relaxed_categories"] = sorted(relaxed_categories)
-    # Keep the model field in the structured response, then validate it locally.
-    # This prevents an occasional model-side "wanted" hallucination from
-    # reversing an ordinary offer search.
-    plan["target_ad_type"] = infer_target_ad_type(query)
+    # Explicit local evidence corrects model hallucinations. When marketplace
+    # perspective is genuinely ambiguous, preserve the hosted planner's valid
+    # decision instead of silently forcing every such query to offer ads.
+    local_ad_type, local_ad_type_is_decisive = _target_ad_type_inference(query)
+    if local_ad_type_is_decisive or plan.get("target_ad_type") not in {
+        "offer",
+        "wanted",
+    }:
+        plan["target_ad_type"] = local_ad_type
     plan["sort_order"] = extract_sort_order(query)
     return plan
 
@@ -513,13 +571,17 @@ def direct_semantic_query_plan(
     normalized = normalize_filter_value(routing_query)
     tokens = re.findall(r"[^\W_]+", normalized)
     token_set = set(tokens)
-    target_ad_type = infer_target_ad_type(routing_query)
+    target_ad_type, target_ad_type_is_decisive = _target_ad_type_inference(
+        routing_query
+    )
     if not tokens:
         return None, "empty_query"
     if len(tokens) > DIRECT_SEMANTIC_MAX_TOKENS:
         return None, "too_many_tokens"
     if not query.isascii():
         return None, "non_ascii_language"
+    if not target_ad_type_is_decisive:
+        return None, "ambiguous_ad_type_intent"
     if any(token.isdigit() for token in tokens):
         return None, "numeric_constraint_or_model"
     if target_ad_type != "wanted" and token_set & {
@@ -669,9 +731,12 @@ def extract_query_plan(
         "and 'looking for a laptop' all target offer ads because the searcher wants an "
         "available item. 'Someone looking for bikes', 'people who need a car', and "
         "'find renters looking for a laptop' target wanted ads because the user is "
-        "searching for another person's request. Use target_ad_type=wanted only when "
-        "the user explicitly asks for wanted/request ads or for people who need an "
-        "item. Use null for every absent filter."
+        "searching for another person's request. A supplier perspective also targets "
+        "wanted ads: 'I have a bike to rent out', 'we provide catering', and 'a "
+        "plumber looking for clients' seek demand, not competing offer listings. Use "
+        "target_ad_type=wanted only when the user explicitly asks for wanted/request "
+        "ads, for people who need an item or service, or expresses that supplier "
+        "perspective. Use null for every absent filter."
     )
     if static_content is None:
         if prompt_context.strip():

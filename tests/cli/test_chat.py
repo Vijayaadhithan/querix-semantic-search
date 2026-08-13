@@ -899,6 +899,42 @@ def test_infer_target_ad_type_uses_searcher_perspective():
     assert infer_target_ad_type("require camera equipment") == "offer"
     assert infer_target_ad_type("I wanted to hire a photographer") == "offer"
     assert infer_target_ad_type("I really wanted") == "offer"
+    assert infer_target_ad_type("I have a bike to rent out") == "wanted"
+    assert infer_target_ad_type("we provide catering services") == "wanted"
+    assert infer_target_ad_type("plumber looking for clients") == "wanted"
+    assert infer_target_ad_type("who needs a bike") == "wanted"
+    assert infer_target_ad_type("show offer ads for bikes") == "offer"
+
+
+def test_enrich_query_plan_preserves_llm_ad_type_when_local_intent_is_ambiguous():
+    plan = {
+        "semantic_query": "local equipment supplier",
+        "keyword_query": "equipment supplier",
+        "target_ad_type": "wanted",
+        "filters": {
+            "main_category": None,
+            "subcategory": None,
+            "state": None,
+            "city": None,
+            "locality": None,
+            "rental_duration": None,
+            "min_rental_fee": None,
+            "max_rental_fee": None,
+        },
+        "fallback_reason": None,
+    }
+    value_index = {
+        "main_category": {},
+        "subcategory": {},
+        "state": {},
+        "city": {},
+        "locality": {},
+        "rental_duration": {},
+    }
+
+    enriched = enrich_query_plan("local equipment supplier", plan, value_index)
+
+    assert enriched["target_ad_type"] == "wanted"
 
 
 def test_extract_price_constraints_handles_range_and_minimum():
