@@ -197,6 +197,11 @@ def test_natural_offer_and_buyer_demand_use_direct_semantic(tmp_path):
         value_index,
         search_policy=policy,
     )
+    interested_demand, interested_reason = direct_semantic_query_plan(
+        "customers interested in bikes",
+        value_index,
+        search_policy=policy,
+    )
 
     assert offer_reason == "descriptive_marketplace_offer"
     assert personal_offer["execution_path"] == "direct_semantic"
@@ -208,7 +213,17 @@ def test_natural_offer_and_buyer_demand_use_direct_semantic(tmp_path):
     assert broad_reason == "buyer_demand_semantic"
     assert broad_demand["execution_path"] == "direct_semantic"
     assert broad_demand["target_ad_type"] == "wanted"
+    assert interested_reason == "buyer_demand_semantic"
+    assert interested_demand["execution_path"] == "direct_semantic"
+    assert interested_demand["target_ad_type"] == "wanted"
     index.close()
+
+
+def test_marketplace_interest_is_not_misread_as_location_language():
+    assert query_planner_catalog.location_phrases("customers interested in cars") == []
+    assert query_planner_catalog.location_phrases(
+        "customers interested in cars in Chennai"
+    ) == ["chennai"]
 
 
 def test_conversational_catalog_requests_never_use_deterministic_path(tmp_path):

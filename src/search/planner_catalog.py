@@ -657,6 +657,11 @@ def location_phrases(query: str) -> list[str]:
     for index, token in enumerate(tokens):
         if token not in LOCATION_PREPOSITIONS:
             continue
+        if token == "in" and index > 0 and tokens[index - 1] == "interested":
+            # "Interested in <item>" is a marketplace-demand complement, not
+            # a location clause. A later locative preposition is still parsed,
+            # e.g. "customers interested in cars in Chennai".
+            continue
         location_tokens = []
         for candidate in tokens[index + 1 : index + 5]:
             if candidate in LOCATION_STOP_WORDS:
