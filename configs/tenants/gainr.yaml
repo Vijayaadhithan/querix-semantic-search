@@ -9,6 +9,24 @@ planner:
   # Gainr-specific spelling variants are semantic rewrites only. They never
   # create hard category filters, and they do not affect another tenant.
   query_aliases:
+    # Reviewed romanized-Tamil marketplace terms. Keep this list curated from
+    # observed searches; importing raw search history would create ambiguous
+    # rewrites and leak one tenant's vocabulary into generic search behavior.
+    enaku veedu vadaiku venum: house home residential accommodation for rent
+    enaku veedu vadakaiku venum: house home residential accommodation for rent
+    enaku veedu vadagaiku venum: house home residential accommodation for rent
+    enakku veedu vadaiku venum: house home residential accommodation for rent
+    enakku veedu vadakaikku venum: house home residential accommodation for rent
+    enaky veedu vadaiku venum: house home residential accommodation for rent
+    enaky veedu vadakaiku venum: house home residential accommodation for rent
+    veedu vadaiku venum: house home residential accommodation for rent
+    veedu vadakaiku venum: house home residential accommodation for rent
+    veedu vadagaiku venum: house home residential accommodation for rent
+    josiyakar: astrologer astrology service
+    joshiyakar: astrologer astrology service
+    josiyar: astrologer astrology service
+    jothidakar: astrologer astrology service
+    jothidar: astrologer astrology service
     appartment: apartment
     bke: bike
     bkes: bike

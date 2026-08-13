@@ -145,6 +145,18 @@ _MASSAGE_EQUIPMENT_TERMS = {
     "machine",
     "massager",
 }
+_HOUSING_TERMS = {
+    "accommodation",
+    "apartment",
+    "bungalow",
+    "flat",
+    "home",
+    "house",
+    "residential",
+    "room",
+    "villa",
+}
+_HOUSING_RENT_TERMS = {"hire", "lease", "rent", "rental"}
 _SERVICE_WRAPPER_TERMS = {"anyone", "can", "somebody", "someone", "who"}
 _ACADEMIC_SUBJECT_TEACHER_PATTERN = re.compile(
     r"\b(?:account(?:ancy|ing)|biology|chemistry|computer\s+science|economics|"
@@ -152,6 +164,14 @@ _ACADEMIC_SUBJECT_TEACHER_PATTERN = re.compile(
     r"(?:teacher|tutor)\b"
 )
 _CATEGORY_INTENT_RULES = (
+    (
+        ("astrologer",),
+        (
+            re.compile(
+                r"\b(?:astrologer|astrology|horoscope\s+(?:reader|service))\b"
+            ),
+        ),
+    ),
     (
         ("massage therapist", "freelancer massage therapist"),
         (
@@ -321,7 +341,7 @@ def _candidate_text(candidate: dict) -> str:
 class GainrSearchPolicy:
     """Gainr marketplace interpretation without coupling it to the engine."""
 
-    cache_key = "gainr-marketplace-v5"
+    cache_key = "gainr-marketplace-v6"
 
     @staticmethod
     def _is_tamil_load_transport_request(query: str) -> bool:
@@ -342,9 +362,24 @@ class GainrSearchPolicy:
             )
         )
 
+    @staticmethod
+    def _is_housing_rental_request(query: str) -> bool:
+        tokens = _tokens(normalize_filter_value(query))
+        return bool(tokens & _HOUSING_TERMS) and bool(
+            tokens & _HOUSING_RENT_TERMS
+        )
+
     def rewrite_semantic_query(self, query: str, semantic_query: str) -> str:
         if self._is_tamil_load_transport_request(query):
             return "goods load transport truck mini truck cargo vehicle"
+        if self._is_housing_rental_request(query):
+            context = (
+                "residential accommodation room flat apartment villa "
+                "guest house home stay for rent"
+            )
+            if context not in normalize_filter_value(semantic_query):
+                return f"{semantic_query} {context}".strip()
+            return semantic_query
         if not self._is_vehicle_travel_request(query):
             return semantic_query
         context = (
@@ -358,6 +393,11 @@ class GainrSearchPolicy:
     def rewrite_keyword_query(self, query: str, keyword_query: str) -> str:
         if self._is_tamil_load_transport_request(query):
             return "goods load transport truck mini truck cargo vehicle tata ace"
+        if self._is_housing_rental_request(query):
+            return (
+                "residential accommodation room flat apartment villa "
+                "guest house home stay rent"
+            )
         normalized = normalize_filter_value(query)
         rough_terrain = re.search(r"\brough\s+terrain\b", normalized) or re.search(
             r"\boff[\s-]?road\b", normalized
@@ -466,6 +506,8 @@ class GainrSearchPolicy:
         return None
 
     def infer_main_category(self, query: str, values: dict) -> str | None:
+        if self._is_housing_rental_request(query):
+            return values.get("accommodation & spaces")
         if not self._is_vehicle_travel_request(query):
             return None
         return values.get("automobiles")
@@ -541,6 +583,18 @@ class GainrSearchPolicy:
                 "cars, cabs, taxis, bikes, tourist vehicles, and acting-driver-only "
                 "listings are irrelevant unless the listing is explicitly suitable "
                 "for carrying goods."
+            )
+        query_text = " ".join(
+            str((query_plan or {}).get(key) or "")
+            for key in ("semantic_query", "keyword_query")
+        )
+        if self._is_housing_rental_request(query_text):
+            return (
+                "Tenant domain intent: the user needs residential accommodation "
+                "for rent. Prefer rooms, flats, service apartments, villas, guest "
+                "houses, home stays, bungalows, cottages, and farmhouses. Demote "
+                "event halls, commercial spaces, vehicles, equipment, and unrelated "
+                "services."
             )
         if not _vehicle_travel_intent(query_plan):
             return None

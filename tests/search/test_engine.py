@@ -438,6 +438,72 @@ def test_reviewed_category_typos_are_semantically_normalized():
     assert normalize_transliterated_query("bke in Chennai") == ("bke in Chennai")
 
 
+def test_gainr_reviewed_tamil_search_terms_use_semantic_normalization(tmp_path):
+    index = build_index(tmp_path / "gainr-tamil-aliases.sqlite3")
+    index.upsert(
+        [
+            product_row(
+                "room-coimbatore",
+                main_category_name="Accommodation & Spaces",
+                subcategory_name="Room",
+                state_name="Tamil Nadu",
+                city_name="Coimbatore",
+            ),
+            product_row(
+                "astrologer-coimbatore",
+                main_category_name="Pandits & Priests",
+                subcategory_name="Astrologer",
+                state_name="Tamil Nadu",
+                city_name="Coimbatore",
+            ),
+        ]
+    )
+    value_index = query_filter_value_index(index)
+    policy = GainrSearchPolicy()
+    housing_aliases = {
+        "enaku veedu vadaiku venum": (
+            "house home residential accommodation for rent"
+        )
+    }
+    astrology_aliases = {"josiyakar": "astrologer astrology service"}
+
+    housing, housing_reason = direct_semantic_query_plan(
+        "enaku veedu vadaiku venum",
+        value_index,
+        housing_aliases,
+        search_policy=policy,
+    )
+    astrology, astrology_reason = direct_semantic_query_plan(
+        "josiyakar",
+        value_index,
+        astrology_aliases,
+        search_policy=policy,
+    )
+
+    assert housing is None
+    assert housing_reason == "query_requires_normalization"
+    assert astrology is None
+    assert astrology_reason == "query_requires_normalization"
+    assert normalize_transliterated_query(
+        "enaku veedu vadaiku venum",
+        housing_aliases,
+    ) == "house home residential accommodation for rent"
+    astrology_intent = policy.category_intent(
+        normalize_transliterated_query("josiyakar", astrology_aliases),
+        value_index["subcategory"],
+    )
+    assert astrology_intent is not None
+    assert astrology_intent.subcategory == "Astrologer"
+    assert policy.infer_main_category(
+        normalize_transliterated_query(
+            "enaku veedu vadaiku venum",
+            housing_aliases,
+        ),
+        value_index["main_category"],
+    ) == "Accommodation & Spaces"
+    index.close()
+
+
 def test_query_aliases_are_scoped_to_the_engine_instance(tmp_path):
     index = build_index(tmp_path / "tenant-alias-plan.sqlite3")
     provider = CapturingQueryProvider()
