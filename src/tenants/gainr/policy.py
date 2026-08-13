@@ -166,11 +166,7 @@ _ACADEMIC_SUBJECT_TEACHER_PATTERN = re.compile(
 _CATEGORY_INTENT_RULES = (
     (
         ("astrologer",),
-        (
-            re.compile(
-                r"\b(?:astrologer|astrology|horoscope\s+(?:reader|service))\b"
-            ),
-        ),
+        (re.compile(r"\b(?:astrologer|astrology|horoscope\s+(?:reader|service))\b"),),
     ),
     (
         ("massage therapist", "freelancer massage therapist"),
@@ -365,9 +361,7 @@ class GainrSearchPolicy:
     @staticmethod
     def _is_housing_rental_request(query: str) -> bool:
         tokens = _tokens(normalize_filter_value(query))
-        return bool(tokens & _HOUSING_TERMS) and bool(
-            tokens & _HOUSING_RENT_TERMS
-        )
+        return bool(tokens & _HOUSING_TERMS) and bool(tokens & _HOUSING_RENT_TERMS)
 
     def rewrite_semantic_query(self, query: str, semantic_query: str) -> str:
         if self._is_tamil_load_transport_request(query):
