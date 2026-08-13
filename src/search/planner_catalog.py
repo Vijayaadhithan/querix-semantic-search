@@ -150,7 +150,7 @@ def is_explicit_category_request(query: str, value: str) -> bool:
     article = r"(?:a|an|the|some)?\s*"
     request = (
         r"(?:need|want|require|rent|hire|find|show\s+me|"
-        r"looking\s+for|searching\s+for)"
+        r"looking\s+for|searching\s+for|interested\s+in)"
     )
     patterns = (
         rf"^{article}{term}(?!\w)",

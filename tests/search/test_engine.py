@@ -216,6 +216,7 @@ def test_natural_offer_and_buyer_demand_use_direct_semantic(tmp_path):
     assert interested_reason == "buyer_demand_semantic"
     assert interested_demand["execution_path"] == "direct_semantic"
     assert interested_demand["target_ad_type"] == "wanted"
+    assert interested_demand["filters"]["subcategory"] == "Bike"
     index.close()
 
 
