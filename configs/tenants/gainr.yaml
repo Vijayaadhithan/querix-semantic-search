@@ -6,8 +6,9 @@ company:
 
 planner:
   enabled: true
-  # Gainr-specific spelling variants are semantic rewrites only. They never
-  # create hard category filters, and they do not affect another tenant.
+  # Gainr-specific spelling and language variants are semantic rewrites only.
+  # They do not affect another tenant; normalized child categories remain soft
+  # unless the tenant policy explicitly provides a broader safety boundary.
   query_aliases:
     # Reviewed romanized-Tamil marketplace terms. Keep this list curated from
     # observed searches; importing raw search history would create ambiguous

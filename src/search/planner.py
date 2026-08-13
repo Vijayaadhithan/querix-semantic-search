@@ -221,14 +221,22 @@ def enrich_query_plan(
         != normalize_filter_value(category_intent.subcategory)
         and not category_intent.override_explicit_conflict
     ):
-        # High-confidence tenant phrases such as "body massage" or
-        # "repair leaking pipes" select a service provider, not similarly
-        # named equipment. Treat the tenant decision as a hard catalog
-        # boundary so vector retrieval and reranking cannot admit unrelated
-        # categories.
-        filters["subcategory"] = category_intent.subcategory
-        inferred_categories["subcategory"] = None
-        relaxed_categories.discard("subcategory")
+        if not query_was_normalized or category_intent.hard_filter_when_normalized:
+            # High-confidence phrases stated directly by the user, such as
+            # "body massage" or "repair leaking pipes", select a service
+            # provider rather than similarly named equipment.
+            filters["subcategory"] = category_intent.subcategory
+            inferred_categories["subcategory"] = None
+            relaxed_categories.discard("subcategory")
+        else:
+            # Translation and reviewed aliases establish intent without
+            # proving that one narrow catalogue child is exhaustive. Prefer
+            # the child, let the parent become the safety boundary below, and
+            # allow reranking to select close sibling categories when the
+            # exact child has little inventory.
+            filters["subcategory"] = None
+            inferred_categories["subcategory"] = category_intent.subcategory
+            relaxed_categories.add("subcategory")
 
     if not any(filters.get(key) for key in ("state", "city", "locality")):
         fuzzy_location = analysis.fuzzy_location(value_index)

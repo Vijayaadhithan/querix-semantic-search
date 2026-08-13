@@ -9,6 +9,12 @@ class CategoryIntent:
     subcategory: str
     consumed_tokens: frozenset[str]
     override_explicit_conflict: bool = False
+    # A translated or spelling-normalized phrase is model-assisted evidence,
+    # not the same as an explicit catalogue filter in the user's original
+    # wording. Keep its child category soft by default so close sibling
+    # categories can fill the page; original-language category intents remain
+    # hard boundaries.
+    hard_filter_when_normalized: bool = False
 
 
 class SearchPolicy(Protocol):

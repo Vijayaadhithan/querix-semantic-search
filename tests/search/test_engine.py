@@ -9,8 +9,10 @@ from search.bm25 import PersistentBM25Index
 from search.engine import ProductSearchEngine
 from search.planner import (
     QueryFilterCatalog,
+    default_query_plan,
     deterministic_filter_query_plan,
     direct_semantic_query_plan,
+    enrich_query_plan,
     extract_query_plan,
     extract_sort_order,
     normalize_transliterated_query,
@@ -456,6 +458,20 @@ def test_gainr_reviewed_tamil_search_terms_use_semantic_normalization(tmp_path):
                 state_name="Tamil Nadu",
                 city_name="Coimbatore",
             ),
+            product_row(
+                "maid-coimbatore",
+                main_category_name="Personal & Home Services",
+                subcategory_name="Maid",
+                state_name="Tamil Nadu",
+                city_name="Coimbatore",
+            ),
+            product_row(
+                "house-keeper-coimbatore",
+                main_category_name="Personal & Home Services",
+                subcategory_name="House Keeper",
+                state_name="Tamil Nadu",
+                city_name="Coimbatore",
+            ),
         ]
     )
     value_index = query_filter_value_index(index)
@@ -501,6 +517,17 @@ def test_gainr_reviewed_tamil_search_terms_use_semantic_normalization(tmp_path):
         ),
         value_index["main_category"],
     ) == "Accommodation & Spaces"
+
+    maid_plan = enrich_query_plan(
+        "veetu vela kaari",
+        default_query_plan("veetu vela kaari"),
+        value_index,
+        search_policy=policy,
+    )
+    assert maid_plan["filters"]["main_category"] == "Personal & Home Services"
+    assert maid_plan["filters"]["subcategory"] is None
+    assert maid_plan["inferred_categories"]["subcategory"] == "Maid"
+    assert "subcategory" in maid_plan["relaxed_categories"]
     index.close()
 
 
