@@ -337,7 +337,7 @@ def _candidate_text(candidate: dict) -> str:
 class GainrSearchPolicy:
     """Gainr marketplace interpretation without coupling it to the engine."""
 
-    cache_key = "gainr-marketplace-v7"
+    cache_key = "gainr-marketplace-v8"
 
     @staticmethod
     def _is_tamil_load_transport_request(query: str) -> bool:

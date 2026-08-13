@@ -496,8 +496,12 @@ def test_gainr_reviewed_tamil_search_terms_use_semantic_normalization(tmp_path):
 
     assert housing is None
     assert housing_reason == "query_requires_normalization"
-    assert astrology is None
-    assert astrology_reason == "query_requires_normalization"
+    assert astrology_reason == "reviewed_normalization_offer"
+    assert astrology["execution_path"] == "direct_semantic"
+    assert astrology["target_ad_type"] == "offer"
+    assert astrology["filters"]["main_category"] == "Pandits & Priests"
+    assert astrology["filters"]["subcategory"] is None
+    assert astrology["inferred_categories"]["subcategory"] == "Astrologer"
     assert (
         normalize_transliterated_query(
             "enaku veedu vadaiku venum",
@@ -532,6 +536,18 @@ def test_gainr_reviewed_tamil_search_terms_use_semantic_normalization(tmp_path):
     assert maid_plan["filters"]["subcategory"] is None
     assert maid_plan["inferred_categories"]["subcategory"] == "Maid"
     assert "subcategory" in maid_plan["relaxed_categories"]
+
+    maid, maid_reason = direct_semantic_query_plan(
+        "veetu vela kaari",
+        value_index,
+        search_policy=policy,
+    )
+    assert maid_reason == "reviewed_normalization_offer"
+    assert maid["execution_path"] == "direct_semantic"
+    assert maid["target_ad_type"] == "offer"
+    assert maid["filters"]["main_category"] == "Personal & Home Services"
+    assert maid["filters"]["subcategory"] is None
+    assert maid["inferred_categories"]["subcategory"] == "Maid"
     index.close()
 
 

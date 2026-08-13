@@ -473,7 +473,8 @@ def direct_semantic_query_plan(
         query_aliases,
         analysis_cache,
     )
-    normalized = normalize_filter_value(query)
+    routing_query = analysis.query if analysis.query_was_normalized else query
+    normalized = normalize_filter_value(routing_query)
     tokens = re.findall(r"[^\W_]+", normalized)
     token_set = set(tokens)
     if not tokens:
@@ -482,11 +483,9 @@ def direct_semantic_query_plan(
         return None, "too_many_tokens"
     if not query.isascii():
         return None, "non_ascii_language"
-    if analysis.query_was_normalized:
-        return None, "query_requires_normalization"
     if any(token.isdigit() for token in tokens):
         return None, "numeric_constraint_or_model"
-    if infer_target_ad_type(query) != "offer" or token_set & {
+    if infer_target_ad_type(routing_query) != "offer" or token_set & {
         "wanted",
         "request",
         "requests",
@@ -506,7 +505,7 @@ def direct_semantic_query_plan(
         value is not None for value in analysis.price_constraints
     ):
         return None, "price_or_duration_language"
-    if extract_sort_order(query) is not None:
+    if extract_sort_order(routing_query) is not None:
         return None, "sort_language"
     category_intent = search_policy.category_intent(
         analysis.query,
@@ -525,11 +524,17 @@ def direct_semantic_query_plan(
         )
         or category_intent is not None
     )
+    if analysis.query_was_normalized and category_intent is None:
+        # A reviewed alias may skip the hosted planner only when its normalized
+        # meaning resolves through a tenant-owned intent rule, which can set a
+        # safe parent boundary. Spelling-only and free-form multilingual
+        # language still need the planner for intent and filter extraction.
+        return None, "query_requires_normalization"
     if not descriptive_direct and not catalog_grounded:
         return None, "no_explicit_catalog_category"
     blocked_tokens = token_set & DIRECT_SEMANTIC_BLOCK_TOKENS
     complex_shape = any(
-        pattern.search(query) for pattern in DIRECT_SEMANTIC_COMPLEX_PATTERNS
+        pattern.search(routing_query) for pattern in DIRECT_SEMANTIC_COMPLEX_PATTERNS
     )
     if not descriptive_direct and blocked_tokens:
         return None, "complex_or_subjective_language"
@@ -552,12 +557,15 @@ def direct_semantic_query_plan(
     if non_category_filters or plan["target_ad_type"] != "offer":
         return None, "structured_intent_detected"
     plan["execution_path"] = "direct_semantic"
-    plan["route_reason"] = (
-        "descriptive_marketplace_offer"
-        if descriptive_direct
-        and (not catalog_grounded or blocked_tokens or complex_shape)
-        else "objective_catalog_phrase"
-    )
+    if analysis.query_was_normalized:
+        plan["route_reason"] = "reviewed_normalization_offer"
+    else:
+        plan["route_reason"] = (
+            "descriptive_marketplace_offer"
+            if descriptive_direct
+            and (not catalog_grounded or blocked_tokens or complex_shape)
+            else "objective_catalog_phrase"
+        )
     return plan, plan["route_reason"]
 
 
