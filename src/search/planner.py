@@ -93,6 +93,18 @@ def infer_target_ad_type(query: str) -> str:
     )
 
 
+def _has_natural_marketplace_intent(query: str) -> bool:
+    """Return whether a catalog phrase is expressed as a user/buyer action."""
+    normalized = normalize_filter_value(query)
+    return bool(
+        infer_target_ad_type(query) == "wanted"
+        or re.search(r"\b(?:looking|searching)\s+for\b", normalized)
+        or re.search(
+            r"\b(?:need|needs|want|wants|require|requires|required)\b", normalized
+        )
+    )
+
+
 def enrich_query_plan(
     query: str,
     plan: dict,
@@ -367,6 +379,11 @@ def deterministic_filter_query_plan(
         query,
         value_index,
     )
+    if _has_natural_marketplace_intent(corrected_query):
+        # Deterministic browsing is reserved for literal catalog/filter
+        # requests. Natural demand language needs semantic ranking, even when
+        # it happens to mention an exact category such as Bike or Car.
+        return None
     # In a rental catalog, "car retail" alongside explicit price ordering is
     # overwhelmingly a typo for "car rental". Keep the correction narrow so a
     # genuine retail query without ordering still goes through semantic search.
@@ -477,6 +494,7 @@ def direct_semantic_query_plan(
     normalized = normalize_filter_value(routing_query)
     tokens = re.findall(r"[^\W_]+", normalized)
     token_set = set(tokens)
+    target_ad_type = infer_target_ad_type(routing_query)
     if not tokens:
         return None, "empty_query"
     if len(tokens) > DIRECT_SEMANTIC_MAX_TOKENS:
@@ -485,7 +503,7 @@ def direct_semantic_query_plan(
         return None, "non_ascii_language"
     if any(token.isdigit() for token in tokens):
         return None, "numeric_constraint_or_model"
-    if infer_target_ad_type(routing_query) != "offer" or token_set & {
+    if target_ad_type != "wanted" and token_set & {
         "wanted",
         "request",
         "requests",
@@ -517,6 +535,10 @@ def direct_semantic_query_plan(
         None,
     )
     descriptive_direct = bool(descriptive_hook and descriptive_hook(analysis.query))
+    if target_ad_type == "wanted" and not descriptive_direct:
+        # Tenants must explicitly opt into the semantic fast path before a
+        # buyer-demand query can bypass hosted planning.
+        return None, "ad_type_intent"
     catalog_grounded = bool(
         any(
             analysis.exact_values.get(key) is not None
@@ -554,10 +576,12 @@ def direct_semantic_query_plan(
         for key, value in plan["filters"].items()
         if key not in {"main_category", "subcategory"} and value is not None
     }
-    if non_category_filters or plan["target_ad_type"] != "offer":
+    if non_category_filters:
         return None, "structured_intent_detected"
     plan["execution_path"] = "direct_semantic"
-    if analysis.query_was_normalized:
+    if plan["target_ad_type"] == "wanted":
+        plan["route_reason"] = "buyer_demand_semantic"
+    elif analysis.query_was_normalized:
         plan["route_reason"] = "reviewed_normalization_offer"
     else:
         plan["route_reason"] = (

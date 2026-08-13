@@ -142,10 +142,8 @@ def test_deterministic_filter_plan_accepts_simple_explicit_queries(tmp_path):
         "bikes in Chennai under 1000",
         value_index,
     )
-    wanted = deterministic_filter_query_plan(
-        "someone looking for bikes",
-        value_index,
-    )
+    wanted = deterministic_filter_query_plan("someone looking for bikes", value_index)
+    personal_offer = deterministic_filter_query_plan("looking for a bike", value_index)
 
     assert bike["execution_path"] == "deterministic_filter"
     assert bike["filters"]["subcategory"] == "Bike"
@@ -153,7 +151,8 @@ def test_deterministic_filter_plan_accepts_simple_explicit_queries(tmp_path):
     assert filtered["filters"]["city"] == "Chennai"
     assert filtered["filters"]["state"] == "Tamil Nadu"
     assert filtered["filters"]["max_rental_fee"] == 1000
-    assert wanted["target_ad_type"] == "wanted"
+    assert wanted is None
+    assert personal_offer is None
     index.close()
 
 
@@ -175,6 +174,40 @@ def test_direct_semantic_plan_accepts_objective_catalog_phrase(tmp_path):
     assert plan["filters"]["main_category"] == "Automobiles"
     assert plan["inferred_categories"]["subcategory"] is None
     assert plan["relaxed_categories"] == []
+    index.close()
+
+
+def test_natural_offer_and_buyer_demand_use_direct_semantic(tmp_path):
+    index = build_index(tmp_path / "natural-demand-direct-semantic.sqlite3")
+    value_index = query_filter_value_index(index)
+    policy = GainrSearchPolicy()
+
+    personal_offer, offer_reason = direct_semantic_query_plan(
+        "looking for a car",
+        value_index,
+        search_policy=policy,
+    )
+    buyer_demand, demand_reason = direct_semantic_query_plan(
+        "people need bikes",
+        value_index,
+        search_policy=policy,
+    )
+    broad_demand, broad_reason = direct_semantic_query_plan(
+        "someone who wants equipment service",
+        value_index,
+        search_policy=policy,
+    )
+
+    assert offer_reason == "descriptive_marketplace_offer"
+    assert personal_offer["execution_path"] == "direct_semantic"
+    assert personal_offer["target_ad_type"] == "offer"
+    assert demand_reason == "buyer_demand_semantic"
+    assert buyer_demand["execution_path"] == "direct_semantic"
+    assert buyer_demand["target_ad_type"] == "wanted"
+    assert buyer_demand["filters"]["subcategory"] == "Bike"
+    assert broad_reason == "buyer_demand_semantic"
+    assert broad_demand["execution_path"] == "direct_semantic"
+    assert broad_demand["target_ad_type"] == "wanted"
     index.close()
 
 
