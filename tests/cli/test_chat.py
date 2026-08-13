@@ -890,6 +890,15 @@ def test_infer_target_ad_type_uses_searcher_perspective():
     assert (
         infer_target_ad_type("find customers who need photography services") == "wanted"
     )
+    assert infer_target_ad_type("people requiring bikes") == "wanted"
+    assert infer_target_ad_type("customers interested in equipment") == "wanted"
+    assert infer_target_ad_type("find potential renters for my car") == "wanted"
+    assert infer_target_ad_type("wanted camera") == "wanted"
+    assert infer_target_ad_type("camera wanted") == "wanted"
+    assert infer_target_ad_type("show me equipment requirements") == "wanted"
+    assert infer_target_ad_type("require camera equipment") == "offer"
+    assert infer_target_ad_type("I wanted to hire a photographer") == "offer"
+    assert infer_target_ad_type("I really wanted") == "offer"
 
 
 def test_extract_price_constraints_handles_range_and_minimum():

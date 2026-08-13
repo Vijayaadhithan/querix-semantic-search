@@ -211,6 +211,34 @@ def test_natural_offer_and_buyer_demand_use_direct_semantic(tmp_path):
     index.close()
 
 
+def test_conversational_catalog_requests_never_use_deterministic_path(tmp_path):
+    index = build_index(tmp_path / "conversational-routing.sqlite3")
+    value_index = query_filter_value_index(index)
+    policy = GainrSearchPolicy()
+    queries = (
+        "I need a bike",
+        "please show bikes",
+        "can you find me a bike?",
+        "do you have bikes",
+        "people requiring bikes",
+        "customers interested in bikes",
+        "find buyers for bikes",
+        "wanted bike",
+        "bike wanted",
+    )
+
+    for query in queries:
+        assert (
+            deterministic_filter_query_plan(
+                query,
+                value_index,
+                search_policy=policy,
+            )
+            is None
+        ), query
+    index.close()
+
+
 def test_direct_semantic_preserves_head_category_and_compound_catalog_concept(
     tmp_path,
 ):
@@ -1070,7 +1098,7 @@ def test_price_sort_wording_is_extracted_deterministically():
     assert extract_sort_order("medium price car") is None
 
 
-def test_gainr_service_intents_are_hard_category_boundaries(tmp_path):
+def test_gainr_service_intents_are_semantic_hard_category_boundaries(tmp_path):
     index = PersistentBM25Index(tmp_path / "gainr-service-intents.sqlite3")
     index.upsert(
         [
@@ -1114,17 +1142,17 @@ def test_gainr_service_intents_are_hard_category_boundaries(tmp_path):
     value_index = query_filter_value_index(index)
     policy = GainrSearchPolicy()
 
-    massage = deterministic_filter_query_plan(
+    massage, massage_reason = direct_semantic_query_plan(
         "low cost body massage near me",
         value_index,
         search_policy=policy,
     )
-    pipes = deterministic_filter_query_plan(
+    pipes, pipes_reason = direct_semantic_query_plan(
         "someone who can repair leaking pipes",
         value_index,
         search_policy=policy,
     )
-    wiring = deterministic_filter_query_plan(
+    wiring, wiring_reason = direct_semantic_query_plan(
         "repair electrical wiring",
         value_index,
         search_policy=policy,
@@ -1134,13 +1162,58 @@ def test_gainr_service_intents_are_hard_category_boundaries(tmp_path):
         value_index,
         search_policy=policy,
     )
-    teacher = deterministic_filter_query_plan(
+    teacher, teacher_reason = direct_semantic_query_plan(
         "mathematics teacher",
         value_index,
         search_policy=policy,
     )
 
-    assert massage["execution_path"] == "deterministic_filter"
+    assert (
+        deterministic_filter_query_plan(
+            "low cost body massage near me",
+            value_index,
+            search_policy=policy,
+        )
+        is None
+    )
+    assert (
+        deterministic_filter_query_plan(
+            "someone who can repair leaking pipes",
+            value_index,
+            search_policy=policy,
+        )
+        is None
+    )
+    assert (
+        deterministic_filter_query_plan(
+            "repair electrical wiring",
+            value_index,
+            search_policy=policy,
+        )
+        is None
+    )
+    assert (
+        deterministic_filter_query_plan(
+            "mathematics teacher",
+            value_index,
+            search_policy=policy,
+        )
+        is None
+    )
+    assert massage is None
+    assert massage_reason == "sort_language"
+    assert pipes["execution_path"] == "direct_semantic"
+    assert pipes_reason == "descriptive_marketplace_offer"
+    assert wiring["execution_path"] == "direct_semantic"
+    assert wiring_reason == "objective_catalog_phrase"
+    assert teacher["execution_path"] == "direct_semantic"
+    assert teacher_reason == "objective_catalog_phrase"
+    massage = enrich_query_plan(
+        "low cost body massage near me",
+        default_query_plan("low cost body massage near me"),
+        value_index,
+        search_policy=policy,
+    )
     assert massage["sort_order"] == "price_asc"
     assert massage["filters"]["subcategory"] == "Massage Therapist"
     assert massage["filters"]["main_category"] == "Personal & Home Services"

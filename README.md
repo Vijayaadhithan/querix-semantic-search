@@ -34,8 +34,9 @@ request
   -> route
      -> exact category/simple stated filters
         -> deterministic indexed database lookup
-     -> descriptive, ambiguous, typo, or multilingual query
-        -> tenant-aware query plan and query embedding
+     -> natural, descriptive, ambiguous, typo, or multilingual query
+        -> local direct-semantic intent or tenant-aware query plan
+        -> query embedding
         -> pgvector HNSW + BM25 candidate retrieval
         -> reciprocal-rank fusion and intent shaping
         -> configured hosted reranker chain
@@ -47,6 +48,8 @@ The deterministic path does not call the planner model, embedding model, vector
 search, BM25, or a reranker. It is reserved for an exact catalogue category and
 simple user-stated constraints. Model-inferred categories and tenant query
 aliases remain soft semantic evidence; they never become fuzzy hard filters.
+Conversational requests, task descriptions, and offer/wanted buyer language
+never use this path merely because they contain an exact category name.
 
 The semantic path uses a shared planner prompt plus tenant-specific context and
 aliases, Ollama `embeddinggemma:latest`, pgvector HNSW, persistent BM25,

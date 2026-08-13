@@ -213,17 +213,6 @@ FAST_PATH_FILLER_TOKENS = {
     "to",
     "want",
 }
-FAST_PATH_WANTED_TOKENS = {
-    "customers",
-    "people",
-    "person",
-    "persons",
-    "renters",
-    "request",
-    "someone",
-    "wanted",
-    "who",
-}
 DIRECT_SEMANTIC_MAX_TOKENS = 8
 DIRECT_SEMANTIC_BLOCK_TOKENS = {
     "above",
@@ -491,7 +480,6 @@ __all__ = (
     "FAST_PATH_FILLER_TOKENS",
     "FAST_PATH_PRICE_TOKENS",
     "FAST_PATH_SORT_TOKENS",
-    "FAST_PATH_WANTED_TOKENS",
     "FUZZY_MATCH_THRESHOLDS",
     "GENERIC_CATEGORY_HINT_TOKENS",
     "GENERIC_LOCATION_VALUES",

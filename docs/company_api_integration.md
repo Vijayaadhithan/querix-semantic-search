@@ -94,9 +94,11 @@ Routing changes internal work, not the request or response contract:
 - An exact catalogue category with simple user-stated filters uses the
   deterministic indexed-database path. It does not call an LLM, embedding
   model, vector search, BM25, or a reranker.
-- Descriptive, ambiguous, misspelled, colloquial, or multilingual wording uses
-  semantic search: tenant-aware planning, query embedding, pgvector and BM25,
-  fusion, intent shaping, and hosted reranking.
+- Conversational offer/wanted language and descriptive, ambiguous, misspelled,
+  colloquial, or multilingual wording use semantic search. Clear intent can
+  skip the hosted planner through direct semantic routing; uncertain intent
+  uses tenant-aware hosted planning before the same embedding, pgvector/BM25,
+  fusion, intent-shaping, and reranking stages.
 - Explicit request filters are authoritative. Model-inferred categories and
   tenant aliases are soft relevance signals and never fuzzy hard filters.
 

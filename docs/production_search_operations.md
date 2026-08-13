@@ -24,8 +24,9 @@ a 40-item hybrid recall window. Gainr retains the ranked window first and adds
 eligible filtered continuation results only after it.
 
 Exact catalogue categories with simple stated filters use the deterministic
-database path and skip the LLM, embedding, pgvector, BM25, and reranker. Typo,
-ambiguous, descriptive, and multilingual requests use the semantic path:
+database path and skip the LLM, embedding, pgvector, BM25, and reranker.
+Conversational, offer/wanted, typo, ambiguous, descriptive, and multilingual
+requests use a semantic path:
 tenant-aware planning, `embeddinggemma:latest`, pgvector HNSW and BM25,
 reciprocal-rank fusion, intent shaping, then hosted reranking. Fuzzy or inferred
 category language is never promoted to a hard category filter.
@@ -119,10 +120,11 @@ Planning has three observable execution paths:
 
 - `deterministic_filter` resolves a complete objective category/filter request
   locally and queries the catalogue without an LLM.
-- `direct_semantic` accepts only a short, objective, explicitly catalogued
-  phrase with no location, price, duration, wanted-ad, multilingual,
-  functional, or subjective language. It skips hosted planning but retains the
-  normal embedding, vector/BM25 fusion, reranking, eligibility, and hydration.
+- `direct_semantic` accepts a short, locally resolvable marketplace request
+  with no numeric, location, duration, or otherwise ambiguous constraint. This
+  includes clear offer/wanted language and reviewed tenant translations. It
+  skips hosted planning but retains embedding, vector/BM25 fusion, reranking,
+  eligibility, and hydration.
 - `semantic` uses the hosted planner for every remaining or uncertain query.
 
 Plan logs include `route_reason`. Direct routing is deliberately asymmetric:
@@ -135,7 +137,7 @@ warm its HNSW index before the API reports ready. `prewarm_mode: read` targets
 the host filesystem cache; `prewarm_mode: buffer` targets PostgreSQL shared
 buffers and requires a buffer pool larger than the HNSW index. Startup prewarm
 is fail-open and logs the index, mode, blocks, bytes, and duration; it does not
-alter ranking behavior. The hourly local-path warm-up repeats the configured
+alter ranking behavior. The periodic local-path warm-up repeats the configured
 index prewarm before its representative HNSW queries. The scheduled Gainr
 warm-up uses a deep unfiltered HNSW window after warming the complete vector
 heap and index. Override `WARMUP_CANDIDATES` only after latency and relevance

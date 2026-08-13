@@ -42,7 +42,6 @@ from search.planner_rules import (
     FAST_PATH_FILLER_TOKENS,
     FAST_PATH_PRICE_TOKENS,
     FAST_PATH_SORT_TOKENS,
-    FAST_PATH_WANTED_TOKENS,
     OFFER_AD_TYPE,
     QUERY_FILTER_ALIASES,
     QUERY_FILTER_FIELDS,
@@ -53,6 +52,47 @@ from search.policy import DEFAULT_SEARCH_POLICY, SearchPolicy
 
 _STATIC_PROMPT_CACHE: dict[tuple[str, str], tuple[str, str]] = {}
 _STATIC_PROMPT_CACHE_LOCK = threading.Lock()
+
+_MARKETPLACE_ACTOR_PATTERN = (
+    r"(?:people|persons?|someone|somebody|anyone|buyers?|renters?|customers?|"
+    r"clients?|users?|business(?:es)?|companies)"
+)
+_MARKETPLACE_DEMAND_PATTERN = (
+    r"(?:need(?:s|ed|ing)?|want(?:s|ed|ing)?|requir(?:e|es|ed|ing)|"
+    r"seek(?:s|ing)?|(?:(?:is|are|was|were)\s+)?"
+    r"(?:looking|searching)\s+for|(?:(?:is|are|was|were)\s+)?interested\s+in)"
+)
+_WANTED_INTENT_PATTERNS = (
+    re.compile(r"^\s*wanted\b(?!\s+to\b)"),
+    re.compile(r"\bwanted\s+(?:ads?|listings?)\b"),
+    re.compile(r"\b(?:ads?|listings?)\s+wanted\b"),
+    re.compile(r"^\s*(?:requests?|requirements?)\s+(?:for\s+)?\b"),
+    re.compile(r"\b(?:requests?|requirements?)\s+(?:ads?|listings?)\b"),
+    re.compile(
+        rf"\b{_MARKETPLACE_ACTOR_PATTERN}\b(?:\s+[a-z0-9'-]+){{0,4}}\s+"
+        rf"{_MARKETPLACE_DEMAND_PATTERN}\b"
+    ),
+    re.compile(
+        r"\b(?:find|show|list|locate)\s+(?:me\s+)?(?:potential\s+)?"
+        r"(?:buyers?|renters?|customers?|clients?)\b"
+    ),
+    re.compile(
+        r"\b(?:find|show|list)\s+(?:me\s+)?"
+        r"(?:requests?|requirements?|wanted\s+(?:ads?|listings?))\b"
+    ),
+    re.compile(
+        r"\b(?:looking|searching)\s+for\s+"
+        r"(?:people|persons?|buyers?|renters?|customers?|clients?)\b"
+    ),
+)
+_NATURAL_REQUEST_PATTERN = re.compile(
+    r"\b(?:i|im|we|me|my|our|us|you|your|please|people|persons?|someone|"
+    r"somebody|anyone|buyers?|renters?|customers?|clients?|users?|find|show|"
+    r"give|get|help|recommend|suggest|looking|searching|need|needs|needed|"
+    r"needing|want|wants|wanted|wanting|require|requires|required|requiring|"
+    r"seek|seeks|seeking|interested|can|could|would|should|who|what|where|"
+    r"which|how|do|does)\b"
+)
 
 __all__ = (
     "CatalogValueMap",
@@ -76,19 +116,14 @@ __all__ = (
 
 def infer_target_ad_type(query: str) -> str:
     normalized = normalize_filter_value(query)
-    wanted_patterns = (
-        r"\b(?:wanted|request|requirement)\s+ads?\b",
-        r"\bads?\s+(?:from|by)\s+people\s+(?:who\s+)?"
-        r"(?:need|want|require)\b",
-        r"\b(?:people|persons?|someone|somebody|anyone|buyers|renters|customers)"
-        r"\s+(?:who\s+)?(?:(?:need|want|require)s?|"
-        r"(?:is|are)\s+looking\s+for|looking\s+for)\b",
-        r"\blooking\s+for\s+(?:people|buyers|renters|customers)\b",
-        r"\bshow\s+me\s+(?:requests|requirements)\b",
+    third_person_trailing_demand = bool(
+        re.search(r"\b(?:wanted|requests?|requirements?)\s*$", normalized)
+        and not re.search(r"\b(?:i|we|you)\b", normalized)
     )
     return (
         "wanted"
-        if any(re.search(pattern, normalized) for pattern in wanted_patterns)
+        if third_person_trailing_demand
+        or any(pattern.search(normalized) for pattern in _WANTED_INTENT_PATTERNS)
         else "offer"
     )
 
@@ -98,10 +133,8 @@ def _has_natural_marketplace_intent(query: str) -> bool:
     normalized = normalize_filter_value(query)
     return bool(
         infer_target_ad_type(query) == "wanted"
-        or re.search(r"\b(?:looking|searching)\s+for\b", normalized)
-        or re.search(
-            r"\b(?:need|needs|want|wants|require|requires|required)\b", normalized
-        )
+        or _NATURAL_REQUEST_PATTERN.search(normalized)
+        or re.search(r"[?!]", query)
     )
 
 
@@ -438,26 +471,12 @@ def deterministic_filter_query_plan(
     )
     has_duration = filters.get("rental_duration") is not None
     allowed_tokens = set(FAST_PATH_FILLER_TOKENS)
-    if plan["target_ad_type"] == "wanted":
-        allowed_tokens.update(FAST_PATH_WANTED_TOKENS)
     if has_price:
         allowed_tokens.update(FAST_PATH_PRICE_TOKENS)
     if has_duration:
         allowed_tokens.update(FAST_PATH_DURATION_TOKENS)
     if plan.get("sort_order"):
         allowed_tokens.update(FAST_PATH_SORT_TOKENS)
-    category_intent = search_policy.category_intent(
-        corrected_query,
-        value_index["subcategory"],
-    )
-    if (
-        category_intent is not None
-        and filters.get("subcategory") is not None
-        and normalize_filter_value(filters["subcategory"])
-        == normalize_filter_value(category_intent.subcategory)
-    ):
-        allowed_tokens.update(category_intent.consumed_tokens)
-
     unexplained_tokens = []
     for token in re.findall(r"[^\W_]+", residual):
         if token in allowed_tokens:

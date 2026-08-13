@@ -86,9 +86,10 @@ stable cross-company contract.
 3. Exact catalogue categories with simple stated constraints use the
    deterministic indexed-database path and skip every model and retrieval
    provider.
-4. Descriptive, ambiguous, misspelled, or multilingual requests use the
-   semantic path. The planner applies the shared prompt, tenant prompt context,
-   and tenant-scoped semantic aliases.
+4. Conversational, offer/wanted, descriptive, ambiguous, misspelled, or
+   multilingual requests use semantic retrieval. Locally unambiguous requests
+   use direct semantic planning; the remaining requests use the shared hosted
+   planner with tenant prompt context and tenant-scoped aliases.
 5. Ollama creates the query embedding; pgvector and standalone BM25 retrieve
    independent candidate windows.
 6. Reciprocal-rank fusion and intent shaping create a provider-independent
@@ -143,9 +144,9 @@ whose marketplace meaning is unambiguous. Gainr uses this boundary for service
 requests such as body massage, leaking-pipe repair, and selected technician
 phrases. The resolved subcategory becomes a hard tenant-catalogue filter before
 vector or BM25 retrieval, while explicit equipment phrases such as `massage
-chair` continue through their product category. Simple price/duration requests
-can therefore remain deterministic; descriptive attributes continue through
-semantic retrieval behind the same hard category boundary.
+chair` continue through their product category. These inferred task/service
+phrases remain semantic; only literal catalogue/filter expressions can use
+deterministic retrieval.
 
 ## Ranking and failure behavior
 
