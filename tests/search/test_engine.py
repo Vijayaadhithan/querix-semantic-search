@@ -1157,34 +1157,25 @@ def test_deterministic_filter_plan_rejects_descriptive_queries(tmp_path):
     index = build_index(tmp_path / "semantic-plan.sqlite3")
     value_index = query_filter_value_index(index)
 
-    assert (
-        deterministic_filter_query_plan(
-            "red bike with ABS in Chennai",
-            value_index,
-        )
-        is None
+    descriptive_queries = (
+        "red bike with ABS in Chennai",
+        "red bke with ABS in chni",
+        "vehicle for recreational driving on rough terrain",
+        "wanted bike",
+        "comfortable car for long travel",
+        "car with airbags and good mileage",
+        "bike suitable for mountain roads",
+        "washing machine for a large family",
+        "table and chairs for a wedding reception",
+        "camera with excellent low light performance",
+        "affordable room near office with parking",
+        "need hindi speaking driver",
+        "vehicle for 12 people",
+        "fridge not working",
     )
-    assert (
-        deterministic_filter_query_plan(
-            "red bke with ABS in chni",
-            value_index,
-        )
-        is None
-    )
-    assert (
-        deterministic_filter_query_plan(
-            "vehicle for recreational driving on rough terrain",
-            value_index,
-        )
-        is None
-    )
-    assert (
-        deterministic_filter_query_plan(
-            "wanted bike",
-            value_index,
-        )
-        is None
-    )
+
+    for query in descriptive_queries:
+        assert deterministic_filter_query_plan(query, value_index) is None, query
     index.close()
 
 

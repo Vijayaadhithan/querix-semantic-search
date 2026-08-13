@@ -103,7 +103,9 @@ def test_admin_log_buffer_keeps_only_concise_operational_info():
         logger.info("[search:abc] step=retrieve status=complete duration_ms=20")
         logger.info(
             "[search:abc] step=compat_response status=complete "
-            "route=deterministic products=20 duration_ms=100"
+            "route=deterministic "
+            "route_reason=complete_structured_catalog_match query_words=1 "
+            "products=20 duration_ms=100"
         )
         logger.info(
             "step=query_model status=fallback model=groq reason=local_rate_limit"
@@ -126,6 +128,9 @@ def test_admin_log_buffer_keeps_only_concise_operational_info():
         assert all(
             "step=retrieve" not in event["message"] for event in snapshot["events"]
         )
+        completed = snapshot["events"][0]["message"]
+        assert "route_reason=complete_structured_catalog_match" in completed
+        assert "query_words=1" in completed
     finally:
         logger.removeHandler(buffer)
         logger.setLevel(original_level)

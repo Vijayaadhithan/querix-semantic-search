@@ -6,6 +6,7 @@ from core.settings import APP_NAME
 from core.tenant_config import discover_tenant_profiles
 from search.bm25 import PersistentBM25Index
 from search.engine import ProductSearchEngine
+from search.policy_registry import build_search_policy
 from storage.vector import get_tenant_vector_collection
 
 
@@ -27,6 +28,7 @@ def build_engine(company: str) -> ProductSearchEngine:
         planner_enabled=profile.planner_enabled,
         planner_prompt_context=profile.planner_prompt_context,
         planner_query_aliases=profile.planner_query_aliases,
+        search_policy=build_search_policy(profile.search_policy),
         vector_post_filter_metadata=False,
         semantic_related_tail_enabled=(profile.retrieval.semantic_related_tail_enabled),
         semantic_related_tail_requires_explicit_category=(

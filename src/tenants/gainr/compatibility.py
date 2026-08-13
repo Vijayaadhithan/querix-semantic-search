@@ -536,8 +536,11 @@ class GainrCompatibilityService:
             result_count=len(cards),
             total_results=total,
         )
+        route_reason = planned["query_plan"].get("route_reason") or "none"
+        query_words = len(re.findall(r"[^\W_]+", request.searchTerm, re.UNICODE))
         PERFORMANCE_LOGGER.info(
             "[search:%s] step=compat_response status=complete route=%s "
+            "route_reason=%s query_words=%d "
             "planning_ms=%.0f engine_ms=%.0f database_ms=%.0f "
             "eligibility_source=%s "
             "eligibility_ms=%.0f "
@@ -545,6 +548,8 @@ class GainrCompatibilityService:
             "recent_ms=%.0f products=%d duration_ms=%.0f",
             trace_id,
             route,
+            route_reason,
+            query_words,
             planning_ms,
             engine_ms,
             database_ms,
