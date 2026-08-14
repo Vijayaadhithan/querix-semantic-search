@@ -832,6 +832,69 @@ def test_search_ready_ranked_page_uses_one_query_and_embedded_card_relations(
     }
 
 
+def test_search_ready_catalog_counts_without_materializing_full_rows(
+    tmp_path,
+    monkeypatch,
+):
+    repository = GainrDatabaseRepository(
+        profile(tmp_path, serves_cards_from_search_ready=True)
+    )
+    executions = []
+
+    class Cursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def execute(self, sql, params):
+            executions.append((sql, tuple(params)))
+
+        def fetchone(self):
+            return {"total": 41}
+
+        def fetchall(self):
+            return [
+                {
+                    "id": 2,
+                    "user_id": 7,
+                    "city_name": "Mumbai",
+                    "locality_name": "City",
+                    "ads_attributes_json": "[]",
+                }
+            ]
+
+    class Connection:
+        def cursor(self):
+            return Cursor()
+
+    @contextmanager
+    def connection():
+        yield Connection()
+
+    monkeypatch.setattr(repository, "connection", connection)
+
+    rows, total = repository.search_catalog(
+        {"categorical": {"subcategory_name": "Car"}},
+        GainrSearchFilter(),
+        search_term="car",
+        page=1,
+        page_size=20,
+        sort_order=None,
+        allowed_ad_types={"1"},
+    )
+
+    assert total == 41
+    assert [row["id"] for row in rows] == [2]
+    assert len(executions) == 2
+    assert "SELECT COUNT(*) AS total" in executions[0][0]
+    assert "COUNT(*) OVER" not in executions[1][0]
+    assert "ORDER BY sr.updated_at DESC, sr.id DESC" in executions[1][0]
+    assert executions[0][1] == ("Car", "1")
+    assert executions[1][1] == ("Car", "1", 20, 0)
+
+
 def test_pooled_relation_hydration_runs_independent_queries_concurrently(
     tmp_path,
 ):

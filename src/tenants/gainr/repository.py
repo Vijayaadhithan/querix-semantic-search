@@ -350,15 +350,21 @@ class GainrDatabaseRepository:
         offset = (page - 1) * page_size
 
         if self.serves_cards_from_search_ready:
-            rows: list[dict] = []
-            total = 0
             with self.connection() as connection, connection.cursor() as cursor:
+                cursor.execute(
+                    f"""
+                    SELECT COUNT(*) AS total
+                    FROM {self.search_table} AS sr
+                    WHERE {where_clause}
+                    """,
+                    params,
+                )
+                total = int(cursor.fetchone()["total"])
                 cursor.execute(
                     f"""
                     SELECT sr.*,
                            sr.city_name AS __city_name,
-                           sr.locality_name AS __locality_name,
-                           COUNT(*) OVER () AS __eligible_total
+                           sr.locality_name AS __locality_name
                     FROM {self.search_table} AS sr
                     WHERE {where_clause}
                     ORDER BY {order}
@@ -367,20 +373,6 @@ class GainrDatabaseRepository:
                     (*params, page_size, offset),
                 )
                 rows = list(cursor.fetchall())
-                if rows:
-                    total = int(rows[0].pop("__eligible_total", 0) or 0)
-                    for row in rows[1:]:
-                        row.pop("__eligible_total", None)
-                elif offset:
-                    cursor.execute(
-                        f"""
-                        SELECT COUNT(*) AS total
-                        FROM {self.search_table} AS sr
-                        WHERE {where_clause}
-                        """,
-                        params,
-                    )
-                    total = int(cursor.fetchone()["total"])
             self._attach_search_ready_relations(rows)
             return rows, total
 
