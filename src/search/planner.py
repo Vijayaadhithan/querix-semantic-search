@@ -136,6 +136,7 @@ _DIRECT_MARKETPLACE_WRAPPER_TOKENS = {
     "can",
     "find",
     "for",
+    "in",
     "looking",
     "need",
     "people",
@@ -144,6 +145,7 @@ _DIRECT_MARKETPLACE_WRAPPER_TOKENS = {
     "search",
     "show",
     "someone",
+    "to",
     "wanted",
     "who",
 }
