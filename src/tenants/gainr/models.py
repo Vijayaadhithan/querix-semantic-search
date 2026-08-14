@@ -95,6 +95,24 @@ class GainrSearchFilter(BaseModel):
         validation_alias=AliasChoices("max_fee", "fee_max"),
     )
 
+    @field_validator("city_id", mode="before")
+    @classmethod
+    def normalize_optional_city_id(cls, value):
+        if value is None:
+            return None
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+    @field_validator("locality_id", mode="before")
+    @classmethod
+    def normalize_optional_localities(cls, value):
+        if value is None:
+            return []
+        if isinstance(value, str) and not value.strip():
+            return []
+        return value
+
     @field_validator(
         "category_id",
         "subcategory_id",

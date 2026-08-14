@@ -336,14 +336,14 @@ def test_deployed_gainr_empty_legacy_filter_fields_do_not_fail(tmp_path):
                 "category_id": "",
                 "subcategory_id": "",
                 "category_type": "",
-                "city_id": 129,
+                "city_id": "",
                 "attribute_value": [],
                 "rental_duration": [],
                 "ad_type": [],
                 "fee": [],
                 "fee_max": "",
                 "fee_min": "",
-                "locality_id": [],
+                "locality_id": "",
                 "sort_by": "",
             },
             "page": 2,
@@ -352,6 +352,8 @@ def test_deployed_gainr_empty_legacy_filter_fields_do_not_fail(tmp_path):
 
     response = adapter.filter_results(request)
 
+    assert request.filter.city_id is None
+    assert request.filter.locality_id == []
     assert response["current_page"] == 2
     assert response["last_page"] == 3
     assert len(response["data"]) == 1
