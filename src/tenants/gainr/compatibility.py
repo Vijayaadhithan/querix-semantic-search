@@ -46,6 +46,14 @@ class GainrCompatibilityService:
             profile,
             getattr(self.engine, "database_pool", None),
         )
+        category_id_index = getattr(
+            getattr(self.engine, "bm25_index", None),
+            "category_id_index",
+            None,
+        )
+        self._category_id_index = (
+            category_id_index() if callable(category_id_index) else {}
+        )
         self._memory_cache: dict[str, tuple[float, dict[str, Any]]] = {}
         self._lock = threading.RLock()
 
@@ -285,6 +293,27 @@ class GainrCompatibilityService:
             },
         )
 
+    def _indexed_catalog_filters(self, resolved_filters: dict) -> dict:
+        """Prefer existing numeric category indexes for deterministic SQL."""
+        indexed = copy.deepcopy(resolved_filters)
+        categorical = indexed.setdefault("categorical", {})
+        for name_key, id_key in (
+            ("main_category_name", "main_category_id"),
+            ("subcategory_name", "subcategory_id"),
+        ):
+            if id_key in categorical or name_key not in categorical:
+                continue
+            raw_name = categorical[name_key]
+            if not isinstance(raw_name, str):
+                continue
+            normalized = " ".join(raw_name.casefold().split())
+            category_id = self._category_id_index.get(name_key, {}).get(normalized)
+            if category_id is None:
+                continue
+            categorical.pop(name_key)
+            categorical[id_key] = category_id
+        return indexed
+
     def filter_results(
         self,
         request: GainrFilterResultRequest,
@@ -351,8 +380,9 @@ class GainrCompatibilityService:
             if speculative_embedding_future is not None:
                 speculative_embedding_future.cancel()
             database_started = time.perf_counter()
+            repository_filters = self._indexed_catalog_filters(effective)
             rows, total = self.repository.search_catalog(
-                effective,
+                repository_filters,
                 request.filter,
                 search_term=request.searchTerm,
                 page=request.page,

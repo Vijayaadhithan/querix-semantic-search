@@ -314,6 +314,32 @@ class PersistentBM25Index:
             }
         return value_index
 
+    def category_id_index(self) -> dict[str, dict[str, int]]:
+        """Return category name-to-ID mappings that are unique in the index."""
+        result: dict[str, dict[str, int]] = {}
+        for name_column, id_column in (
+            ("main_category_name", "main_category_id"),
+            ("subcategory_name", "subcategory_id"),
+        ):
+            with self._lock:
+                rows = self.connection.execute(
+                    f"SELECT DISTINCT {name_column} AS name, {id_column} AS id "
+                    "FROM products "
+                    f"WHERE {name_column} IS NOT NULL "
+                    f"AND TRIM({name_column}) <> '' "
+                    f"AND {id_column} IS NOT NULL"
+                ).fetchall()
+            candidates: dict[str, set[int]] = {}
+            for row in rows:
+                normalized = " ".join(str(row["name"]).casefold().split())
+                candidates.setdefault(normalized, set()).add(int(row["id"]))
+            result[name_column] = {
+                name: next(iter(ids))
+                for name, ids in candidates.items()
+                if len(ids) == 1
+            }
+        return result
+
     def _unique_relationship_index(
         self,
         child_column: str,

@@ -133,6 +133,44 @@ def build_index(path):
     return index
 
 
+def test_category_id_index_keeps_only_unique_name_mappings(tmp_path):
+    index = PersistentBM25Index(tmp_path / "category-ids.sqlite3")
+    index.upsert(
+        [
+            product_row(
+                "car-1",
+                main_category_name="Automobiles",
+                main_category_id=4,
+                subcategory_name="Car",
+                subcategory_id=313,
+            ),
+            product_row(
+                "car-2",
+                main_category_name="Automobiles",
+                main_category_id=4,
+                subcategory_name=" car ",
+                subcategory_id=313,
+            ),
+            product_row(
+                "bike-old",
+                subcategory_name="Bike",
+                subcategory_id=12,
+            ),
+            product_row(
+                "bike-new",
+                subcategory_name="Bike",
+                subcategory_id=312,
+            ),
+        ]
+    )
+
+    category_ids = index.category_id_index()
+
+    assert category_ids["main_category_name"]["automobiles"] == 4
+    assert category_ids["subcategory_name"]["car"] == 313
+    assert "bike" not in category_ids["subcategory_name"]
+
+
 def test_deterministic_filter_plan_accepts_simple_explicit_queries(tmp_path):
     index = build_index(tmp_path / "fast-plan.sqlite3")
     value_index = query_filter_value_index(index)

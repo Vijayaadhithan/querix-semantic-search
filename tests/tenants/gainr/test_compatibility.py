@@ -579,6 +579,9 @@ def test_deterministic_result_uses_full_catalog_pagination(tmp_path):
         tmp_path,
         execution_path="deterministic_filter",
     )
+    adapter._category_id_index = {
+        "subcategory_name": {"bike": 312},
+    }
     request = GainrFilterResultRequest.model_validate(
         {"searchTerm": "Bike", "filter": {}, "page": 2}
     )
@@ -589,6 +592,10 @@ def test_deterministic_result_uses_full_catalog_pagination(tmp_path):
     assert repository.catalog_call[2]["page"] == 2
     assert repository.catalog_call[2]["page_size"] == 20
     assert repository.catalog_call[2]["allowed_ad_types"] == {"1"}
+    assert repository.catalog_call[0]["categorical"] == {
+        "subcategory_id": 312,
+        "rental_duration": "Per Day",
+    }
     assert response["current_page"] == 2
     assert response["last_page"] == 3
     assert response["search_meta"]["total_results"] == 41
