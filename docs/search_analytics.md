@@ -113,6 +113,10 @@ snapshot. They are excluded from text-query demand and text-query zero-result
 rates, preventing catalogue browsing from appearing as blank search terms or
 inflating unmet textual demand.
 
+Text-search zero-result rates use only requests whose API status is successful.
+Failed text requests remain visible in operational failure totals and as a
+separate failed-text-request count, but are not interpreted as unmet demand.
+
 Authenticated requests that fail after search processing starts are retained
 with `status = 'failure'`, zero results, and one internal failure attempt. The
 attempt stores only the exception class in `failure_reason`, never the

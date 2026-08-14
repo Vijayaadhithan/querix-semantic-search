@@ -39,6 +39,13 @@ def process_part_b(data):
     ].copy()
     text_request_ids = set(text_searches["request_id"].dropna().astype(str))
     text_api = api[api["request_id"].astype(str).isin(text_request_ids)].copy()
+    successful_text_api = text_api[
+        text_api["status"]
+        .fillna("")
+        .astype(str)
+        .str.casefold()
+        .isin({"success", "successful", "ok"})
+    ].copy()
     results = {}
 
     total_requests = len(api)
@@ -440,7 +447,7 @@ def process_part_b(data):
     }
 
     # Q35: Result count distribution
-    rc = text_api["result_count"].dropna()
+    rc = successful_text_api["result_count"].dropna()
     rc_dist = Counter()
     for r in rc:
         if r == 0:
@@ -458,19 +465,23 @@ def process_part_b(data):
         "values": [
             rc_dist.get(k, 0) for k in ["0 results", "1-5", "6-10", "11-20", "20+"]
         ],
-        "avg_result_count": _rounded_stat(text_api["result_count"].mean()),
-        "avg_total_results": _rounded_stat(text_api["total_results"].mean()),
+        "avg_result_count": _rounded_stat(successful_text_api["result_count"].mean()),
+        "avg_total_results": _rounded_stat(successful_text_api["total_results"].mean()),
         "title": "Text-Search Result Count Distribution",
         "chart_type": "bar",
     }
 
     # Q36: Zero-result rate
-    zero_results = int((text_api["total_results"] == 0).sum())
+    zero_results = int((successful_text_api["total_results"] == 0).sum())
     results["q36_zero_result_rate"] = {
         "zero_count": zero_results,
-        "total": len(text_api),
+        "total": len(successful_text_api),
+        "total_text_requests": len(text_api),
+        "failed_text_requests": len(text_api) - len(successful_text_api),
         "percentage": (
-            round(zero_results / len(text_api) * 100, 1) if len(text_api) else 0
+            round(zero_results / len(successful_text_api) * 100, 1)
+            if len(successful_text_api)
+            else 0
         ),
         "title": "Text-Search Zero-Result Rate",
         "chart_type": "stat",
@@ -478,8 +489,8 @@ def process_part_b(data):
 
     # Q37: Average total_results by path
     tr_by_path = {}
-    for path in text_api["execution_path"].unique():
-        path_data = text_api[text_api["execution_path"] == path]
+    for path in successful_text_api["execution_path"].unique():
+        path_data = successful_text_api[successful_text_api["execution_path"] == path]
         tr_by_path[path] = round(float(path_data["total_results"].mean()), 1)
     results["q37_results_by_path"] = {
         "labels": list(tr_by_path.keys()),
@@ -489,7 +500,7 @@ def process_part_b(data):
     }
 
     # Q38: Zero-result query terms
-    merged = text_api.merge(
+    merged = successful_text_api.merge(
         text_searches[["request_id", "query_text"]],
         on="request_id",
         how="left",

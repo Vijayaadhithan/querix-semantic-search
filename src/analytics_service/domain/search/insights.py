@@ -11,6 +11,8 @@ from ..utils import parse_attempts_json
 from .classification import classify_search_query, normalize_query
 from .records import merge_search_api
 
+_SUCCESS_STATUSES = {"success", "successful", "ok"}
+
 
 def _number(value: Any, default: float = 0.0) -> float:
     try:
@@ -22,6 +24,10 @@ def _number(value: Any, default: float = 0.0) -> float:
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+def _successful(row: pd.Series) -> bool:
+    return str(row.get("status") or "").casefold() in _SUCCESS_STATUSES
 
 
 def _repeat_demand(merged: pd.DataFrame) -> dict[str, Any]:
@@ -43,6 +49,8 @@ def _category_fulfillment(merged: pd.DataFrame) -> dict[str, Any]:
         lambda: {"searches": 0, "zero": 0, "results": [], "latency": []}
     )
     for _, row in merged.iterrows():
+        if not _successful(row):
+            continue
         for category in classify_search_query(row["query_text"]):
             bucket = buckets[category]
             bucket["searches"] += 1
@@ -86,6 +94,8 @@ def _complexity_performance(merged: pd.DataFrame) -> dict[str, Any]:
         label: {"latency": [], "zero": 0, "count": 0} for label in labels
     }
     for _, row in merged.iterrows():
+        if not _successful(row):
+            continue
         words = len(normalize_query(row["query_text"]).split())
         label = (
             "1 word"
@@ -129,23 +139,26 @@ def _path_outcomes(merged: pd.DataFrame) -> dict[str, Any]:
     rows = []
     for path, frame in merged.groupby("execution_path", dropna=False):
         count = len(frame)
-        zero = int((frame["total_results"].fillna(0) == 0).sum())
-        failures = int(
-            (
-                ~frame["status"]
-                .fillna("missing")
-                .str.casefold()
-                .isin(["success", "successful", "ok"])
-            ).sum()
-        )
+        successful = frame[
+            frame["status"]
+            .fillna("")
+            .astype(str)
+            .str.casefold()
+            .isin(_SUCCESS_STATUSES)
+        ]
+        zero = int((successful["total_results"].fillna(0) == 0).sum())
+        failures = count - len(successful)
         rows.append(
             {
                 "execution_path": str(path),
                 "requests": count,
-                "zero_result_rate": round(zero / count * 100, 1) if count else 0,
+                "successful_requests": len(successful),
+                "zero_result_rate": (
+                    round(zero / len(successful) * 100, 1) if len(successful) else 0
+                ),
                 "failure_rate": round(failures / count * 100, 1) if count else 0,
                 "avg_latency_ms": round(_number(frame["duration_ms"].mean()), 1),
-                "avg_results": round(_number(frame["total_results"].mean()), 1),
+                "avg_results": round(_number(successful["total_results"].mean()), 1),
             }
         )
     rows.sort(key=lambda item: item["requests"], reverse=True)

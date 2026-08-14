@@ -621,7 +621,13 @@ def test_filter_only_browse_is_labeled_and_excluded_from_text_search_metrics():
                         "request_id": "req-browse",
                         "query_text": "",
                         "created_at": "2026-07-29 12:00:00",
-                    }
+                    },
+                    {
+                        "id": 4,
+                        "request_id": "req-failure",
+                        "query_text": "planner failed",
+                        "created_at": "2026-07-29 13:00:00",
+                    },
                 ]
             ),
         ],
@@ -638,8 +644,19 @@ def test_filter_only_browse_is_labeled_and_excluded_from_text_search_metrics():
             "created_at": "2026-07-29 12:00:00",
         }
     )
+    failure_usage = data["api_usage"].iloc[1].to_dict()
+    failure_usage.update(
+        {
+            "id": 13,
+            "request_id": "req-failure",
+            "status": "failure",
+            "result_count": 0,
+            "total_results": 0,
+            "created_at": "2026-07-29 13:00:00",
+        }
+    )
     data["api_usage"] = pd.concat(
-        [data["api_usage"], pd.DataFrame([browse_usage])],
+        [data["api_usage"], pd.DataFrame([browse_usage, failure_usage])],
         ignore_index=True,
     )
 
@@ -658,10 +675,23 @@ def test_filter_only_browse_is_labeled_and_excluded_from_text_search_metrics():
     assert "Camera" in browse_record["categories"]
     assert "Chennai" in browse_record["locations"]
     assert search_metrics["q7_zero_results"]["total_searches"] == 2
+    assert search_metrics["q7_zero_results"]["total_text_requests"] == 3
+    assert search_metrics["q7_zero_results"]["failed_text_requests"] == 1
     assert search_metrics["q7_zero_results"]["total_zero"] == 1
-    assert sum(api_metrics["q21_success_rate"]["values"]) == 3
+    assert sum(api_metrics["q21_success_rate"]["values"]) == 4
     assert api_metrics["q36_zero_result_rate"]["total"] == 2
+    assert api_metrics["q36_zero_result_rate"]["total_text_requests"] == 3
+    assert api_metrics["q36_zero_result_rate"]["failed_text_requests"] == 1
     assert api_metrics["q36_zero_result_rate"]["zero_count"] == 1
+    path_outcome = next(
+        row
+        for row in search_metrics["q91_path_outcomes"]["rows"]
+        if row["execution_path"] == "deterministic_filter"
+    )
+    assert path_outcome["requests"] == 2
+    assert path_outcome["successful_requests"] == 1
+    assert path_outcome["zero_result_rate"] == 100.0
+    assert path_outcome["failure_rate"] == 50.0
 
 
 def test_refresh_applies_separate_company_and_internal_metric_profiles(

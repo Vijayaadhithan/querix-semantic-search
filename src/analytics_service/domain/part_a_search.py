@@ -197,17 +197,27 @@ def process_part_a(data):
 
     # Q7: Zero-result queries
     merged = sh.merge(
-        api[["request_id", "total_results", "result_count"]],
+        api[["request_id", "total_results", "result_count", "status"]],
         on="request_id",
         how="left",
     )
-    zero_results = merged[merged["total_results"] == 0]
+    successful = (
+        merged["status"]
+        .fillna("")
+        .astype(str)
+        .str.casefold()
+        .isin({"success", "successful", "ok"})
+    )
+    successful_searches = merged[successful]
+    zero_results = successful_searches[successful_searches["total_results"] == 0]
     zero_queries = zero_results["query_text"].dropna().tolist()
     results["q7_zero_results"] = {
         "queries": zero_queries[:50],
         "total_zero": len(zero_queries),
-        "total_searches": total_q,
-        "percentage": _percentage(len(zero_queries), total_q),
+        "total_searches": len(successful_searches),
+        "total_text_requests": total_q,
+        "failed_text_requests": total_q - len(successful_searches),
+        "percentage": _percentage(len(zero_queries), len(successful_searches)),
         "title": "Searches with Zero Results (Unmet Demand)",
         "chart_type": "stat",
     }

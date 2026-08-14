@@ -113,6 +113,9 @@ language, category-demand, and zero-result metrics use only `text_search`
 records. Internal request success, latency, provider, and token metrics continue
 to include every request. This keeps HTTP success separate from search outcome:
 a request can complete successfully and still have a `zero_result` outcome.
+Failed text requests are reported separately and excluded from zero-result-rate
+denominators because a processing failure is not evidence of unmet catalogue
+demand.
 
 ```json
 {
