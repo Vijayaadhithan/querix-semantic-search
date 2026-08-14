@@ -132,6 +132,21 @@ _NATURAL_REQUEST_PATTERN = re.compile(
     r"seek|seeks|seeking|interested|can|could|would|should|who|what|where|"
     r"which|how|do|does)\b"
 )
+_DIRECT_MARKETPLACE_WRAPPER_TOKENS = {
+    "can",
+    "find",
+    "for",
+    "looking",
+    "need",
+    "people",
+    "person",
+    "request",
+    "search",
+    "show",
+    "someone",
+    "wanted",
+    "who",
+}
 
 __all__ = (
     "CatalogValueMap",
@@ -582,6 +597,13 @@ def direct_semantic_query_plan(
         return None, "non_ascii_language"
     if not target_ad_type_is_decisive:
         return None, "ambiguous_ad_type_intent"
+    planner_requirement = getattr(
+        search_policy,
+        "requires_hosted_planner",
+        None,
+    )
+    if planner_requirement and planner_requirement(routing_query):
+        return None, "tenant_ambiguous_compound"
     if any(token.isdigit() for token in tokens):
         return None, "numeric_constraint_or_model"
     if target_ad_type != "wanted" and token_set & {
@@ -616,10 +638,6 @@ def direct_semantic_query_plan(
         None,
     )
     descriptive_direct = bool(descriptive_hook and descriptive_hook(analysis.query))
-    if target_ad_type == "wanted" and not descriptive_direct:
-        # Tenants must explicitly opt into the semantic fast path before a
-        # buyer-demand query can bypass hosted planning.
-        return None, "ad_type_intent"
     catalog_grounded = bool(
         any(
             analysis.exact_values.get(key) is not None
@@ -639,7 +657,26 @@ def direct_semantic_query_plan(
     complex_shape = any(
         pattern.search(routing_query) for pattern in DIRECT_SEMANTIC_COMPLEX_PATTERNS
     )
-    if not descriptive_direct and blocked_tokens:
+    marketplace_hook = getattr(
+        search_policy,
+        "allows_decisive_marketplace_direct_semantic",
+        None,
+    )
+    marketplace_direct = bool(
+        catalog_grounded
+        and marketplace_hook
+        and marketplace_hook(analysis.query)
+        and _has_natural_marketplace_intent(routing_query)
+        and blocked_tokens.issubset(_DIRECT_MARKETPLACE_WRAPPER_TOKENS)
+        and not complex_shape
+    )
+    if target_ad_type == "wanted" and not (
+        descriptive_direct or marketplace_direct
+    ):
+        # Tenants must explicitly opt into the semantic fast path before a
+        # buyer-demand query can bypass hosted planning.
+        return None, "ad_type_intent"
+    if not descriptive_direct and blocked_tokens and not marketplace_direct:
         return None, "complex_or_subjective_language"
     if not descriptive_direct and complex_shape:
         return None, "complex_query_shape"
@@ -669,6 +706,8 @@ def direct_semantic_query_plan(
             "descriptive_marketplace_offer"
             if descriptive_direct
             and (not catalog_grounded or blocked_tokens or complex_shape)
+            else "marketplace_intent_semantic"
+            if marketplace_direct
             else "objective_catalog_phrase"
         )
     return plan, plan["route_reason"]

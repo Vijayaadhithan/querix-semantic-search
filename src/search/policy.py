@@ -38,6 +38,10 @@ class SearchPolicy(Protocol):
 
     def allows_descriptive_direct_semantic(self, query: str) -> bool: ...
 
+    def allows_decisive_marketplace_direct_semantic(self, query: str) -> bool: ...
+
+    def requires_hosted_planner(self, query: str) -> bool: ...
+
     def adjust_candidates(
         self,
         query_plan: dict,
@@ -72,6 +76,12 @@ class DefaultSearchPolicy:
         return None
 
     def allows_descriptive_direct_semantic(self, query: str) -> bool:
+        return False
+
+    def allows_decisive_marketplace_direct_semantic(self, query: str) -> bool:
+        return False
+
+    def requires_hosted_planner(self, query: str) -> bool:
         return False
 
     def adjust_candidates(

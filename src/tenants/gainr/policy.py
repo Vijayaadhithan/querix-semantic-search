@@ -173,6 +173,14 @@ _BABY_PHOTOGRAPHER_PATTERN = re.compile(
     r"|\b(?:baby|babies|newborn|infant)\b.*\b"
     r"(?:photographer|photography|photo\s*shoot|functions?)\b"
 )
+_AMBIGUOUS_VEHICLE_SERVICE_PATTERN = re.compile(
+    r"\b(?:bike|car|vehicle)\b(?:\s+[a-z0-9'-]+){0,2}\s+"
+    r"\b(?:acting\s+driver|driver|paint(?:ing|er)?|repair|mechanic|"
+    r"cleaning|wash|detailing|service)\b"
+    r"|\b(?:acting\s+driver|driver|paint(?:ing|er)?|repair|mechanic|"
+    r"cleaning|wash|detailing|service)\b(?:\s+[a-z0-9'-]+){0,2}\s+"
+    r"\b(?:bike|car|vehicle)\b"
+)
 _CATEGORY_INTENT_RULES = (
     (
         ("astrologer",),
@@ -375,7 +383,7 @@ def _candidate_text(candidate: dict) -> str:
 class GainrSearchPolicy:
     """Gainr marketplace interpretation without coupling it to the engine."""
 
-    cache_key = "gainr-marketplace-v9"
+    cache_key = "gainr-marketplace-v10"
 
     @staticmethod
     def _is_tamil_load_transport_request(query: str) -> bool:
@@ -560,13 +568,29 @@ class GainrSearchPolicy:
         return values.get("automobiles")
 
     def allows_descriptive_direct_semantic(self, query: str) -> bool:
-        """Let hybrid retrieval handle simple Gainr offer descriptions.
+        """Bypass planning only for descriptions with tenant-owned rewrites.
 
-        The generic planner has already rejected locations, prices, rental
-        durations, wanted-ad language, non-ASCII text, numeric constraints,
-        and known spelling normalization before this hook is consulted.
+        Generic short phrases can still conceal product-versus-service or
+        brand-versus-category intent, so they need the hosted planner.
         """
-        return bool(re.search(r"[a-z]", normalize_filter_value(query)))
+        return self._is_vehicle_travel_request(
+            query
+        ) or self._is_housing_rental_request(query)
+
+    def allows_decisive_marketplace_direct_semantic(self, query: str) -> bool:
+        # The shared planner has already proved both an explicit catalogue
+        # match and decisive offer/wanted perspective before using this hook.
+        return bool(query.strip())
+
+    def requires_hosted_planner(self, query: str) -> bool:
+        # Compound vehicle/service wording such as "car painting" must decide
+        # whether the listing is a vehicle or a service before hard category
+        # filters are applied.
+        return bool(
+            _AMBIGUOUS_VEHICLE_SERVICE_PATTERN.search(
+                normalize_filter_value(query)
+            )
+        )
 
     def adjust_candidates(
         self,

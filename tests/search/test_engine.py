@@ -213,16 +213,15 @@ def test_natural_offer_and_buyer_demand_use_direct_semantic(tmp_path):
         search_policy=policy,
     )
 
-    assert offer_reason == "descriptive_marketplace_offer"
+    assert offer_reason == "marketplace_intent_semantic"
     assert personal_offer["execution_path"] == "direct_semantic"
     assert personal_offer["target_ad_type"] == "offer"
     assert demand_reason == "buyer_demand_semantic"
     assert buyer_demand["execution_path"] == "direct_semantic"
     assert buyer_demand["target_ad_type"] == "wanted"
     assert buyer_demand["filters"]["subcategory"] == "Bike"
-    assert broad_reason == "buyer_demand_semantic"
-    assert broad_demand["execution_path"] == "direct_semantic"
-    assert broad_demand["target_ad_type"] == "wanted"
+    assert broad_demand is None
+    assert broad_reason == "no_explicit_catalog_category"
     assert interested_reason == "buyer_demand_semantic"
     assert interested_demand["execution_path"] == "direct_semantic"
     assert interested_demand["target_ad_type"] == "wanted"
@@ -232,6 +231,29 @@ def test_natural_offer_and_buyer_demand_use_direct_semantic(tmp_path):
     assert supplier_demand["target_ad_type"] == "wanted"
     assert ambiguous_supplier is None
     assert ambiguous_reason == "ambiguous_ad_type_intent"
+    index.close()
+
+
+def test_gainr_generic_and_ambiguous_compounds_use_hosted_planner(tmp_path):
+    index = build_index(tmp_path / "gainr-hosted-planner-routing.sqlite3")
+    value_index = query_filter_value_index(index)
+    policy = GainrSearchPolicy()
+
+    generic, generic_reason = direct_semantic_query_plan(
+        "Rado centrix",
+        value_index,
+        search_policy=policy,
+    )
+    compound, compound_reason = direct_semantic_query_plan(
+        "bike acting driver",
+        value_index,
+        search_policy=policy,
+    )
+
+    assert generic is None
+    assert generic_reason == "no_explicit_catalog_category"
+    assert compound is None
+    assert compound_reason == "tenant_ambiguous_compound"
     index.close()
 
 
