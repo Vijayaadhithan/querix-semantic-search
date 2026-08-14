@@ -19,8 +19,8 @@ from .metrics import (
     resolve_metric_profiles,
     select_metrics,
 )
-from .source import AnalyticsDataSource
 from .schedule import REFRESH_SCHEDULE
+from .source import AnalyticsDataSource
 from .store import AnalyticsSnapshotStore
 
 LOGGER = logging.getLogger(__name__)
