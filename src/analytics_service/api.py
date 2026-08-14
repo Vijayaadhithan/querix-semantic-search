@@ -380,6 +380,7 @@ def create_app(
         language: str | None,
         created_from: datetime | None,
         created_to: datetime | None,
+        include_filtered_results: bool,
     ) -> dict[str, Any]:
         if not active_store.company_status(company.company_id)["has_snapshot"]:
             raise HTTPException(
@@ -402,6 +403,7 @@ def create_app(
                 language=language,
                 created_from=(created_from.isoformat() if created_from else None),
                 created_to=created_to.isoformat() if created_to else None,
+                include_filtered_results=include_filtered_results,
             )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -757,6 +759,7 @@ def create_app(
         category: str | None = Query(default=None, max_length=191),
         execution_path: str | None = Query(default=None, max_length=128),
         language: str | None = Query(default=None, max_length=64),
+        include_filtered_results: bool = Query(default=False),
         created_from: datetime | None = Query(default=None, alias="from"),
         created_to: datetime | None = Query(default=None, alias="to"),
         analytics_session: str | None = Cookie(
@@ -781,6 +784,7 @@ def create_app(
             language=language,
             created_from=created_from,
             created_to=created_to,
+            include_filtered_results=include_filtered_results,
         )
 
     @application.get(
@@ -855,6 +859,7 @@ def create_app(
         ),
         category: str | None = Query(default=None, max_length=191),
         language: str | None = Query(default=None, max_length=64),
+        include_filtered_results: bool = Query(default=False),
         created_from: datetime | None = Query(default=None, alias="from"),
         created_to: datetime | None = Query(default=None, alias="to"),
         x_api_key: str | None = Header(default=None, alias="X-API-Key"),
@@ -882,6 +887,7 @@ def create_app(
                 language=language,
                 created_from=created_from,
                 created_to=created_to,
+                include_filtered_results=include_filtered_results,
             )
         )
 

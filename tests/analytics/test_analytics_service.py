@@ -609,7 +609,9 @@ def test_internal_query_marks_missing_operational_telemetry_as_unavailable():
     assert all(value is None for value in record["performance"]["stages_ms"].values())
 
 
-def test_filter_only_browse_is_labeled_and_excluded_from_text_search_metrics():
+def test_filter_only_browse_is_labeled_and_excluded_from_text_search_metrics(
+    tmp_path,
+):
     data = analytics_data()
     data["search_history"] = pd.concat(
         [
@@ -692,6 +694,22 @@ def test_filter_only_browse_is_labeled_and_excluded_from_text_search_metrics():
     assert path_outcome["successful_requests"] == 1
     assert path_outcome["zero_result_rate"] == 100.0
     assert path_outcome["failure_rate"] == 50.0
+
+    store = AnalyticsSnapshotStore(tmp_path / "snapshots.sqlite3")
+    AnalyticsRefreshService(
+        FakeSource(data),
+        store,
+    ).refresh(analytics_company(tmp_path))
+    text_only = store.query_records("gainr", internal=False, limit=20)
+    with_browse = store.query_records(
+        "gainr",
+        internal=False,
+        limit=20,
+        include_filtered_results=True,
+    )
+
+    assert "req-browse" not in {item["request_id"] for item in text_only["items"]}
+    assert "req-browse" in {item["request_id"] for item in with_browse["items"]}
 
 
 def test_refresh_applies_separate_company_and_internal_metric_profiles(

@@ -1328,6 +1328,95 @@ def test_gainr_service_intents_are_semantic_hard_category_boundaries(tmp_path):
     index.close()
 
 
+def test_gainr_marketplace_roles_keep_language_and_use_case_out_of_category(tmp_path):
+    index = PersistentBM25Index(tmp_path / "gainr-marketplace-roles.sqlite3")
+    index.upsert(
+        [
+            product_row(
+                "acting-driver",
+                main_category_name="Automotive Professionals",
+                subcategory_name="Acting Driver",
+            ),
+            product_row(
+                "female-acting-driver",
+                main_category_name="Automotive Professionals",
+                subcategory_name="Female Acting Driver",
+            ),
+            product_row(
+                "care-taker",
+                main_category_name="Personal & Home Services",
+                subcategory_name="Care Taker",
+            ),
+            product_row(
+                "bartender",
+                main_category_name="Food & Accommodation Industry",
+                subcategory_name="Bartender",
+            ),
+            product_row(
+                "sales-executive",
+                main_category_name="Office Professionals",
+                subcategory_name="Sales Executive",
+            ),
+            product_row(
+                "electrician",
+                main_category_name="Personal & Home Services",
+                subcategory_name="Electrician",
+            ),
+            product_row(
+                "photographer",
+                main_category_name="Media & Events",
+                subcategory_name="Photographer",
+            ),
+            product_row(
+                "hindi-tutor",
+                main_category_name="Education Field",
+                subcategory_name="Tutor",
+            ),
+        ]
+    )
+    value_index = query_filter_value_index(index)
+    policy = GainrSearchPolicy()
+
+    expected_roles = {
+        "Hindi speaking driver for family trips": "Acting Driver",
+        "Lady driver for school drop": "Female Acting Driver",
+        "Malayalam speaking caretaker": "Care Taker",
+        "Bar tender for home events": "Bartender",
+        "Hindi speaking sales person": "Sales Executive",
+    }
+    for query, expected_subcategory in expected_roles.items():
+        plan = enrich_query_plan(
+            query,
+            default_query_plan(query),
+            value_index,
+            search_policy=policy,
+        )
+        assert plan["filters"]["subcategory"] == expected_subcategory
+
+    factory = enrich_query_plan(
+        "Electrician experienced with factory wiring",
+        default_query_plan("Electrician experienced with factory wiring"),
+        value_index,
+        search_policy=policy,
+    )
+    baby = enrich_query_plan(
+        "Photographer who can cover baby functions",
+        default_query_plan("Photographer who can cover baby functions"),
+        value_index,
+        search_policy=policy,
+    )
+
+    assert factory["filters"]["subcategory"] == "Electrician"
+    assert "commercial industrial electrician" in factory["semantic_query"]
+    assert factory["keyword_query"] == (
+        "commercial industrial electrician factory wiring"
+    )
+    assert baby["filters"]["subcategory"] == "Photographer"
+    assert "baby shoot photographer" in baby["semantic_query"]
+    assert baby["keyword_query"] == "baby newborn function baby shoot photographer"
+    index.close()
+
+
 def test_gainr_body_massage_attributes_stay_semantic_with_hard_category(tmp_path):
     index = PersistentBM25Index(tmp_path / "gainr-massage-attributes.sqlite3")
     index.upsert(

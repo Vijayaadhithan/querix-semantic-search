@@ -394,6 +394,7 @@ class AnalyticsSnapshotStore:
         language: str | None = None,
         created_from: str | None = None,
         created_to: str | None = None,
+        include_filtered_results: bool = False,
     ) -> dict[str, Any]:
         field = "internal_json" if internal else "company_json"
         clauses = [
@@ -401,6 +402,11 @@ class AnalyticsSnapshotStore:
             "records.snapshot_version = snapshots.active_version",
         ]
         values: list[Any] = [company_id]
+        if not include_filtered_results:
+            clauses.append(
+                f"COALESCE(json_extract(records.{field}, "
+                "'$.request_kind'), 'text_search') = 'text_search'"
+            )
         if cursor:
             cursor_created, cursor_request = decode_query_cursor(cursor)
             clauses.append(

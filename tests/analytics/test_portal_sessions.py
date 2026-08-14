@@ -408,11 +408,15 @@ def test_each_route_reads_only_its_portal_cookie_and_enforces_tenant(portal_app)
         assert (
             internal_client.get(
                 "/api/v1/admin/analytics/gainr/queries",
-                params={"execution_path": "direct_semantic"},
+                params={
+                    "execution_path": "direct_semantic",
+                    "include_filtered_results": True,
+                },
             ).status_code
             == 200
         )
         assert snapshot_store.last_query_kwargs["execution_path"] == "direct_semantic"
+        assert snapshot_store.last_query_kwargs["include_filtered_results"] is True
         assert (
             internal_client.get("/api/v1/gainr/analytics/dashboard").status_code == 401
         )

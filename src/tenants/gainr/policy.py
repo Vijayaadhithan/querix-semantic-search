@@ -163,6 +163,16 @@ _ACADEMIC_SUBJECT_TEACHER_PATTERN = re.compile(
     r"english|geography|history|math(?:ematic)?s?|physics|science)\s+"
     r"(?:teacher|tutor)\b"
 )
+_FACTORY_ELECTRICIAN_PATTERN = re.compile(
+    r"\b(?:factory|industrial|commercial)\b.*\b(?:electrician|wir(?:e|ing))\b"
+    r"|\b(?:electrician|wir(?:e|ing))\b.*\b(?:factory|industrial|commercial)\b"
+)
+_BABY_PHOTOGRAPHER_PATTERN = re.compile(
+    r"\b(?:photographer|photography|photo\s*shoot)\b.*\b"
+    r"(?:baby|babies|newborn|infant)\b"
+    r"|\b(?:baby|babies|newborn|infant)\b.*\b"
+    r"(?:photographer|photography|photo\s*shoot|functions?)\b"
+)
 _CATEGORY_INTENT_RULES = (
     (
         ("astrologer",),
@@ -200,6 +210,34 @@ _CATEGORY_INTENT_RULES = (
                 r"\b(?:electrical\s+)?wir(?:e|ing)\s+"
                 r"(?:fault|issue|repair|service|work)\b"
             ),
+        ),
+    ),
+    (
+        ("female acting driver", "acting driver"),
+        (
+            re.compile(
+                r"\b(?:female|lady|woman)\s+(?:car\s+|four[\s-]+wheeler\s+)?"
+                r"driver\b"
+            ),
+        ),
+    ),
+    (
+        ("acting driver", "acting driver agent"),
+        (re.compile(r"\b(?:acting\s+|car\s+|four[\s-]+wheeler\s+)?driver\b"),),
+    ),
+    (
+        ("care taker",),
+        (re.compile(r"\bcare[\s-]*taker\b"),),
+    ),
+    (
+        ("bartender",),
+        (re.compile(r"\bbar[\s-]*tender\b"),),
+    ),
+    (
+        ("sales executive",),
+        (
+            re.compile(r"\bsales[\s-]*(?:executive|person|personnel)\b"),
+            re.compile(r"\bsalesperson\b"),
         ),
     ),
     (
@@ -337,7 +375,7 @@ def _candidate_text(candidate: dict) -> str:
 class GainrSearchPolicy:
     """Gainr marketplace interpretation without coupling it to the engine."""
 
-    cache_key = "gainr-marketplace-v8"
+    cache_key = "gainr-marketplace-v9"
 
     @staticmethod
     def _is_tamil_load_transport_request(query: str) -> bool:
@@ -366,6 +404,17 @@ class GainrSearchPolicy:
     def rewrite_semantic_query(self, query: str, semantic_query: str) -> str:
         if self._is_tamil_load_transport_request(query):
             return "goods load transport truck mini truck cargo vehicle"
+        normalized = normalize_filter_value(query)
+        if _FACTORY_ELECTRICIAN_PATTERN.search(normalized):
+            context = "commercial industrial electrician factory wiring"
+            if context not in normalize_filter_value(semantic_query):
+                return f"{semantic_query} {context}".strip()
+            return semantic_query
+        if _BABY_PHOTOGRAPHER_PATTERN.search(normalized):
+            context = "baby newborn function baby shoot photographer"
+            if context not in normalize_filter_value(semantic_query):
+                return f"{semantic_query} {context}".strip()
+            return semantic_query
         if self._is_housing_rental_request(query):
             context = (
                 "residential accommodation room flat apartment villa "
@@ -387,12 +436,16 @@ class GainrSearchPolicy:
     def rewrite_keyword_query(self, query: str, keyword_query: str) -> str:
         if self._is_tamil_load_transport_request(query):
             return "goods load transport truck mini truck cargo vehicle tata ace"
+        normalized = normalize_filter_value(query)
+        if _FACTORY_ELECTRICIAN_PATTERN.search(normalized):
+            return "commercial industrial electrician factory wiring"
+        if _BABY_PHOTOGRAPHER_PATTERN.search(normalized):
+            return "baby newborn function baby shoot photographer"
         if self._is_housing_rental_request(query):
             return (
                 "residential accommodation room flat apartment villa "
                 "guest house home stay rent"
             )
-        normalized = normalize_filter_value(query)
         rough_terrain = re.search(r"\brough\s+terrain\b", normalized) or re.search(
             r"\boff[\s-]?road\b", normalized
         )
