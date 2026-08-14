@@ -101,7 +101,10 @@ planner:
     an English product from phonetic spelling alone. On Gainr, a bare massage
     query means massage therapist or massage service; only interpret it as
     equipment when the user explicitly says massager, massage gun, chair,
-    machine, device, or equipment.
+    machine, device, or equipment. When a vehicle word is the object of a
+    service phrase, select the service rather than the vehicle listing: for
+    example, "car painting" means an automotive painting professional, and
+    "bike acting driver" means an acting-driver service.
 
 retrieval:
   # The setting name is retained for compatibility. Selective metadata filters

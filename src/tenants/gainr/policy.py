@@ -181,6 +181,19 @@ _AMBIGUOUS_VEHICLE_SERVICE_PATTERN = re.compile(
     r"cleaning|wash|detailing|service)\b(?:\s+[a-z0-9'-]+){0,2}\s+"
     r"\b(?:bike|car|vehicle)\b"
 )
+_VEHICLE_PAINTING_PATTERN = re.compile(
+    r"\b(?:bike|car|vehicle)\b(?:\s+[a-z0-9'-]+){0,2}\s+"
+    r"\b(?:paint(?:ing|er)?|body\s+work)\b"
+    r"|\b(?:paint(?:ing|er)?|body\s+work)\b(?:\s+[a-z0-9'-]+){0,2}\s+"
+    r"\b(?:bike|car|vehicle)\b"
+)
+_PAINTING_EQUIPMENT_TERMS = {
+    "booth",
+    "equipment",
+    "gun",
+    "machine",
+    "sprayer",
+}
 _CATEGORY_INTENT_RULES = (
     (
         ("astrologer",),
@@ -383,7 +396,7 @@ def _candidate_text(candidate: dict) -> str:
 class GainrSearchPolicy:
     """Gainr marketplace interpretation without coupling it to the engine."""
 
-    cache_key = "gainr-marketplace-v10"
+    cache_key = "gainr-marketplace-v11"
 
     @staticmethod
     def _is_tamil_load_transport_request(query: str) -> bool:
@@ -534,6 +547,28 @@ class GainrSearchPolicy:
                     # the service intent unambiguous in this narrow case.
                     override_explicit_conflict=True,
                 )
+        vehicle_painting_match = _VEHICLE_PAINTING_PATTERN.search(normalized)
+        if vehicle_painting_match is not None and not (
+            tokens & _PAINTING_EQUIPMENT_TERMS
+        ):
+            actual = next(
+                (
+                    values.get(target)
+                    for target in ("painter", "body shop mechanic")
+                    if values.get(target)
+                ),
+                None,
+            )
+            if actual is not None:
+                return CategoryIntent(
+                    subcategory=actual,
+                    consumed_tokens=frozenset(_tokens(vehicle_painting_match.group(0))),
+                    main_category="Automotive Professionals",
+                    override_explicit_conflict=True,
+                    # Automotive painting spans Painter and Body Shop Mechanic.
+                    # Prefer Painter without excluding the related service child.
+                    relax_subcategory=True,
+                )
         for targets, patterns in _CATEGORY_INTENT_RULES:
             if targets[0] == "massage therapist" and (
                 tokens & _MASSAGE_EQUIPMENT_TERMS
@@ -556,6 +591,15 @@ class GainrSearchPolicy:
                 subcategory=actual,
                 consumed_tokens=frozenset(
                     _tokens(match.group(0)) | (tokens & _SERVICE_WRAPPER_TERMS)
+                ),
+                main_category=(
+                    "Automotive Professionals"
+                    if targets[0] in {"acting driver", "female acting driver"}
+                    else None
+                ),
+                override_explicit_conflict=(
+                    targets[0] in {"acting driver", "female acting driver"}
+                    and bool(tokens & {"bike", "car", "vehicle"})
                 ),
             )
         return None

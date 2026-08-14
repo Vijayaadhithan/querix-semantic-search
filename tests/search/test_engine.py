@@ -257,6 +257,69 @@ def test_gainr_generic_and_ambiguous_compounds_use_hosted_planner(tmp_path):
     index.close()
 
 
+def test_gainr_vehicle_service_compounds_override_literal_vehicle_category(
+    tmp_path,
+):
+    index = PersistentBM25Index(tmp_path / "gainr-vehicle-services.sqlite3")
+    index.upsert(
+        [
+            product_row(
+                "bike",
+                main_category_name="Automobiles",
+                subcategory_name="Bike",
+            ),
+            product_row(
+                "car",
+                main_category_name="Automobiles",
+                subcategory_name="Car",
+            ),
+            product_row(
+                "acting-driver",
+                main_category_name="Automotive Professionals",
+                subcategory_name="Acting Driver",
+            ),
+            product_row(
+                "automotive-painter",
+                main_category_name="Automotive Professionals",
+                subcategory_name="Painter",
+            ),
+            product_row(
+                "home-painter",
+                main_category_name="Personal & Home Services",
+                subcategory_name="Painter",
+            ),
+            product_row(
+                "body-shop",
+                main_category_name="Automotive Professionals",
+                subcategory_name="Body Shop Mechanic",
+            ),
+        ]
+    )
+    value_index = query_filter_value_index(index)
+    policy = GainrSearchPolicy()
+
+    driver = enrich_query_plan(
+        "bike acting driver",
+        default_query_plan("bike acting driver"),
+        value_index,
+        search_policy=policy,
+    )
+    painting = enrich_query_plan(
+        "car painting",
+        default_query_plan("car painting"),
+        value_index,
+        search_policy=policy,
+    )
+
+    assert driver["filters"]["main_category"] == "Automotive Professionals"
+    assert driver["filters"]["subcategory"] == "Acting Driver"
+    assert painting["filters"]["main_category"] == "Automotive Professionals"
+    assert painting["filters"]["subcategory"] is None
+    assert painting["inferred_categories"]["subcategory"] == "Painter"
+    assert "subcategory" in painting["relaxed_categories"]
+    index.close()
+
+
 def test_explicit_multilingual_gender_is_a_hard_user_filter(tmp_path):
     index = build_index(tmp_path / "gender-filter.sqlite3")
     value_index = query_filter_value_index(index)

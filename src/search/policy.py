@@ -8,7 +8,11 @@ class CategoryIntent:
 
     subcategory: str
     consumed_tokens: frozenset[str]
+    main_category: str | None = None
     override_explicit_conflict: bool = False
+    # Some service phrases name a family of closely related catalog children.
+    # Keep the parent hard while using the best child as a ranking preference.
+    relax_subcategory: bool = False
     # A translated or spelling-normalized phrase is model-assisted evidence,
     # not the same as an explicit catalogue filter in the user's original
     # wording. Keep its child category soft by default so close sibling

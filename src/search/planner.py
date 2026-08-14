@@ -336,7 +336,10 @@ def enrich_query_plan(
         != normalize_filter_value(category_intent.subcategory)
         and not category_intent.override_explicit_conflict
     ):
-        if not query_was_normalized or category_intent.hard_filter_when_normalized:
+        category_intent_is_hard = (
+            not query_was_normalized or category_intent.hard_filter_when_normalized
+        )
+        if category_intent_is_hard and not category_intent.relax_subcategory:
             # High-confidence phrases stated directly by the user, such as
             # "body massage" or "repair leaking pipes", select a service
             # provider rather than similarly named equipment.
@@ -352,6 +355,15 @@ def enrich_query_plan(
             filters["subcategory"] = None
             inferred_categories["subcategory"] = category_intent.subcategory
             relaxed_categories.add("subcategory")
+        if category_intent.main_category is not None:
+            canonical_parent = canonical_catalog_value(
+                "main_category",
+                category_intent.main_category,
+                value_index["main_category"],
+            )
+            if canonical_parent is not None:
+                filters["main_category"] = canonical_parent
+                inferred_categories["main_category"] = None
 
     if not any(filters.get(key) for key in ("state", "city", "locality")):
         fuzzy_location = analysis.fuzzy_location(value_index)
