@@ -2,7 +2,11 @@ import logging
 import time
 
 from core.settings import RERANK_MODEL, RERANK_TOP_K
-from search.reranker import load_reranker, rerank
+from search.reranker import (
+    load_reranker,
+    prioritize_verified_within_relevance_bands,
+    rerank,
+)
 
 LOGGER = logging.getLogger("uvicorn.error")
 
@@ -23,12 +27,18 @@ class SearchRankingMixin:
         candidates: list[dict],
         top_k: int,
     ) -> list[dict]:
-        results = []
-        for position, candidate in enumerate(candidates[:top_k], start=1):
+        scored_candidates = []
+        for position, candidate in enumerate(candidates, start=1):
             try:
                 score = float(candidate.get("fusion_score"))
             except (TypeError, ValueError):
                 score = 1.0 / position
+            scored_candidates.append((candidate, score))
+        scored_candidates = prioritize_verified_within_relevance_bands(
+            scored_candidates
+        )
+        results = []
+        for candidate, score in scored_candidates[:top_k]:
             results.append(
                 {
                     "id": candidate["id"],

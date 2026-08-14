@@ -27,6 +27,7 @@ FILTER_INDEX_KEYS = (
     "city_id",
     "subcategory_id",
     "locality_id",
+    "user_gender",
 )
 DELETE_BATCH_SIZE = 10_000
 

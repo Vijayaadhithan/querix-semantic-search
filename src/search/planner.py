@@ -20,6 +20,7 @@ from search.planner_catalog import (
     extract_price_constraints,
     extract_sort_order,
     extract_standalone_budget,
+    extract_user_gender_filter,
     find_catalog_value,
     infer_keyword_subcategory,
     is_explicit_category_request,
@@ -224,6 +225,7 @@ def enrich_query_plan(
         plan["keyword_query"],
     )
     filters = dict(plan["filters"])
+    filters["user_gender"] = extract_user_gender_filter(original_query)
     relaxed_categories = set(plan.get("relaxed_categories") or [])
     inferred_categories = dict(
         plan.get(

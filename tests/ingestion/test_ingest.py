@@ -10,6 +10,7 @@ from ingestion.documents import (
     metadata_hash,
     metadata_value,
     mysql_document_id,
+    prepare_bm25_index_row,
     prepare_content_document,
     prepare_mysql_row,
 )
@@ -61,6 +62,20 @@ def test_prepare_mysql_row_uses_embedding_content_as_document():
     assert metadata["city"] == "Chennai"
     assert metadata["price"] == 12500.0
     assert "embedding_content" not in metadata
+
+
+def test_prepare_bm25_row_carries_internal_user_quality_metadata():
+    row = {
+        "id": 42,
+        "bm25_content": "female plumber",
+        "user_gender": 2,
+        "user_is_aadhaar_gst_verified": 1,
+    }
+
+    prepared = prepare_bm25_index_row(row, "bm25_content", "id")
+
+    assert prepared["user_gender"] == 2
+    assert prepared["user_is_aadhaar_gst_verified"] == 1
 
 
 def test_mysql_document_ids_are_company_isolated():

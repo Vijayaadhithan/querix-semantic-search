@@ -386,4 +386,8 @@ def prepare_bm25_index_row(
         # ads_search_ready later without blocking today's ingestion.
         "ad_type": metadata_value(row.get("type", row.get("ad_type"))),
         "is_rent_negotiable": metadata_value(row.get("is_rent_negotiable")),
+        "user_gender": metadata_value(row.get("user_gender")),
+        "user_is_aadhaar_gst_verified": metadata_value(
+            row.get("user_is_aadhaar_gst_verified")
+        ),
     }

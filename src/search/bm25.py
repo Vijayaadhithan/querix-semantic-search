@@ -27,6 +27,8 @@ STRUCTURED_FILTER_COLUMNS = {
     "locality_id",
     "ad_type",
     "is_rent_negotiable",
+    "user_gender",
+    "user_is_aadhaar_gst_verified",
 }
 OPTIONAL_PRODUCT_COLUMNS = {
     "main_category_id": "INTEGER",
@@ -36,6 +38,8 @@ OPTIONAL_PRODUCT_COLUMNS = {
     "locality_id": "INTEGER",
     "ad_type": "INTEGER",
     "is_rent_negotiable": "INTEGER",
+    "user_gender": "INTEGER",
+    "user_is_aadhaar_gst_verified": "INTEGER",
 }
 
 
@@ -80,7 +84,9 @@ class PersistentBM25Index:
                 city_id INTEGER,
                 locality_id INTEGER,
                 ad_type INTEGER,
-                is_rent_negotiable INTEGER
+                is_rent_negotiable INTEGER,
+                user_gender INTEGER,
+                user_is_aadhaar_gst_verified INTEGER
             );
 
             CREATE TABLE IF NOT EXISTS index_metadata (
@@ -219,6 +225,8 @@ class PersistentBM25Index:
                 row.get("locality_id"),
                 row.get("ad_type"),
                 row.get("is_rent_negotiable"),
+                row.get("user_gender"),
+                row.get("user_is_aadhaar_gst_verified"),
             )
             for row in rows
         ]
@@ -243,9 +251,11 @@ class PersistentBM25Index:
                         city_id,
                         locality_id,
                         ad_type,
-                        is_rent_negotiable
+                        is_rent_negotiable,
+                        user_gender,
+                        user_is_aadhaar_gst_verified
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(doc_id) DO UPDATE SET
                         product_id = excluded.product_id,
                         content = excluded.content,
@@ -262,7 +272,10 @@ class PersistentBM25Index:
                         city_id = excluded.city_id,
                         locality_id = excluded.locality_id,
                         ad_type = excluded.ad_type,
-                        is_rent_negotiable = excluded.is_rent_negotiable
+                        is_rent_negotiable = excluded.is_rent_negotiable,
+                        user_gender = excluded.user_gender,
+                        user_is_aadhaar_gst_verified =
+                            excluded.user_is_aadhaar_gst_verified
                     WHERE products.product_id IS NOT excluded.product_id
                        OR products.content IS NOT excluded.content
                        OR products.main_category_name IS NOT excluded.main_category_name
@@ -279,6 +292,9 @@ class PersistentBM25Index:
                        OR products.locality_id IS NOT excluded.locality_id
                        OR products.ad_type IS NOT excluded.ad_type
                        OR products.is_rent_negotiable IS NOT excluded.is_rent_negotiable
+                       OR products.user_gender IS NOT excluded.user_gender
+                       OR products.user_is_aadhaar_gst_verified IS NOT
+                            excluded.user_is_aadhaar_gst_verified
                     """,
                 values,
             )
@@ -528,7 +544,7 @@ class PersistentBM25Index:
                 "THEN 1 ELSE 0 END, rental_fee IS NULL, "
                 "rental_fee DESC, rowid DESC"
             ),
-        }.get(sort_order, "rowid DESC")
+        }.get(sort_order, "user_is_aadhaar_gst_verified DESC, rowid DESC")
         if sort_order in {"price_asc", "price_desc"}:
             params.append(UNPRICED_RENTAL_FEE_CEILING)
         params.extend((top_k, offset))

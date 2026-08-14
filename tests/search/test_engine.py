@@ -235,6 +235,77 @@ def test_natural_offer_and_buyer_demand_use_direct_semantic(tmp_path):
     index.close()
 
 
+def test_explicit_multilingual_gender_is_a_hard_user_filter(tmp_path):
+    index = build_index(tmp_path / "gender-filter.sqlite3")
+    value_index = query_filter_value_index(index)
+
+    cases = {
+        "female bike instructor": 2,
+        "mahila bike instructor": 2,
+        "பெண் bike instructor": 2,
+        "ponnu bike instructor": 2,
+        "penn bike instructor": 2,
+        "महिला bike instructor": 2,
+        "male bike instructor": 1,
+        "transgender bike instructor": 3,
+    }
+    for query, expected in cases.items():
+        plan = enrich_query_plan(
+            query,
+            default_query_plan(query),
+            value_index,
+        )
+        resolved, unresolved = query_planner_catalog.resolve_query_filters(
+            plan["filters"],
+            value_index,
+        )
+        assert plan["filters"]["user_gender"] == expected, query
+        assert resolved["categorical"]["user_gender"] == expected, query
+        assert unresolved == {}, query
+
+    index.close()
+
+
+def test_bm25_filters_gender_and_prioritizes_verified_browse_rows(tmp_path):
+    index = PersistentBM25Index(tmp_path / "gender-bm25.sqlite3")
+    index.upsert(
+        [
+            product_row(
+                "male-plumber",
+                content="plumber",
+                user_gender=1,
+                user_is_aadhaar_gst_verified=1,
+            ),
+            product_row(
+                "female-unverified",
+                content="plumber",
+                user_gender=2,
+                user_is_aadhaar_gst_verified=0,
+            ),
+            product_row(
+                "female-verified",
+                content="plumber",
+                user_gender=2,
+                user_is_aadhaar_gst_verified=1,
+            ),
+        ]
+    )
+    filters = {"categorical": {"user_gender": 2}}
+
+    matches = index.search("plumber", filters, 10)
+    browsed = index.browse(filters, 10)
+
+    assert {row["product_id"] for row in matches} == {
+        "female-unverified",
+        "female-verified",
+    }
+    assert [row["product_id"] for row in browsed] == [
+        "female-verified",
+        "female-unverified",
+    ]
+    index.close()
+
+
 def test_marketplace_interest_is_not_misread_as_location_language():
     assert query_planner_catalog.location_phrases("customers interested in cars") == []
     assert query_planner_catalog.location_phrases(
@@ -706,7 +777,7 @@ def test_transliterated_phrase_tokens_do_not_become_fuzzy_locations(tmp_path):
         engine.close()
         index.close()
 
-    assert result["resolved_filters"] == {"categorical": {}}
+    assert result["resolved_filters"] == {"categorical": {"user_gender": 2}}
 
 
 def test_translated_concepts_are_not_promoted_to_hard_category_filters(tmp_path):

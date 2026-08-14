@@ -96,6 +96,38 @@ def test_hosted_reranker_truncates_each_document_before_sending(monkeypatch):
     assert captured["json"]["truncation"] is True
 
 
+def test_verified_owner_wins_only_inside_close_relevance_band():
+    class FixedRanker:
+        def compute_score(self, _pairs):
+            return [0.90, 0.88, 0.70]
+
+    candidates = [
+        {
+            "id": "best-unverified",
+            "text": "best",
+            "metadata": {"user_is_aadhaar_gst_verified": 0},
+        },
+        {
+            "id": "close-verified",
+            "text": "close",
+            "metadata": {"user_is_aadhaar_gst_verified": 1},
+        },
+        {
+            "id": "distant-verified",
+            "text": "distant",
+            "metadata": {"user_is_aadhaar_gst_verified": 1},
+        },
+    ]
+
+    results = reranker.rerank("query", candidates, FixedRanker(), top_k=3)
+
+    assert [result["id"] for result in results] == [
+        "close-verified",
+        "best-unverified",
+        "distant-verified",
+    ]
+
+
 def test_voyage_model_chain_is_loaded_in_configured_order(monkeypatch):
     monkeypatch.setattr(
         reranker,

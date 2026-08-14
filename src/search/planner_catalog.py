@@ -18,6 +18,7 @@ from search.planner_rules import (
     QUERY_FILTER_FIELDS,
     QUERY_FILTER_KEYS,
     TRANSLITERATED_QUERY_REWRITES,
+    USER_GENDER_PATTERNS,
 )
 
 
@@ -82,6 +83,30 @@ def optional_number(value) -> float | None:
     except (TypeError, ValueError):
         return None
     return number if number >= 0 else None
+
+
+def optional_user_gender(value) -> int | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        gender = int(value)
+    except (TypeError, ValueError):
+        return None
+    return gender if gender in {1, 2, 3} else None
+
+
+def extract_user_gender_filter(query: str) -> int | None:
+    """Return a requested Gainr user gender from multilingual query text."""
+    matches = {
+        gender
+        for gender, pattern in USER_GENDER_PATTERNS.items()
+        if pattern.search(query)
+    }
+    if 3 in matches:
+        # Phrases such as "trans woman" contain another gender word but are
+        # unambiguously represented by the dedicated Gainr value.
+        return 3
+    return next(iter(matches)) if len(matches) == 1 else None
 
 
 def text_mentions_filter(text: str, value: str) -> bool:
@@ -209,6 +234,7 @@ def parse_query_plan(content: str, original_query: str) -> dict:
         raw_filters = {}
 
     filters = {key: optional_text(raw_filters.get(key)) for key in QUERY_FILTER_FIELDS}
+    filters["user_gender"] = optional_user_gender(raw_filters.get("user_gender"))
     inferred_categories = {
         "main_category": None,
         "subcategory": None,
@@ -991,5 +1017,9 @@ def resolve_query_filters(filters: dict, value_index: dict) -> tuple[dict, dict]
         value = filters.get(key)
         if value is not None:
             resolved[key] = value
+
+    user_gender = optional_user_gender(filters.get("user_gender"))
+    if user_gender is not None:
+        resolved["categorical"]["user_gender"] = user_gender
 
     return resolved, unresolved

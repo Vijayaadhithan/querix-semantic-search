@@ -390,6 +390,7 @@ def rerank(
         key=lambda item: float(item[1]),
         reverse=True,
     )
+    ranked = prioritize_verified_within_relevance_bands(ranked)
     diversity_top_k = top_k if diversity_top_k is None else diversity_top_k
     primary = []
     deferred = []
@@ -424,3 +425,43 @@ def rerank(
             }
         )
     return results
+
+
+def prioritize_verified_within_relevance_bands(
+    ranked,
+    *,
+    relative_band=0.05,
+):
+    """Prefer verified owners only when relevance scores are close.
+
+    The input must already be ordered by descending relevance. Reordering is
+    limited to a five-percent score band so verification never replaces the
+    primary semantic decision.
+    """
+    if not ranked:
+        return []
+
+    prioritized = []
+    start = 0
+    while start < len(ranked):
+        anchor = float(ranked[start][1])
+        tolerance = abs(anchor) * relative_band
+        end = start + 1
+        while end < len(ranked) and anchor - float(ranked[end][1]) <= tolerance:
+            end += 1
+        band = ranked[start:end]
+        band.sort(
+            key=lambda item: (
+                str(
+                    (item[0].get("metadata") or {}).get(
+                        "user_is_aadhaar_gst_verified",
+                        "",
+                    )
+                ).strip()
+                == "1"
+            ),
+            reverse=True,
+        )
+        prioritized.extend(band)
+        start = end
+    return prioritized
