@@ -183,7 +183,7 @@ def test_natural_offer_and_buyer_demand_use_direct_semantic(tmp_path):
     policy = GainrSearchPolicy()
 
     personal_offer, offer_reason = direct_semantic_query_plan(
-        "looking for a car",
+        "looking for a bike",
         value_index,
         search_policy=policy,
     )
@@ -1327,7 +1327,7 @@ def test_gainr_service_intents_are_semantic_hard_category_boundaries(tmp_path):
     assert massage is None
     assert massage_reason == "sort_language"
     assert pipes["execution_path"] == "direct_semantic"
-    assert pipes_reason == "descriptive_marketplace_offer"
+    assert pipes_reason == "marketplace_intent_semantic"
     assert wiring["execution_path"] == "direct_semantic"
     assert wiring_reason == "objective_catalog_phrase"
     assert teacher["execution_path"] == "direct_semantic"
