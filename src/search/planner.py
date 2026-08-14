@@ -672,9 +672,7 @@ def direct_semantic_query_plan(
         and blocked_tokens.issubset(_DIRECT_MARKETPLACE_WRAPPER_TOKENS)
         and not complex_shape
     )
-    if target_ad_type == "wanted" and not (
-        descriptive_direct or marketplace_direct
-    ):
+    if target_ad_type == "wanted" and not (descriptive_direct or marketplace_direct):
         # Tenants must explicitly opt into the semantic fast path before a
         # buyer-demand query can bypass hosted planning.
         return None, "ad_type_intent"

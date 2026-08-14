@@ -587,9 +587,7 @@ class GainrSearchPolicy:
         # whether the listing is a vehicle or a service before hard category
         # filters are applied.
         return bool(
-            _AMBIGUOUS_VEHICLE_SERVICE_PATTERN.search(
-                normalize_filter_value(query)
-            )
+            _AMBIGUOUS_VEHICLE_SERVICE_PATTERN.search(normalize_filter_value(query))
         )
 
     def adjust_candidates(
