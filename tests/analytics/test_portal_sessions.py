@@ -51,7 +51,7 @@ class StubSnapshotStore:
             "has_snapshot": True,
             "snapshot": {"generated_at": "2026-07-31T00:00:00+00:00"},
             "latest_run": None,
-            "refresh_schedule": "daily at 03:00 Asia/Kolkata",
+            "refresh_schedule": "every 2 hours at :30 Asia/Kolkata",
         }
 
     def dashboard(self, company_id: str, *, internal: bool):

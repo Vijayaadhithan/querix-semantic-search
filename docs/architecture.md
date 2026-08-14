@@ -47,10 +47,10 @@ Runtime code is grouped by responsibility under `src/`:
 The `tests/` tree mirrors these boundaries so ownership and regression coverage
 remain easy to locate.
 
-## Daily analytics lifecycle
+## Analytics snapshot lifecycle
 
-The analytics service is not part of the search request lifecycle. At the
-existing 03:00 Asia/Kolkata scheduled run it reads the configured company
+The analytics service is not part of the search request lifecycle. Every two
+hours at `:30` Asia/Kolkata its independent timer reads the configured company
 database and API telemetry source, calculates every dashboard module, writes
 versioned individual-query records, and atomically switches the active
 snapshot. HTTP requests only read that completed snapshot.

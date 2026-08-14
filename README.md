@@ -12,7 +12,7 @@ A tenant-isolated semantic search service for product and classified catalogues.
 - Tenant-scoped API keys, rate limits, caches, indexes, and database configuration.
 - Cursor-based search pagination and monthly usage reporting.
 - Optional durable MySQL search history and per-provider API/token analytics.
-- A separate daily analytics image serving company-safe and internal
+- A separate two-hour analytics image serving company-safe and internal
   dashboards from atomic snapshots.
 - Redis result caching plus graceful vector, BM25, and reranker degradation.
 - Docker deployment with persistent pgvector, Redis, Ollama, and application data.
@@ -134,7 +134,7 @@ docker compose --profile ollama up -d --no-deps --force-recreate api
 docker compose build analytics-api
 docker compose up -d --no-deps --force-recreate analytics-api
 
-# Build the once-daily snapshot manually.
+# Build a snapshot manually.
 docker compose run --rm --no-deps analytics-api \
   python -m analytics_service.refresh --company gainr
 

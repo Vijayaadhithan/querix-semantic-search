@@ -554,9 +554,12 @@ The mounted `storage/` directory keeps pending rows durable across API
 restarts. The scheduled job deletes and vacuums only rows committed to the
 tenant's external MySQL database.
 
-Verify the schedule without starting ingestion manually:
+Verify both schedules without starting either job manually:
 
 ```bash
+systemctl list-timers semantic-search-analytics.timer
+systemctl status semantic-search-analytics.timer --no-pager
+journalctl -u semantic-search-analytics.service -n 100 --no-pager
 systemctl list-timers semantic-search-ingest.timer
 systemctl status semantic-search-ingest.timer --no-pager
 journalctl -u semantic-search-ingest.service -n 100 --no-pager

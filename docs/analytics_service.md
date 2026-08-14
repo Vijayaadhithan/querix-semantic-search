@@ -1,4 +1,4 @@
-# Daily company analytics service
+# Company analytics service
 
 The analytics backend is a separate deployable service. It is not imported by
 the semantic-search API image and it never calculates dashboards on an HTTP
@@ -18,7 +18,7 @@ The image has two entrypoints:
 # Long-running read-only snapshot API.
 python -m analytics_service
 
-# One-shot daily SQL extraction, calculation, and atomic publication.
+# One-shot SQL extraction, calculation, and atomic publication.
 python -m analytics_service.refresh --company gainr
 ```
 
@@ -193,20 +193,19 @@ The analytics service reads business data and tenant-facing query history from
 the company database. API telemetry can use the company database initially or
 a separate internal database. `request_id` correlates the two sources.
 
-## Daily refresh
+## Two-hour refresh
 
-All modules refresh once per day. The production timer starts
-`scripts/run_scheduled_ingestion.sh` at approximately 03:00 Asia/Kolkata.
-That script now performs these operations in order:
+All modules refresh every two hours at `:30` in `Asia/Kolkata`. The independent
+`semantic-search-analytics.timer` starts
+`scripts/run_scheduled_analytics.sh`, which performs these operations:
 
 1. upload pending search analytics;
 2. build and atomically publish the company analytics snapshot;
-3. prune expired analytics login sessions;
-4. run search ingestion;
-5. restart and warm the search API.
+3. prune expired analytics login sessions.
 
-If step 2 fails, the script logs the failure, keeps the prior snapshot active,
-and continues search ingestion.
+If step 2 fails, the script records the failure and keeps the prior snapshot
+active. Search ingestion remains on its separate daily 03:00 timer and does not
+run or restart as part of analytics refreshes.
 
 The production deployment builds both images. It performs an analytics refresh
 only when no prior snapshot exists, then starts the analytics API and verifies
@@ -273,7 +272,7 @@ operation (internal dashboard only)
 
 Dashboard filters apply to the `filtered_overview` search/API activity data,
 including its main time-series graph. Catalogue, user, supply, and market
-questions are daily snapshot metrics and are intentionally not rewritten by a
+questions are snapshot metrics and are intentionally not rewritten by a
 search time filter. Graph buckets and naive custom boundaries use the tenant's
 configured `analytics.timezone` (Gainr uses `Asia/Kolkata`). City and city ID
 come from the actual resolved request filter captured by the search API; they
@@ -511,7 +510,7 @@ analytics:
 
 The SQL loader selects only the columns used by the analytics contract.
 MySQL and PostgreSQL company sources are supported. Source credentials should
-be read-only because the daily builder does not modify company tables.
+be read-only because the snapshot builder does not modify company tables.
 `history_days` limits query history and API telemetry at the SQL source; the
 catalogue and user tables remain available for longer market trends.
 

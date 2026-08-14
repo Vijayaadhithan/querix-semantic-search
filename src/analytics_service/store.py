@@ -11,6 +11,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from .schedule import REFRESH_SCHEDULE
+
 
 def utc_now_iso() -> str:
     return datetime.now(UTC).isoformat()
@@ -335,7 +337,7 @@ class AnalyticsSnapshotStore:
             "generated_at": row["generated_at"],
             "source_watermark": row["source_watermark"],
             "source_rows": json.loads(row["source_rows_json"]),
-            "refresh_schedule": "daily at 03:00 Asia/Kolkata",
+            "refresh_schedule": REFRESH_SCHEDULE,
         }
         return payload
 
@@ -529,5 +531,5 @@ class AnalyticsSnapshotStore:
                 if run is not None
                 else None
             ),
-            "refresh_schedule": "daily at 03:00 Asia/Kolkata",
+            "refresh_schedule": REFRESH_SCHEDULE,
         }

@@ -20,6 +20,7 @@ from .metrics import (
     select_metrics,
 )
 from .source import AnalyticsDataSource
+from .schedule import REFRESH_SCHEDULE
 from .store import AnalyticsSnapshotStore
 
 LOGGER = logging.getLogger(__name__)
@@ -159,7 +160,7 @@ class AnalyticsRefreshService:
                 "schema_version": "2.0",
                 "company_id": company.company_id,
                 "generated_at": generated_at,
-                "refresh_schedule": "daily at 03:00 Asia/Kolkata",
+                "refresh_schedule": REFRESH_SCHEDULE,
                 "source_rows": source_rows,
             }
             company_dashboard = {

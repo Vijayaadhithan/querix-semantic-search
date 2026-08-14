@@ -680,7 +680,7 @@ def build_dashboard_overview(
                 "filtered_overview": "search_and_api_activity_records",
                 "snapshot_modules": (
                     "Current catalogue, user, supply, and market questions are "
-                    "daily snapshot metrics and are not rewritten by activity filters."
+                    "snapshot metrics and are not rewritten by activity filters."
                 ),
                 "city_semantics": (
                     "City is the resolved request filter captured by the search API; "

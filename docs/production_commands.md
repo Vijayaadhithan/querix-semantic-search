@@ -580,12 +580,6 @@ succeeds. A host lock prevents overlapping runs. The BM25 revision now changes
 only when indexed content actually changes, so an unchanged daily scan does not
 invalidate every cached search.
 
-Before ingestion starts, the same job uploads the stable Gainr analytics-spool
-snapshot to Gainr's configured external MySQL database. Confirmed rows are
-deleted and their SQLite space is reclaimed. An analytics upload failure keeps
-the local rows for retry and does not block the existing ingestion or warm-up
-operations.
-
 Install the systemd units using the current production checkout path:
 
 ```bash
@@ -614,6 +608,28 @@ The systemd service allows up to 48 hours for a genuine large re-embedding.
 The script uses a stable named run container and removes it when systemd stops
 or times out, so a failed unit cannot leave an orphan that overlaps tomorrow's
 run.
+
+### Two-hour analytics refresh
+
+Analytics runs independently at every even-hour `:30` in `Asia/Kolkata`. It
+uploads the stable analytics spool, atomically publishes a new snapshot, and
+prunes expired analytics sessions. It does not run ingestion or restart either
+API.
+
+```bash
+export PRODUCTION_REPO="$(pwd)"
+sed "s|/opt/semantic-search|$PRODUCTION_REPO|g" \
+  deploy/semantic-search-analytics.service | \
+  sudo tee /etc/systemd/system/semantic-search-analytics.service >/dev/null
+sudo cp deploy/semantic-search-analytics.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now semantic-search-analytics.timer
+systemctl list-timers semantic-search-analytics.timer
+```
+
+The timer uses `Persistent=true`, a five-minute randomized delay, and a host
+lock to prevent overlapping analytics refreshes. Failed spool uploads remain
+local for retry; failed snapshot builds keep the previous snapshot active.
 
 ### Periodic local search-path warm-up
 

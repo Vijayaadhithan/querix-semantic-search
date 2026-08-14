@@ -37,6 +37,7 @@ from .config import (
     load_analytics_registry,
 )
 from .dashboard_filters import DashboardFilters, build_dashboard_overview
+from .schedule import REFRESH_SCHEDULE
 from .store import AnalyticsSnapshotStore
 
 
@@ -347,7 +348,7 @@ def create_app(
                 status_code=503,
                 detail=(
                     "No completed analytics snapshot is available. "
-                    "Run the daily analytics refresh."
+                    "Run the analytics refresh."
                 ),
             )
         try:
@@ -385,7 +386,7 @@ def create_app(
                 status_code=503,
                 detail=(
                     "No completed analytics snapshot is available. "
-                    "Run the daily analytics refresh."
+                    "Run the analytics refresh."
                 ),
             )
         try:
@@ -426,7 +427,7 @@ def create_app(
             "companies_with_snapshots": sum(
                 int(status["has_snapshot"]) for status in statuses
             ),
-            "refresh_schedule": "daily at 03:00 Asia/Kolkata",
+            "refresh_schedule": REFRESH_SCHEDULE,
         }
 
     def session_payload(principal: AnalyticsPrincipal) -> dict[str, Any]:
@@ -678,7 +679,7 @@ def create_app(
                 }
                 for company in active_registry.companies.values()
             ],
-            "refresh_schedule": "daily at 03:00 Asia/Kolkata",
+            "refresh_schedule": REFRESH_SCHEDULE,
         }
 
     @application.get(

@@ -13,7 +13,7 @@ from .store import AnalyticsSnapshotStore
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Build and atomically publish daily analytics snapshots."
+        description="Build and atomically publish analytics snapshots."
     )
     parser.add_argument(
         "--company",

@@ -1,0 +1,11 @@
+[Unit]
+Description=Refresh semantic search analytics every two hours
+
+[Timer]
+OnCalendar=*-*-* 00/2:30:00 Asia/Kolkata
+Persistent=true
+RandomizedDelaySec=5m
+Unit=semantic-search-analytics.service
+
+[Install]
+WantedBy=timers.target

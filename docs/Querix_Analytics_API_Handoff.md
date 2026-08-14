@@ -30,17 +30,18 @@ The dashboard frontend can therefore use:
 
 ## 2. Data and refresh behavior
 
-The daily builder reads each configured company's SQL database with normalized
-table/column mappings. Company business data and search history come from the
-company database. Internal API telemetry may use the same database today or a
-separate Querix database later.
+The snapshot builder reads each configured company's SQL database with
+normalized table/column mappings. Company business data and search history
+come from the company database. Internal API telemetry may use the same
+database today or a separate Querix database later.
 
-At approximately 03:00 Asia/Kolkata, the production timer:
+Every two hours at `:30` Asia/Kolkata, the independent analytics timer:
 
 1. flushes pending search telemetry;
 2. reads SQL and atomically publishes a new analytics snapshot;
-3. prunes expired analytics sessions;
-4. continues the existing search ingestion and warm-start workflow.
+3. prunes expired analytics sessions.
+
+Search ingestion and warm-start remain on their independent daily 03:00 timer.
 
 Dashboard HTTP requests only read the local SQLite snapshot. They do not query
 the company database or recalculate pandas reports. If refresh fails, the last
@@ -143,7 +144,7 @@ Response `200` when every configured company has a completed snapshot:
   "status": "ok",
   "configured_companies": 1,
   "companies_with_snapshots": 1,
-  "refresh_schedule": "daily at 03:00 Asia/Kolkata"
+  "refresh_schedule": "every 2 hours at :30 Asia/Kolkata"
 }
 ```
 
@@ -255,7 +256,7 @@ Response `200`:
     "schema_version": "2.0",
     "company_id": "gainr",
     "generated_at": "2026-07-30T17:00:00+00:00",
-    "refresh_schedule": "daily at 03:00 Asia/Kolkata",
+    "refresh_schedule": "every 2 hours at :30 Asia/Kolkata",
     "source_rows": {
       "search_history": 365,
       "api_usage": 365,
@@ -290,7 +291,7 @@ Response `200`:
     "generated_at": "2026-07-30T17:00:00+00:00",
     "source_watermark": "2026-07-29T23:59:59+00:00",
     "source_rows": {},
-    "refresh_schedule": "daily at 03:00 Asia/Kolkata"
+    "refresh_schedule": "every 2 hours at :30 Asia/Kolkata"
   }
 }
 ```
@@ -422,7 +423,7 @@ Response `200`:
       "users": 340601
     }
   },
-  "refresh_schedule": "daily at 03:00 Asia/Kolkata"
+  "refresh_schedule": "every 2 hours at :30 Asia/Kolkata"
 }
 ```
 
@@ -441,10 +442,10 @@ Response `200`:
       "has_snapshot": true,
       "snapshot": {},
       "latest_run": {},
-      "refresh_schedule": "daily at 03:00 Asia/Kolkata"
+      "refresh_schedule": "every 2 hours at :30 Asia/Kolkata"
     }
   ],
-  "refresh_schedule": "daily at 03:00 Asia/Kolkata"
+  "refresh_schedule": "every 2 hours at :30 Asia/Kolkata"
 }
 ```
 
@@ -689,13 +690,13 @@ Isolation controls:
 - separate `analytics-api` container and port 8010;
 - separate process memory limit of 1 GiB;
 - dashboard/query requests read a local snapshot;
-- daily calculations run outside user requests;
+- two-hour calculations run outside user requests;
 - analytics-only deployments recreate only `analytics-api`.
 
-Realistic caveat: the daily refresh must read source SQL. That creates a brief
-database workload around 03:00 even though it does not affect search
-application code. As data grows, use a database replica and incremental
-watermarks/indexes to isolate that read load further.
+Realistic caveat: each refresh must read source SQL. That creates a brief
+database workload every two hours even though it does not affect search
+application code or restart the search API. As data grows, use a database
+replica and incremental watermarks/indexes to isolate that read load further.
 
 The first production verification completed a real Gainr snapshot and kept the
 existing search API healthy and warm. Current known host considerations:
@@ -716,7 +717,7 @@ docker compose logs --tail=100 analytics-api
 curl -fsS http://127.0.0.1:8010/api/v1/live | jq
 curl -fsS http://127.0.0.1:8010/api/v1/ready | jq
 
-# Manual daily refresh for one company.
+# Manual refresh for one company.
 docker compose run --rm --no-deps analytics-api \
   python -m analytics_service.refresh --company gainr
 
