@@ -374,8 +374,14 @@ def enrich_query_plan(
     for key, requested in tuple(inferred_categories.items()):
         if requested is None:
             continue
-        inferred_categories[key] = (
-            canonical_catalog_value(key, requested, value_index[key]) or requested
+        # Hosted planners can occasionally put a brand or model name in a
+        # category field. Only catalog-backed category hints may influence
+        # retrieval; an invalid hint is cleared so the rewritten search text
+        # can supply the actual category below.
+        inferred_categories[key] = canonical_catalog_value(
+            key,
+            requested,
+            value_index[key],
         )
 
     if (
@@ -389,6 +395,20 @@ def enrich_query_plan(
             plan["keyword_query"],
             value_index["subcategory"],
         )
+        if inferred_subcategory is None:
+            semantic_subcategory = infer_keyword_subcategory(
+                plan["semantic_query"],
+                value_index["subcategory"],
+            )
+            # Only trust the semantic fallback when it is a concept added by
+            # the hosted rewrite. A functional word already present in the
+            # user's query (for example "driving") must not become a catalog
+            # category merely because it also appears in semantic_query.
+            if semantic_subcategory is not None and not text_mentions_filter(
+                query,
+                semantic_subcategory,
+            ):
+                inferred_subcategory = semantic_subcategory
         if inferred_subcategory is not None and is_repair_subject_usage(
             query,
             inferred_subcategory,

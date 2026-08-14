@@ -320,6 +320,37 @@ def test_gainr_vehicle_service_compounds_override_literal_vehicle_category(
     index.close()
 
 
+def test_invalid_planner_category_falls_back_to_semantic_rewrite_category(
+    tmp_path,
+):
+    index = PersistentBM25Index(tmp_path / "planner-category-validation.sqlite3")
+    index.upsert(
+        [
+            product_row(
+                "watch",
+                main_category_name="Life Style Products",
+                subcategory_name="Watch",
+            ),
+            product_row(
+                "camera",
+                main_category_name="Audio & Video Equipments",
+                subcategory_name="Camera",
+            ),
+        ]
+    )
+    value_index = query_filter_value_index(index)
+    plan = default_query_plan("Rado centrix")
+    plan["semantic_query"] = "Rado Centrix watch"
+    plan["keyword_query"] = "Rado Centrix"
+    plan["inferred_categories"]["subcategory"] = "Rado Centrix"
+
+    enriched = enrich_query_plan("Rado centrix", plan, value_index)
+
+    assert enriched["inferred_categories"]["subcategory"] == "Watch"
+    assert enriched["inferred_categories"]["main_category"] == ("Life Style Products")
+    index.close()
+
+
 def test_explicit_multilingual_gender_is_a_hard_user_filter(tmp_path):
     index = build_index(tmp_path / "gender-filter.sqlite3")
     value_index = query_filter_value_index(index)

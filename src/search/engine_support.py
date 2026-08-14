@@ -38,8 +38,8 @@ from search.planner import (
 from storage.database import fetch_product_types_by_ids, fetch_products_by_ids
 
 LOGGER = logging.getLogger("uvicorn.error")
-RESULT_CACHE_SCHEMA_VERSION = "v29"
-QUERY_PLAN_CACHE_SCHEMA_VERSION = "v20"
+RESULT_CACHE_SCHEMA_VERSION = "v30"
+QUERY_PLAN_CACHE_SCHEMA_VERSION = "v21"
 SPECULATIVE_EMBEDDING_DELAY_SECONDS = 0.025
 
 
