@@ -1054,6 +1054,23 @@ def test_gainr_repository_applies_legacy_category_and_attribute_filters(tmp_path
     ]
 
 
+def test_gainr_repository_applies_user_gender_during_final_hydration(tmp_path):
+    repository = GainrDatabaseRepository(
+        profile(tmp_path, serves_cards_from_search_ready=True)
+    )
+
+    where_clause, params = repository._where_clause(
+        {"categorical": {"user_gender": 2}},
+        GainrFilterResultRequest().filter,
+        product_ids=[127869, 126564],
+        allowed_ad_types={"1"},
+    )
+
+    assert "sr.user_gender = %s" in where_clause
+    assert "sr.id IN (%s, %s)" in where_clause
+    assert params == [2, "1", 127869, 126564]
+
+
 def test_gainr_wanted_budget_keeps_rows_without_a_published_budget(tmp_path):
     repository = GainrDatabaseRepository(profile(tmp_path))
 

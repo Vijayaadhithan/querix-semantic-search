@@ -228,6 +228,7 @@ class GainrDatabaseRepository:
             "state_id": "sr.state_id",
             "city_id": "sr.city_id",
             "locality_id": "sr.locality_id",
+            "user_gender": "sr.user_gender",
         }
         for key, value in resolved_filters.get("categorical", {}).items():
             expression = column_map.get(key)
