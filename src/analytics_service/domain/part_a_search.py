@@ -28,6 +28,11 @@ def _percentage(count, total):
 def process_part_a(data):
     LOGGER.info("Processing Part A: Search Demand Intelligence")
     sh = data["search_history"].copy()
+    # Empty search terms are catalogue/filter browsing requests. They remain
+    # available to internal API-performance analytics, but must not inflate
+    # textual demand, fulfillment, language, or zero-result metrics.
+    sh = sh[sh["query_text"].fillna("").astype(str).str.strip().ne("")].copy()
+    data = {**data, "search_history": sh}
     api = data["api_usage"].copy()
     results = {}
 

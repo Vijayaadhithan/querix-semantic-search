@@ -34,6 +34,11 @@ def process_part_b(data):
     LOGGER.info("Processing Part B: API Performance Analytics")
     api = data["api_usage"].copy()
     sh = data["search_history"].copy()
+    text_searches = sh[
+        sh["query_text"].fillna("").astype(str).str.strip().ne("")
+    ].copy()
+    text_request_ids = set(text_searches["request_id"].dropna().astype(str))
+    text_api = api[api["request_id"].astype(str).isin(text_request_ids)].copy()
     results = {}
 
     total_requests = len(api)
@@ -435,7 +440,7 @@ def process_part_b(data):
     }
 
     # Q35: Result count distribution
-    rc = api["result_count"].dropna()
+    rc = text_api["result_count"].dropna()
     rc_dist = Counter()
     for r in rc:
         if r == 0:
@@ -453,38 +458,42 @@ def process_part_b(data):
         "values": [
             rc_dist.get(k, 0) for k in ["0 results", "1-5", "6-10", "11-20", "20+"]
         ],
-        "avg_result_count": _rounded_stat(api["result_count"].mean()),
-        "avg_total_results": _rounded_stat(api["total_results"].mean()),
-        "title": "Result Count Distribution",
+        "avg_result_count": _rounded_stat(text_api["result_count"].mean()),
+        "avg_total_results": _rounded_stat(text_api["total_results"].mean()),
+        "title": "Text-Search Result Count Distribution",
         "chart_type": "bar",
     }
 
     # Q36: Zero-result rate
-    zero_results = int((api["total_results"] == 0).sum())
+    zero_results = int((text_api["total_results"] == 0).sum())
     results["q36_zero_result_rate"] = {
         "zero_count": zero_results,
-        "total": total_requests,
+        "total": len(text_api),
         "percentage": (
-            round(zero_results / total_requests * 100, 1) if total_requests else 0
+            round(zero_results / len(text_api) * 100, 1) if len(text_api) else 0
         ),
-        "title": "Zero-Result Rate",
+        "title": "Text-Search Zero-Result Rate",
         "chart_type": "stat",
     }
 
     # Q37: Average total_results by path
     tr_by_path = {}
-    for path in api["execution_path"].unique():
-        path_data = api[api["execution_path"] == path]
+    for path in text_api["execution_path"].unique():
+        path_data = text_api[text_api["execution_path"] == path]
         tr_by_path[path] = round(float(path_data["total_results"].mean()), 1)
     results["q37_results_by_path"] = {
         "labels": list(tr_by_path.keys()),
         "values": list(tr_by_path.values()),
-        "title": "Average Total Results by Execution Path",
+        "title": "Average Text-Search Results by Execution Path",
         "chart_type": "bar",
     }
 
     # Q38: Zero-result query terms
-    merged = api.merge(sh[["request_id", "query_text"]], on="request_id", how="left")
+    merged = text_api.merge(
+        text_searches[["request_id", "query_text"]],
+        on="request_id",
+        how="left",
+    )
     zero_q = merged[merged["total_results"] == 0]["query_text"].dropna().tolist()
     results["q38_zero_result_queries"] = {
         "queries": zero_q,

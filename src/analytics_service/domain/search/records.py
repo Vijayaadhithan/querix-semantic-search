@@ -68,6 +68,20 @@ TIMING_FIELDS = (
     "recent_search_ms",
 )
 
+_BROWSE_FILTER_FIELDS = (
+    "main_category",
+    "subcategory_id",
+    "subcategory",
+    "state",
+    "city_id",
+    "city",
+    "locality_id",
+    "locality",
+    "rental_duration",
+    "min_rental_fee",
+    "max_rental_fee",
+)
+
 
 def _json_value(value: Any, default: Any = None) -> Any:
     if value is None:
@@ -210,6 +224,39 @@ def _outcome(row: pd.Series) -> str:
     )
 
 
+def _request_kind(query: str, filters: dict[str, Any]) -> str:
+    if normalize_query(query):
+        return "text_search"
+    if any(filters.get(name) not in {None, ""} for name in _BROWSE_FILTER_FIELDS):
+        return "filtered_browse"
+    if str(filters.get("target_ad_type") or "offer").casefold() != "offer":
+        return "filtered_browse"
+    return "catalogue_browse"
+
+
+def _browse_label(filters: dict[str, Any], request_kind: str) -> str:
+    if request_kind == "catalogue_browse":
+        return "Catalogue browse"
+
+    details = []
+    category = filters.get("subcategory") or filters.get("main_category")
+    location = filters.get("locality") or filters.get("city") or filters.get("state")
+    if category:
+        details.append(str(category))
+    elif filters.get("subcategory_id") is not None:
+        details.append(f"subcategory #{filters['subcategory_id']}")
+    if location:
+        details.append(str(location))
+    elif filters.get("city_id") is not None:
+        details.append(f"city #{filters['city_id']}")
+    if filters.get("rental_duration"):
+        details.append(str(filters["rental_duration"]))
+    target_ad_type = str(filters.get("target_ad_type") or "offer").casefold()
+    if target_ad_type == "wanted":
+        details.append("wanted listings")
+    return "Filtered browse" + (f": {', '.join(details)}" if details else "")
+
+
 def _build_record(
     row: pd.Series,
     enrichments: dict[str, dict[str, Any]],
@@ -228,6 +275,7 @@ def _build_record(
     execution_path = _json_value(row.get("execution_path"), "missing")
     attempts = _sanitize_attempts(row.get("attempts_json"))
     filter_context = _sanitize_filter_context(row.get("context_json"))
+    request_kind = _request_kind(query, filter_context)
     stage_timings = _sanitize_timings(row.get("timings_json"), duration_ms)
     successful_attempts = sum(
         str(attempt.get("status") or "").casefold()
@@ -244,6 +292,7 @@ def _build_record(
         "request_id": str(_json_value(row.get("request_id"), "")),
         "query": query,
         "normalized_query": normalized,
+        "request_kind": request_kind,
         "created_at": str(
             _json_value(
                 row.get("created_at_query"), _json_value(row.get("created_at"), "")
@@ -261,6 +310,7 @@ def _build_record(
             "is_route": is_route_query(query),
             "is_b2b": is_b2b_query(query),
             "is_uncategorized": categories == ["Other / Uncategorized"],
+            "is_browse": request_kind != "text_search",
         },
         "outcome": _outcome(row),
         "filters": filter_context,
@@ -348,6 +398,19 @@ def build_query_records(
             for name, value in filters.items()
             if value is not None and value != ""
         }
+        if record["request_kind"] != "text_search":
+            record["query"] = _browse_label(
+                record["filters"],
+                record["request_kind"],
+            )
+            for name in ("main_category", "subcategory"):
+                value = record["filters"].get(name)
+                if value and value not in record["categories"]:
+                    record["categories"].append(str(value))
+            for name in ("state", "city", "locality"):
+                value = record["filters"].get(name)
+                if value and value not in record["locations"]:
+                    record["locations"].append(str(value))
     return {
         "metadata": {
             "schema_version": "2.0",
@@ -359,7 +422,12 @@ def build_query_records(
                     "zero_result",
                     "failure",
                     "telemetry_missing",
-                ]
+                ],
+                "request_kind": [
+                    "text_search",
+                    "filtered_browse",
+                    "catalogue_browse",
+                ],
             },
         },
         "queries": records,

@@ -127,6 +127,14 @@ def _record_attempts(record: dict[str, Any]) -> list[dict[str, Any]]:
     ]
 
 
+def _record_request_kind(record: dict[str, Any]) -> str:
+    request_kind = str(record.get("request_kind") or "").strip().casefold()
+    if request_kind:
+        return request_kind
+    has_text = bool(str(record.get("normalized_query") or "").strip())
+    return "text_search" if has_text else "catalogue_browse"
+
+
 def _matches(
     record: dict[str, Any],
     *,
@@ -330,14 +338,21 @@ def _activity_graph(
         if internal:
             status = str(dict(record.get("api") or {}).get("status") or "")
             key = "success" if status.casefold() in _SUCCESS_STATUSES else "failure"
+            buckets[label][key] += 1
         else:
             outcome = str(record.get("outcome") or "unknown").casefold()
-            key = (
-                outcome
-                if outcome in {"fulfilled", "zero_result", "failure"}
-                else "other"
-            )
-        buckets[label][key] += 1
+            if _record_request_kind(record) == "text_search":
+                buckets[label]["text_search"] += 1
+                key = (
+                    outcome
+                    if outcome in {"fulfilled", "zero_result", "failure"}
+                    else "other"
+                )
+                buckets[label][key] += 1
+            else:
+                buckets[label]["browse"] += 1
+                if outcome == "failure":
+                    buckets[label]["failure"] += 1
     labels = sorted(buckets)
     series_names = (
         (
@@ -347,9 +362,11 @@ def _activity_graph(
         )
         if internal
         else (
-            ("Searches", "total"),
+            ("All search activity", "total"),
+            ("Text searches", "text_search"),
             ("Fulfilled", "fulfilled"),
             ("Zero result", "zero_result"),
+            ("Catalogue/filter browse", "browse"),
             ("Failed", "failure"),
         )
     )
@@ -371,27 +388,46 @@ def _activity_graph(
 
 
 def _company_overview(records: list[dict[str, Any]]) -> dict[str, Any]:
-    outcomes = Counter(str(record.get("outcome") or "unknown") for record in records)
-    categories = Counter(
-        category for record in records for category in _record_categories(record)
+    text_records = [
+        record for record in records if _record_request_kind(record) == "text_search"
+    ]
+    browse_records = [
+        record for record in records if _record_request_kind(record) != "text_search"
+    ]
+    outcomes = Counter(
+        str(record.get("outcome") or "unknown") for record in text_records
     )
-    languages = Counter(str(record.get("language") or "Unknown") for record in records)
-    total = len(records)
+    browse_outcomes = Counter(
+        str(record.get("outcome") or "unknown") for record in browse_records
+    )
+    request_kinds = Counter(_record_request_kind(record) for record in records)
+    categories = Counter(
+        category for record in text_records for category in _record_categories(record)
+    )
+    languages = Counter(
+        str(record.get("language") or "Unknown") for record in text_records
+    )
+    total = len(text_records)
     fulfilled = outcomes.get("fulfilled", 0)
     result_counts = [
         int(dict(record.get("search") or {}).get("result_count") or 0)
-        for record in records
+        for record in text_records
     ]
     total_results = [
         int(dict(record.get("search") or {}).get("total_results") or 0)
-        for record in records
+        for record in text_records
     ]
     return {
         "summary": {
+            "all_requests": len(records),
             "searches": total,
+            "browse_requests": len(browse_records),
             "fulfilled": int(fulfilled),
             "zero_results": int(outcomes.get("zero_result", 0)),
             "failures": int(outcomes.get("failure", 0)),
+            "browse_fulfilled": int(browse_outcomes.get("fulfilled", 0)),
+            "browse_zero_results": int(browse_outcomes.get("zero_result", 0)),
+            "browse_failures": int(browse_outcomes.get("failure", 0)),
             "fulfillment_rate": round(fulfilled / total * 100, 1) if total else 0,
             "average_returned_results": round(mean(result_counts), 1)
             if result_counts
@@ -401,7 +437,12 @@ def _company_overview(records: list[dict[str, Any]]) -> dict[str, Any]:
             else 0,
         },
         "breakdowns": {
-            "outcomes": _counter_chart("Search Outcomes", outcomes),
+            "outcomes": _counter_chart("Text-Search Outcomes", outcomes),
+            "request_kinds": _counter_chart("Request Types", request_kinds),
+            "browse_outcomes": _counter_chart(
+                "Catalogue/Filter Browse Outcomes",
+                browse_outcomes,
+            ),
             "categories": _counter_chart("Searches by Category", categories),
             "languages": _counter_chart("Search Language", languages),
         },

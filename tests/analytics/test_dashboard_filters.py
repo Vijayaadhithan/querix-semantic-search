@@ -17,10 +17,13 @@ def _record(
     category="Vehicles",
     path="semantic",
     attempts=(),
+    request_kind="text_search",
 ):
     return {
         "request_id": request_id,
         "created_at": created_at,
+        "normalized_query": "bike" if request_kind == "text_search" else "",
+        "request_kind": request_kind,
         "outcome": outcome,
         "language": "English",
         "categories": [category],
@@ -67,6 +70,36 @@ def test_company_dashboard_filters_actual_city_and_period():
     ]
     assert payload["filtered_overview"]["summary"]["searches"] == 1
     assert payload["filtered_overview"]["main_graph"]["timezone"] == ("Asia/Kolkata")
+
+
+def test_company_overview_separates_text_searches_from_catalogue_browsing():
+    records = [
+        _record("text", "2026-08-07T10:00:00+00:00", outcome="zero_result"),
+        _record(
+            "browse",
+            "2026-08-07T10:01:00+00:00",
+            outcome="fulfilled",
+            request_kind="filtered_browse",
+        ),
+    ]
+
+    payload = build_dashboard_overview(
+        records,
+        internal=False,
+        filters=DashboardFilters(),
+        timezone_name="UTC",
+    )
+
+    overview = payload["filtered_overview"]
+    assert overview["summary"]["all_requests"] == 2
+    assert overview["summary"]["searches"] == 1
+    assert overview["summary"]["browse_requests"] == 1
+    assert overview["summary"]["zero_results"] == 1
+    assert overview["summary"]["browse_fulfilled"] == 1
+    assert overview["breakdowns"]["outcomes"]["labels"] == ["zero_result"]
+    series = {item["name"]: item["values"] for item in overview["main_graph"]["series"]}
+    assert series["Text searches"] == [1]
+    assert series["Catalogue/filter browse"] == [1]
 
 
 def test_internal_dashboard_splits_llm_and_reranker_tokens():

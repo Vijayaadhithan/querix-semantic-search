@@ -104,9 +104,20 @@ failure reasons, or internal latency diagnostics. Internal query records retain
 the full operational projection. Each internal record exposes stable
 `performance` and `token_usage` objects plus ordered provider/model `attempts`:
 
+Filter-only requests with an empty text term are catalogue browsing activity,
+not failed or malformed text searches. Query records classify every request as
+`text_search`, `filtered_browse`, or `catalogue_browse`. Browse records retain
+the original empty `normalized_query` for auditability while `query` contains a
+readable label such as `Filtered browse: Camera, Chennai`. Company fulfillment,
+language, category-demand, and zero-result metrics use only `text_search`
+records. Internal request success, latency, provider, and token metrics continue
+to include every request. This keeps HTTP success separate from search outcome:
+a request can complete successfully and still have a `zero_result` outcome.
+
 ```json
 {
   "query": "camera rent",
+  "request_kind": "text_search",
   "outcome": "fulfilled",
   "performance": {
     "server_duration_ms": 500.123,

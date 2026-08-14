@@ -23,6 +23,7 @@ from analytics_service.config import (
     DatasetMapping,
     load_company_analytics_config,
 )
+from analytics_service.domain import process_part_a, process_part_b
 from analytics_service.domain.search.records import build_query_records
 from analytics_service.metrics import (
     COMPANY_DEEP_METRICS,
@@ -606,6 +607,61 @@ def test_internal_query_marks_missing_operational_telemetry_as_unavailable():
         "result_hit": None,
     }
     assert all(value is None for value in record["performance"]["stages_ms"].values())
+
+
+def test_filter_only_browse_is_labeled_and_excluded_from_text_search_metrics():
+    data = analytics_data()
+    data["search_history"] = pd.concat(
+        [
+            data["search_history"],
+            pd.DataFrame(
+                [
+                    {
+                        "id": 3,
+                        "request_id": "req-browse",
+                        "query_text": "",
+                        "created_at": "2026-07-29 12:00:00",
+                    }
+                ]
+            ),
+        ],
+        ignore_index=True,
+    )
+    browse_usage = data["api_usage"].iloc[1].to_dict()
+    browse_usage.update(
+        {
+            "id": 12,
+            "request_id": "req-browse",
+            "context_json": (
+                '{"subcategory":"Camera","city":"Chennai","target_ad_type":"offer"}'
+            ),
+            "created_at": "2026-07-29 12:00:00",
+        }
+    )
+    data["api_usage"] = pd.concat(
+        [data["api_usage"], pd.DataFrame([browse_usage])],
+        ignore_index=True,
+    )
+
+    browse_record = next(
+        record
+        for record in build_query_records(data)["queries"]
+        if record["request_id"] == "req-browse"
+    )
+    search_metrics = process_part_a(data)
+    api_metrics = process_part_b(data)
+
+    assert browse_record["request_kind"] == "filtered_browse"
+    assert browse_record["query"] == "Filtered browse: Camera, Chennai"
+    assert browse_record["normalized_query"] == ""
+    assert browse_record["flags"]["is_browse"] is True
+    assert "Camera" in browse_record["categories"]
+    assert "Chennai" in browse_record["locations"]
+    assert search_metrics["q7_zero_results"]["total_searches"] == 2
+    assert search_metrics["q7_zero_results"]["total_zero"] == 1
+    assert sum(api_metrics["q21_success_rate"]["values"]) == 3
+    assert api_metrics["q36_zero_result_rate"]["total"] == 2
+    assert api_metrics["q36_zero_result_rate"]["zero_count"] == 1
 
 
 def test_refresh_applies_separate_company_and_internal_metric_profiles(

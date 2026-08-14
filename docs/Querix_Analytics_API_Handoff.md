@@ -364,6 +364,7 @@ Company response `200`:
       "request_id": "request-uuid",
       "query": "camera rent chennai",
       "normalized_query": "camera rent chennai",
+      "request_kind": "text_search",
       "created_at": "2026-07-29T11:00:00+00:00",
       "word_count": 3,
       "categories": ["Electronics"],
@@ -385,6 +386,12 @@ Company response `200`:
   "next_cursor": "<opaque cursor>"
 }
 ```
+
+`request_kind` is `text_search`, `filtered_browse`, or `catalogue_browse`.
+Filter-only requests keep an empty `normalized_query`, while `query` contains a
+readable analytics label such as `Filtered browse: Camera, Chennai`. Company
+text-search fulfillment and zero-result metrics exclude both browse kinds;
+internal API request totals continue to include them.
 
 The internal response uses the same envelope, but each item additionally
 contains operational `performance`, `token_usage`, `api`, and `attempts`

@@ -45,6 +45,7 @@ def _company_query_record(record: dict[str, Any]) -> dict[str, Any]:
         "request_id": record.get("request_id"),
         "query": record.get("query"),
         "normalized_query": record.get("normalized_query"),
+        "request_kind": record.get("request_kind"),
         "created_at": record.get("created_at"),
         "word_count": record.get("word_count"),
         "categories": list(record.get("categories") or []),

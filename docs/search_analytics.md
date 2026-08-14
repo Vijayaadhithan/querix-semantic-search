@@ -106,6 +106,13 @@ Nullable cache or timing values mean the value was unavailable, particularly
 for rows written before this additive schema version. Ollama embedding calls
 are counted even though its embedding endpoint does not report token usage.
 
+An empty `query_text` can be a valid filter-only catalogue request carrying
+city, category, duration, price, or wanted/offer context. These requests remain
+in operational API totals and are classified as browsing by the analytics
+snapshot. They are excluded from text-query demand and text-query zero-result
+rates, preventing catalogue browsing from appearing as blank search terms or
+inflating unmet textual demand.
+
 Authenticated requests that fail after search processing starts are retained
 with `status = 'failure'`, zero results, and one internal failure attempt. The
 attempt stores only the exception class in `failure_reason`, never the
