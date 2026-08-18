@@ -173,6 +173,17 @@ _BABY_PHOTOGRAPHER_PATTERN = re.compile(
     r"|\b(?:baby|babies|newborn|infant)\b.*\b"
     r"(?:photographer|photography|photo\s*shoot|functions?)\b"
 )
+_BIRIYANI_MASTER_PATTERN = re.compile(r"\bb(?:ir|ri|iri)yani\s+(?:cooking\s+)?master\b")
+_AUTOMOTIVE_MECHANIC_PATTERN = re.compile(
+    r"\b(?:car|automobile|four[\s-]+wheeler)\b"
+    r"(?:\s+[a-z0-9'-]+){0,3}\s+"
+    r"\b(?:breakdown|mechanic|repair(?:er|ing)?|servic(?:e|ing))\b"
+    r"|\b(?:breakdown|mechanic|repair(?:er|ing)?|servic(?:e|ing))\b"
+    r"(?:\s+[a-z0-9'-]+){0,3}\s+"
+    r"\b(?:car|automobile|four[\s-]+wheeler)\b"
+    r"|\bmechanic\b(?:\s+[a-z0-9'-]+){0,3}\s+"
+    r"\b(?:breakdown|road[\s-]*side|assistance|assitance)\b"
+)
 _AMBIGUOUS_VEHICLE_SERVICE_PATTERN = re.compile(
     r"\b(?:bike|car|vehicle)\b(?:\s+[a-z0-9'-]+){0,2}\s+"
     r"\b(?:acting\s+driver|driver|paint(?:ing|er)?|repair|mechanic|"
@@ -396,7 +407,7 @@ def _candidate_text(candidate: dict) -> str:
 class GainrSearchPolicy:
     """Gainr marketplace interpretation without coupling it to the engine."""
 
-    cache_key = "gainr-marketplace-v11"
+    cache_key = "gainr-marketplace-v12"
 
     @staticmethod
     def _is_tamil_load_transport_request(query: str) -> bool:
@@ -526,6 +537,32 @@ class GainrSearchPolicy:
     ) -> CategoryIntent | None:
         normalized = normalize_filter_value(query)
         tokens = _tokens(normalized)
+        biriyani_master_match = _BIRIYANI_MASTER_PATTERN.search(normalized)
+        if biriyani_master_match is not None:
+            actual = values.get("biriyani master")
+            if actual is not None:
+                return CategoryIntent(
+                    subcategory=actual,
+                    consumed_tokens=frozenset(_tokens(biriyani_master_match.group(0))),
+                    # Queries commonly contain the catalogue child "Master"
+                    # as a literal suffix. The full role phrase is more
+                    # specific and must win over that generic child.
+                    override_explicit_conflict=True,
+                )
+        automotive_mechanic_match = _AUTOMOTIVE_MECHANIC_PATTERN.search(normalized)
+        if automotive_mechanic_match is not None:
+            actual = values.get("mechanic")
+            if actual is not None:
+                return CategoryIntent(
+                    subcategory=actual,
+                    consumed_tokens=frozenset(
+                        _tokens(automotive_mechanic_match.group(0))
+                    ),
+                    main_category="Automotive Professionals",
+                    # "Car" is a valid product child, but in an explicit
+                    # repair/mechanic phrase it names the service subject.
+                    override_explicit_conflict=True,
+                )
         academic_match = _ACADEMIC_SUBJECT_TEACHER_PATTERN.search(normalized)
         if academic_match is not None:
             role = "tutor" if "tutor" in academic_match.group(0) else "teacher"

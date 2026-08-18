@@ -3,6 +3,8 @@ import threading
 import time
 from concurrent.futures import Future
 
+import pytest
+
 from search import engine as search_engine
 from search import planner_catalog as query_planner_catalog
 from search.bm25 import PersistentBM25Index
@@ -355,6 +357,86 @@ def test_gainr_vehicle_service_compounds_override_literal_vehicle_category(
     assert painting["filters"]["subcategory"] is None
     assert painting["inferred_categories"]["subcategory"] == "Painter"
     assert "subcategory" in painting["relaxed_categories"]
+    index.close()
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "Biryani master for mutton biryani",
+        "Briyani master for chicken briyani",
+        "Mutton biriyani master for home event",
+    ],
+)
+def test_gainr_biriyani_specializations_override_generic_master_filter(
+    tmp_path,
+    query,
+):
+    index = PersistentBM25Index(tmp_path / "gainr-biriyani-master.sqlite3")
+    index.upsert(
+        [
+            product_row(
+                "generic-master",
+                main_category_name="Food & Accommodation Industry",
+                subcategory_name="Master",
+            ),
+            product_row(
+                "biriyani-master",
+                main_category_name="Food & Accommodation Industry",
+                subcategory_name="Biriyani Master",
+            ),
+        ]
+    )
+    value_index = query_filter_value_index(index)
+    planner_plan = default_query_plan(query)
+    planner_plan["filters"]["subcategory"] = "Master"
+
+    result = enrich_query_plan(
+        query,
+        planner_plan,
+        value_index,
+        search_policy=GainrSearchPolicy(),
+    )
+
+    assert result["filters"]["main_category"] == "Food & Accommodation Industry"
+    assert result["filters"]["subcategory"] == "Biriyani Master"
+    assert result["inferred_categories"]["subcategory"] is None
+    index.close()
+
+
+def test_gainr_car_mechanic_specialization_overrides_car_product_filter(tmp_path):
+    index = PersistentBM25Index(tmp_path / "gainr-car-mechanic.sqlite3")
+    index.upsert(
+        [
+            product_row(
+                "car",
+                main_category_name="Automobiles",
+                subcategory_name="Car",
+            ),
+            product_row(
+                "car-mechanic",
+                main_category_name="Automotive Professionals",
+                subcategory_name="Mechanic",
+            ),
+        ]
+    )
+    value_index = query_filter_value_index(index)
+    query = "Car mechanic for road side assistance"
+    planner_plan = default_query_plan(query)
+    planner_plan["filters"]["main_category"] = "Automobiles"
+    planner_plan["filters"]["subcategory"] = "Car"
+
+    result = enrich_query_plan(
+        query,
+        planner_plan,
+        value_index,
+        search_policy=GainrSearchPolicy(),
+    )
+
+    assert result["filters"]["main_category"] == "Automotive Professionals"
+    assert result["filters"]["subcategory"] == "Mechanic"
+    assert result["inferred_categories"]["main_category"] is None
+    assert result["inferred_categories"]["subcategory"] is None
     index.close()
 
 

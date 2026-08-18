@@ -60,6 +60,45 @@ def test_gainr_academic_teacher_overrides_subject_product_category():
     assert intent.override_explicit_conflict is True
 
 
+@pytest.mark.parametrize(
+    "query",
+    [
+        "Biryani master for mutton biryani",
+        "Briyani master for chicken briyani",
+        "Mutton biriyani master for home event",
+    ],
+)
+def test_gainr_biriyani_master_variants_keep_the_specific_role(query):
+    intent = GainrSearchPolicy().category_intent(
+        query,
+        {"master": "Master", "biriyani master": "Biriyani Master"},
+    )
+
+    assert intent is not None
+    assert intent.subcategory == "Biriyani Master"
+    assert intent.override_explicit_conflict is True
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "Car mechanic for road side assistance",
+        "car repair service at home",
+        "mechanic for road side assitance",
+    ],
+)
+def test_gainr_automotive_mechanic_language_overrides_the_car_product(query):
+    intent = GainrSearchPolicy().category_intent(
+        query,
+        {"car": "Car", "mechanic": "Mechanic"},
+    )
+
+    assert intent is not None
+    assert intent.subcategory == "Mechanic"
+    assert intent.main_category == "Automotive Professionals"
+    assert intent.override_explicit_conflict is True
+
+
 def test_unknown_policy_is_rejected_without_falling_back():
     with pytest.raises(ValueError, match="Unsupported search policy"):
         build_search_policy("unknown")
