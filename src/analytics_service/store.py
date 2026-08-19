@@ -67,6 +67,87 @@ class AnalyticsSnapshotStore:
         ] = {}
         self._initialize()
 
+    @staticmethod
+    def _dashboard_activity_record(
+        payload_json: str,
+        *,
+        internal: bool,
+    ) -> dict[str, Any]:
+        """Return only the fields used to calculate dashboard activity views.
+
+        Query Explorer responses retain the complete, audience-specific payload in
+        SQLite.  Keeping those full decoded payloads in the dashboard cache is
+        disproportionately expensive: a large nested JSON document becomes many
+        Python objects for every historical request.  This compact projection
+        preserves the dashboard/filter contract without retaining query text,
+        enrichment, flags, or unused telemetry in the long-lived cache.
+        """
+        payload = json.loads(payload_json)
+        filters = dict(payload.get("filters") or {})
+        record: dict[str, Any] = {
+            "created_at": payload.get("created_at"),
+            "normalized_query": payload.get("normalized_query"),
+            "request_kind": payload.get("request_kind"),
+            "outcome": payload.get("outcome"),
+            "categories": list(payload.get("categories") or ()),
+            "language": payload.get("language"),
+            "filters": {
+                name: filters[name]
+                for name in (
+                    "main_category",
+                    "subcategory",
+                    "city",
+                    "city_id",
+                    "target_ad_type",
+                )
+                if name in filters
+            },
+        }
+        if not internal:
+            search = dict(payload.get("search") or {})
+            record["search"] = {
+                "result_count": search.get("result_count"),
+                "total_results": search.get("total_results"),
+            }
+            return record
+
+        api = dict(payload.get("api") or {})
+        performance = dict(payload.get("performance") or {})
+        cache = dict(performance.get("cache") or {})
+        record["api"] = {"status": api.get("status")}
+        record["performance"] = {
+            "execution_path": performance.get("execution_path"),
+            "total_server_duration_ms": performance.get("total_server_duration_ms"),
+            "downstream_api_calls": performance.get("downstream_api_calls"),
+            "cache": {
+                name: cache[name]
+                for name in ("plan_hit", "result_hit")
+                if cache.get(name) is not None
+            },
+            "stages_ms": {
+                str(name): value
+                for name, value in dict(performance.get("stages_ms") or {}).items()
+                if isinstance(value, (int, float))
+            },
+        }
+        record["attempts"] = [
+            {
+                name: attempt.get(name)
+                for name in (
+                    "provider",
+                    "operation",
+                    "api_calls",
+                    "input_tokens",
+                    "output_tokens",
+                    "thought_tokens",
+                    "total_tokens",
+                )
+            }
+            for attempt in payload.get("attempts") or ()
+            if isinstance(attempt, dict)
+        ]
+        return record
+
     @contextmanager
     def _connection(self) -> Iterator[sqlite3.Connection]:
         connection = sqlite3.connect(
@@ -375,7 +456,10 @@ class AnalyticsSnapshotStore:
                 """,
                 (company_id, version),
             ).fetchall()
-        records = tuple(json.loads(row["payload_json"]) for row in rows)
+        records = tuple(
+            self._dashboard_activity_record(row["payload_json"], internal=internal)
+            for row in rows
+        )
         with self._lock:
             self._activity_cache[cache_key] = records
         return records

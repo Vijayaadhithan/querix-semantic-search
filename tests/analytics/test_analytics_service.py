@@ -23,6 +23,10 @@ from analytics_service.config import (
     DatasetMapping,
     load_company_analytics_config,
 )
+from analytics_service.dashboard_filters import (
+    DashboardFilters,
+    build_dashboard_overview,
+)
 from analytics_service.domain import process_part_a, process_part_b
 from analytics_service.domain.search.records import build_query_records
 from analytics_service.metrics import (
@@ -561,6 +565,51 @@ def test_daily_refresh_publishes_both_audiences_and_queries(tmp_path):
     assert semantic_queries["items"][0]["performance"]["execution_path"] == "semantic"
     assert "performance" not in company_queries["items"][0]
     assert "token_usage" not in company_queries["items"][0]
+
+
+def test_dashboard_activity_cache_uses_compact_records_without_changing_metrics(
+    tmp_path,
+):
+    company = analytics_company(tmp_path)
+    store = AnalyticsSnapshotStore(tmp_path / "snapshots.sqlite3")
+    AnalyticsRefreshService(FakeSource(analytics_data()), store).refresh(company)
+
+    compact_company = store.dashboard_activity_records("gainr", internal=False)
+    compact_internal = store.dashboard_activity_records("gainr", internal=True)
+    full_company = store.query_records(
+        "gainr",
+        internal=False,
+        limit=10,
+        include_filtered_results=True,
+    )["items"]
+    full_internal = store.query_records("gainr", internal=True, limit=10)["items"]
+
+    assert "query" not in compact_company[0]
+    assert "flags" not in compact_company[0]
+    assert "token_usage" not in compact_internal[0]
+    assert "measurement_scope" not in compact_internal[0]["performance"]
+    assert build_dashboard_overview(
+        list(compact_company),
+        internal=False,
+        filters=DashboardFilters(),
+        timezone_name="UTC",
+    ) == build_dashboard_overview(
+        full_company,
+        internal=False,
+        filters=DashboardFilters(),
+        timezone_name="UTC",
+    )
+    assert build_dashboard_overview(
+        list(compact_internal),
+        internal=True,
+        filters=DashboardFilters(),
+        timezone_name="UTC",
+    ) == build_dashboard_overview(
+        full_internal,
+        internal=True,
+        filters=DashboardFilters(),
+        timezone_name="UTC",
+    )
 
 
 def test_daily_refresh_supports_empty_search_telemetry(tmp_path):
