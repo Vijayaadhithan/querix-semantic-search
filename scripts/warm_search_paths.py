@@ -18,6 +18,7 @@ from warm_hnsw import DEFAULT_QUERIES, warm_hnsw
 
 from core.tenant_config import load_tenant_registry
 from search.bm25 import tokenize_query
+from storage.index_generations import resolve_generation
 
 
 def prewarm_file(path: Path, chunk_size: int = 8 * 1024 * 1024) -> dict[str, float]:
@@ -100,7 +101,9 @@ def main() -> None:
     # keeps the Ollama model and the pgvector HNSW path warm.
     warm_hnsw(args.company, queries, args.candidates)
 
-    profile = load_tenant_registry(require_api_keys=False).get(args.company)
+    profile = resolve_generation(
+        load_tenant_registry(require_api_keys=False).get(args.company)
+    ).profile
     bm25 = warm_bm25(
         profile.storage.bm25_path,
         queries,

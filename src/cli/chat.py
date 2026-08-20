@@ -7,6 +7,7 @@ from core.tenant_config import discover_tenant_profiles
 from search.bm25 import PersistentBM25Index
 from search.engine import ProductSearchEngine
 from search.policy_registry import build_search_policy
+from storage.index_generations import resolve_generation
 from storage.vector import get_tenant_vector_collection
 
 
@@ -19,6 +20,7 @@ def build_engine(company: str) -> ProductSearchEngine:
         raise RuntimeError(
             f"Unknown company {company!r}; available: {available}"
         ) from exc
+    profile = resolve_generation(profile).profile
     engine = ProductSearchEngine(
         collection=get_tenant_vector_collection(profile),
         bm25_index=PersistentBM25Index(profile.storage.bm25_path),

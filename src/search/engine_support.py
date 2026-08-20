@@ -209,6 +209,7 @@ class SearchEngineSupportMixin:
         version_parts = (
             RESULT_CACHE_SCHEMA_VERSION,
             self.company_id or "legacy",
+            str(getattr(self, "index_generation", "legacy-a")),
             str(self.bm25_index.revision()),
             str(self.bm25_index.count()),
             str(limit),

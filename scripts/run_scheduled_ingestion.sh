@@ -8,6 +8,7 @@ WARMUP_LOCK_FILE="${WARMUP_LOCK_FILE:-/tmp/semantic-search-warmup-${COMPANY_ID}.
 CONTAINER_NAME="${INGEST_CONTAINER_NAME:-semantic-search-ingest-${COMPANY_ID}}"
 MYSQL_BATCH_SIZE="${MYSQL_BATCH_SIZE:-500}"
 EMBED_BATCH_SIZE="${EMBED_BATCH_SIZE:-32}"
+RETRIEVAL_OVERLAP_FLOOR="${RETRIEVAL_OVERLAP_FLOOR:-0.80}"
 
 if ! [[ "$MYSQL_BATCH_SIZE" =~ ^[1-9][0-9]*$ ]]; then
   echo "MYSQL_BATCH_SIZE must be a positive integer." >&2
@@ -15,6 +16,10 @@ if ! [[ "$MYSQL_BATCH_SIZE" =~ ^[1-9][0-9]*$ ]]; then
 fi
 if ! [[ "$EMBED_BATCH_SIZE" =~ ^[1-9][0-9]*$ ]]; then
   echo "EMBED_BATCH_SIZE must be a positive integer." >&2
+  exit 1
+fi
+if ! [[ "$RETRIEVAL_OVERLAP_FLOOR" =~ ^(0(\.[0-9]+)?|1(\.0+)?)$ ]]; then
+  echo "RETRIEVAL_OVERLAP_FLOOR must be between zero and one." >&2
   exit 1
 fi
 
@@ -47,34 +52,12 @@ if docker container inspect "$CONTAINER_NAME" >/dev/null 2>&1; then
 fi
 trap cleanup_container EXIT TERM INT
 
-echo "Starting incremental ingestion for ${COMPANY_ID} at $(date --iso-8601=seconds)."
-docker compose run --rm --name "$CONTAINER_NAME" api python -m cli.ingest \
+echo "Starting shadow ingestion for ${COMPANY_ID} at $(date --iso-8601=seconds)."
+docker compose run --rm --no-deps --name "$CONTAINER_NAME" api \
+  python scripts/run_shadow_ingestion.py \
   --company "$COMPANY_ID" \
-  --database \
-  --mysql-reconcile-deletions \
   --mysql-batch-size "$MYSQL_BATCH_SIZE" \
-  --embed-batch-size "$EMBED_BATCH_SIZE"
-
-# The API keeps tenant indexes and filter catalogues open in memory. Restart
-# only after a successful ingestion so the next request sees the new revision.
-docker compose restart api
-
-api_ready=false
-for _attempt in $(seq 1 30); do
-  if curl -fsS http://127.0.0.1:8000/api/v1/ready >/dev/null; then
-    api_ready=true
-    break
-  fi
-  sleep 5
-done
-
-if [[ "$api_ready" != "true" ]]; then
-  echo "Ingestion completed, but the API did not become ready within 150 seconds." >&2
-  exit 1
-fi
-
-echo "API is ready; warming vector and BM25 search paths."
-docker compose exec -T api python scripts/warm_search_paths.py \
-  --company "$COMPANY_ID" \
-  --candidates 800
-echo "Incremental ingestion and search-path warm-up completed."
+  --embed-batch-size "$EMBED_BATCH_SIZE" \
+  --overlap-floor "$RETRIEVAL_OVERLAP_FLOOR"
+curl -fsS http://127.0.0.1:8000/api/v1/ready >/dev/null
+echo "Shadow ingestion, validation, pre-promotion warm-up, and hot activation completed."

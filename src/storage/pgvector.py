@@ -69,6 +69,67 @@ class PgVectorCollection:
     def name(self) -> str:
         return self.table
 
+    @classmethod
+    def table_exists(cls, config: PostgresRuntimeConfig, table: str) -> bool:
+        with postgres_connection(config, dict_rows=True) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT to_regclass(%s) AS table_name",
+                    (f"{config.schema}.{table}",),
+                )
+                return cursor.fetchone()["table_name"] is not None
+
+    @classmethod
+    def drop_table(cls, config: PostgresRuntimeConfig, table: str) -> None:
+        with postgres_connection(config) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(f"DROP TABLE IF EXISTS {qualified_table(config, table)}")
+
+    def clone_to(self, table: str) -> PgVectorCollection:
+        """Create and populate a second physical collection once.
+
+        Daily runs reuse the inactive collection. This full copy is therefore
+        a one-time migration path from the legacy single-generation layout.
+        """
+        if table == self.table:
+            raise ValueError("Cannot clone a pgvector collection onto itself.")
+        if self.table_exists(self.config, table):
+            raise RuntimeError(
+                f"Candidate pgvector table {self.config.schema}.{table} already exists."
+            )
+        with postgres_connection(self.config) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    f"""
+                    CREATE TABLE {qualified_table(self.config, table)} (
+                        id TEXT PRIMARY KEY,
+                        document TEXT NOT NULL,
+                        embedding vector({self.dimensions}) NOT NULL,
+                        metadata JSONB NOT NULL
+                    )
+                    """
+                )
+                cursor.execute(
+                    f"INSERT INTO {qualified_table(self.config, table)} "
+                    f"SELECT id, document, embedding, metadata FROM {self._qualified()}"
+                )
+        # Build HNSW and filter indexes after the bulk copy. This avoids the
+        # substantially slower row-by-row maintenance cost during bootstrap.
+        candidate = PgVectorCollection(
+            self.config,
+            table,
+            self.dimensions,
+            hnsw_m=self.hnsw_m,
+            hnsw_ef_construction=self.hnsw_ef_construction,
+            hnsw_ef_search=self.hnsw_ef_search,
+            query_mode=self.query_mode,
+            create=True,
+        )
+        with postgres_connection(self.config) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(f"ANALYZE {candidate._qualified()}")
+        return candidate
+
     def prewarm_hnsw_index(self, *, mode: str = "read") -> dict[str, Any]:
         """Load the vector heap first and the HNSW index last.
 

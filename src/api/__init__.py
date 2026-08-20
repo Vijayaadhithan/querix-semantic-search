@@ -425,6 +425,16 @@ def create_app(
                     "company_id": company_id,
                     "endpoint_slug": (profile.endpoint_slug or profile.company_id),
                     "loaded": service is not None,
+                    "index_generation": (
+                        getattr(service, "index_generation", None)
+                        if service is not None
+                        else None
+                    ),
+                    "index_generation_slot": (
+                        getattr(service, "index_generation_slot", None)
+                        if service is not None
+                        else None
+                    ),
                     "health": (
                         service.health().model_dump() if service is not None else None
                     ),
@@ -472,6 +482,41 @@ def create_app(
             ),
         }
 
+    @application.post(
+        "/api/v1/{company_endpoint}/admin/reload-index",
+        tags=["company-admin"],
+    )
+    def company_admin_reload_index(
+        company_endpoint: str,
+        slot: str | None = Query(default=None, pattern="^(a|b)$"),
+        generation: str | None = Query(default=None, min_length=1, max_length=128),
+        x_admin_key: str | None = Header(
+            default=None,
+            alias="X-Admin-Key",
+        ),
+    ) -> dict[str, Any]:
+        require_admin_key(x_admin_key)
+        profile = application.state.tenant_registry.resolve_endpoint(company_endpoint)
+        if profile is None:
+            raise HTTPException(status_code=404, detail="Unknown company endpoint.")
+        try:
+            if slot is not None or generation is not None:
+                if slot is None or generation is None:
+                    raise HTTPException(
+                        status_code=422,
+                        detail="slot and generation must be supplied together.",
+                    )
+                return application.state.tenant_service_pool.activate_candidate(
+                    profile.company_id,
+                    slot=slot,
+                    generation=generation,
+                )
+            return application.state.tenant_service_pool.reload_generation(
+                profile.company_id
+            )
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
     @application.get(
         "/api/v1/{company_endpoint}/admin/status",
         tags=["company-admin"],
@@ -495,6 +540,12 @@ def create_app(
         return {
             "status": "ok",
             "company_id": service.company_id,
+            "index_generation": getattr(service, "index_generation", None),
+            "index_generation_slot": getattr(
+                service,
+                "index_generation_slot",
+                None,
+            ),
             "process": process_monitor_status(),
             "health": service.health().model_dump(),
             "searches": service.monitor_status(),
@@ -505,6 +556,28 @@ def create_app(
                 else None
             ),
         }
+
+    @application.post(
+        "/api/v1/{company_endpoint}/admin/rollback-index",
+        tags=["company-admin"],
+    )
+    def company_admin_rollback_index(
+        company_endpoint: str,
+        x_admin_key: str | None = Header(
+            default=None,
+            alias="X-Admin-Key",
+        ),
+    ) -> dict[str, Any]:
+        require_admin_key(x_admin_key)
+        profile = application.state.tenant_registry.resolve_endpoint(company_endpoint)
+        if profile is None:
+            raise HTTPException(status_code=404, detail="Unknown company endpoint.")
+        try:
+            return application.state.tenant_service_pool.rollback_generation(
+                profile.company_id
+            )
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     @application.get(
         "/api/v1/{company_endpoint}/admin/search-events",

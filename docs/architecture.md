@@ -201,13 +201,20 @@ without recalculating unchanged embeddings. An explicit namespace migration
 re-keys transferred vectors to the authoritative company's identity while
 preserving their embedding values.
 
-Production runs the guarded incremental job around 03:00 IST. It prevents
-overlap, uploads the durable analytics-spool snapshot, reconciles deletions
-after a full source scan, and restarts the API only after successful ingestion.
-An analytics upload failure retains the local rows for retry without blocking
-ingestion. After readiness passes, the job warms the configured pgvector HNSW
-paths and the persistent BM25 index. An unchanged scan does not advance the
-BM25 revision.
+Production runs a guarded per-tenant shadow-generation job around 03:00 IST.
+The active generation remains read-only to ingestion and continues serving.
+The inactive pgvector table and BM25 file receive the complete incremental
+reconciliation. Count equality, representative vector/BM25 overlap, and warm
+query success gate activation. The tenant service pool builds the candidate
+service outside its routing lock and atomically swaps only after readiness;
+in-flight requests retain the previous service until they drain. No API
+container restart is part of scheduled ingestion.
+
+The selected slot and generation token live in an atomically published tenant
+manifest. The token participates in result-cache keys. Backups include both
+physical slots and the manifest; the preceding slot remains available for
+rollback. Each tenant has independent slots, locks, paths, tables, and
+activation, so one company's ingestion cannot block another company's search.
 
 Deletion reconciliation is an explicit full-scan operation. A limited scan cannot reconcile deletions because unseen source rows may still be valid. A full replacement clears only the selected tenant's vector source and BM25 index.
 

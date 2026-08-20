@@ -1941,6 +1941,23 @@ def test_plan_cache_fingerprint_changes_with_catalog(tmp_path):
     second_index.close()
 
 
+def test_result_cache_key_changes_with_index_generation(tmp_path):
+    index = build_index(tmp_path / "generation-cache.sqlite3")
+    engine = ProductSearchEngine(
+        collection=FakeCollection(),
+        bm25_index=index,
+        query_provider=CountingQueryProvider(),
+    )
+    engine.index_generation = "generation-a"
+    first = engine._result_cache_key("red bike", 20)
+    engine.index_generation = "generation-b"
+    second = engine._result_cache_key("red bike", 20)
+
+    assert first != second
+    engine.close()
+    index.close()
+
+
 def test_shared_plan_cache_survives_engine_restart(tmp_path):
     index = build_index(tmp_path / "shared-plan-cache.sqlite3")
     cache = DictSharedCache()

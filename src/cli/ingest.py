@@ -8,6 +8,7 @@ from ingestion.service import (
     ingest_mysql_source,
     rebuild_mysql_bm25_index,
 )
+from storage.index_generations import resolve_generation
 from storage.vector import (
     clear_tenant_vectors,
     delete_tenant_source,
@@ -138,6 +139,7 @@ def main() -> None:
         raise SystemExit(
             f"Unknown company {args.company!r}; available: {available}"
         ) from exc
+    tenant = resolve_generation(tenant).profile
 
     if args.list:
         list_tenant_vectors(tenant)

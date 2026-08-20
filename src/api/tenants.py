@@ -16,6 +16,13 @@ from search.bm25 import PersistentBM25Index
 from search.engine import ProductSearchEngine
 from search.policy_registry import build_search_policy
 from search.reranker import SharedReranker
+from storage.index_generations import (
+    profile_for_slot,
+    promote_candidate,
+    read_generation_state,
+    resolve_generation,
+    restore_active_slot,
+)
 from storage.search_analytics import MySQLSearchAnalyticsStore
 from storage.search_analytics_spool import SQLiteSearchAnalyticsSpoolStore
 from storage.usage import MonthlyUsageStore
@@ -56,7 +63,9 @@ class TenantServicePool:
         self.reranker_load_ms = 0.0
         self.embedding_warmup: dict[str, Any] = {}
         self._services: OrderedDict[str, ProductSearchService] = OrderedDict()
+        self._retired_services: list[tuple[float, ProductSearchService]] = []
         self._lock = threading.Lock()
+        self._reload_lock = threading.Lock()
 
     def preload_reranker(self) -> float:
         _ranker, seconds = self.shared_reranker.ensure()
@@ -68,17 +77,19 @@ class TenantServicePool:
         for company_id, profile in self.registry.profiles.items():
             if not profile.storage.pgvector_prewarm_on_startup:
                 continue
+            resolved = resolve_generation(profile)
+            active_profile = resolved.profile
             started = time.perf_counter()
             try:
                 collection = _api_dependency(
                     "get_tenant_vector_collection",
                     get_tenant_vector_collection,
                 )(
-                    profile,
+                    active_profile,
                     create=False,
                 )
                 result = collection.prewarm_hnsw_index(
-                    mode=profile.storage.pgvector_prewarm_mode
+                    mode=active_profile.storage.pgvector_prewarm_mode
                 )
             except Exception as exc:
                 result = {
@@ -100,7 +111,7 @@ class TenantServicePool:
                     "table_blocks=%d table_bytes=%d index=%s mode=%s "
                     "index_blocks=%d index_bytes=%d duration_ms=%.0f",
                     company_id,
-                    result.get("table", profile.storage.pgvector_table),
+                    result.get("table", active_profile.storage.pgvector_table),
                     result.get("table_blocks", 0),
                     result.get("table_bytes", 0),
                     result["index"],
@@ -159,24 +170,211 @@ class TenantServicePool:
         return results
 
     def get(self, company_id: str) -> ProductSearchService:
+        retired: list[ProductSearchService] = []
         with self._lock:
+            retired = self._collect_retired_locked()
             existing = self._services.get(company_id)
             if existing is not None:
                 self._services.move_to_end(company_id)
-                return existing
-            profile = self.registry.get(company_id)
-            service = self._build_service(profile)
-            self._services[company_id] = service
-            while len(self._services) > self.max_services:
-                _evicted_id, evicted = self._services.popitem(last=False)
-                evicted.close()
-            return service
+                service = existing
+            else:
+                resolved = resolve_generation(self.registry.get(company_id))
+                service = self._build_service(
+                    resolved.profile,
+                    generation=resolved.generation,
+                    generation_slot=resolved.slot,
+                )
+                self._services[company_id] = service
+                while len(self._services) > self.max_services:
+                    _evicted_id, evicted = self._services.popitem(last=False)
+                    retired.append(evicted)
+        for item in retired:
+            item.close()
+        return service
+
+    def _collect_retired_locked(self) -> list[ProductSearchService]:
+        now = time.monotonic()
+        ready = []
+        retained = []
+        for not_before, service in self._retired_services:
+            if not_before <= now and service.monitor_status()["active"] == 0:
+                ready.append(service)
+            else:
+                retained.append((not_before, service))
+        self._retired_services = retained
+        return ready
+
+    def reload_generation(self, company_id: str) -> dict[str, Any]:
+        """Build the selected generation, then atomically route new requests."""
+        started = time.perf_counter()
+        with self._reload_lock:
+            resolved = resolve_generation(self.registry.get(company_id))
+            with self._lock:
+                current = self._services.get(company_id)
+                if (
+                    current is not None
+                    and getattr(current, "index_generation", None)
+                    == resolved.generation
+                    and getattr(current, "index_generation_slot", None) == resolved.slot
+                ):
+                    return {
+                        "status": "unchanged",
+                        "company_id": company_id,
+                        "generation": resolved.generation,
+                        "slot": resolved.slot,
+                        "duration_ms": (time.perf_counter() - started) * 1000,
+                    }
+
+            candidate = self._build_service(
+                resolved.profile,
+                generation=resolved.generation,
+                generation_slot=resolved.slot,
+            )
+            readiness = candidate.readiness()
+            if not readiness["ok"]:
+                candidate.close()
+                raise RuntimeError("Candidate index generation is not ready.")
+
+            with self._lock:
+                previous = self._services.get(company_id)
+                self._services[company_id] = candidate
+                self._services.move_to_end(company_id)
+                if previous is not None:
+                    # A request can obtain the previous service immediately
+                    # before the swap and increment its active counter just
+                    # afterwards. A grace period avoids closing that lease.
+                    self._retired_services.append((time.monotonic() + 300.0, previous))
+            return {
+                "status": "reloaded",
+                "company_id": company_id,
+                "generation": resolved.generation,
+                "slot": resolved.slot,
+                "previous_generation": (
+                    getattr(previous, "index_generation", None)
+                    if previous is not None
+                    else None
+                ),
+                "duration_ms": (time.perf_counter() - started) * 1000,
+            }
+
+    def activate_candidate(
+        self,
+        company_id: str,
+        *,
+        slot: str,
+        generation: str,
+    ) -> dict[str, Any]:
+        """Validate, persist, and hot-swap a ready inactive generation."""
+        started = time.perf_counter()
+        with self._reload_lock:
+            base_profile = self.registry.get(company_id)
+            state = read_generation_state(base_profile)
+            if slot == state["active_slot"]:
+                raise RuntimeError("Candidate slot is already active.")
+            slot_state = state["slots"].get(slot, {})
+            if slot_state.get("status") != "ready":
+                raise RuntimeError("Candidate index generation is not ready.")
+            if slot_state.get("generation") != generation:
+                raise RuntimeError("Candidate generation does not match the manifest.")
+
+            candidate = self._build_service(
+                profile_for_slot(base_profile, slot),
+                generation=generation,
+                generation_slot=slot,
+            )
+            readiness = candidate.readiness()
+            if not readiness["ok"]:
+                candidate.close()
+                raise RuntimeError("Candidate index generation is not ready.")
+
+            with self._lock:
+                previous = self._services.get(company_id)
+                try:
+                    promote_candidate(
+                        base_profile,
+                        slot=slot,
+                        generation=generation,
+                    )
+                except Exception:
+                    candidate.close()
+                    raise
+                self._services[company_id] = candidate
+                self._services.move_to_end(company_id)
+                if previous is not None:
+                    self._retired_services.append((time.monotonic() + 300.0, previous))
+            return {
+                "status": "promoted",
+                "company_id": company_id,
+                "generation": generation,
+                "slot": slot,
+                "previous_generation": (
+                    getattr(previous, "index_generation", None)
+                    if previous is not None
+                    else None
+                ),
+                "duration_ms": (time.perf_counter() - started) * 1000,
+            }
+
+    def rollback_generation(self, company_id: str) -> dict[str, Any]:
+        """Hot-swap to the recorded previous slot without stopping the API."""
+        started = time.perf_counter()
+        with self._reload_lock:
+            base_profile = self.registry.get(company_id)
+            state = read_generation_state(base_profile)
+            active_slot = str(state["active_slot"])
+            previous_slot = state.get("previous_slot")
+            if previous_slot not in {"a", "b"} or previous_slot == active_slot:
+                raise RuntimeError("No previous index generation is available.")
+            previous_state = state["slots"].get(previous_slot, {})
+            previous_generation = previous_state.get("generation")
+            if not previous_generation:
+                raise RuntimeError("Previous index generation is not initialized.")
+
+            replacement = self._build_service(
+                profile_for_slot(base_profile, str(previous_slot)),
+                generation=str(previous_generation),
+                generation_slot=str(previous_slot),
+            )
+            readiness = replacement.readiness()
+            if not readiness["ok"]:
+                replacement.close()
+                raise RuntimeError("Previous index generation is not ready.")
+
+            with self._lock:
+                current = self._services.get(company_id)
+                try:
+                    restore_active_slot(base_profile, str(previous_slot))
+                except Exception:
+                    replacement.close()
+                    raise
+                self._services[company_id] = replacement
+                self._services.move_to_end(company_id)
+                if current is not None:
+                    self._retired_services.append((time.monotonic() + 300.0, current))
+            return {
+                "status": "rolled_back",
+                "company_id": company_id,
+                "generation": str(previous_generation),
+                "slot": str(previous_slot),
+                "previous_generation": (
+                    getattr(current, "index_generation", None)
+                    if current is not None
+                    else None
+                ),
+                "duration_ms": (time.perf_counter() - started) * 1000,
+            }
 
     def loaded_services(self) -> dict[str, ProductSearchService]:
         with self._lock:
             return dict(self._services)
 
-    def _build_service(self, profile: TenantProfile) -> ProductSearchService:
+    def _build_service(
+        self,
+        profile: TenantProfile,
+        *,
+        generation: str = "legacy-a",
+        generation_slot: str = "a",
+    ) -> ProductSearchService:
         if self.engine_factory is None:
             collection = _api_dependency(
                 "get_tenant_vector_collection",
@@ -222,6 +420,7 @@ class TenantServicePool:
                 self.shared_cache,
                 self.shared_reranker,
             )
+        engine.index_generation = generation
         analytics_store = None
         if profile.analytics.enabled:
             if SEARCH_ANALYTICS_DELIVERY_MODE == "daily_spool":
@@ -251,6 +450,8 @@ class TenantServicePool:
         )
         service.reranker_load_ms = self.reranker_load_ms
         service.embedding_warmup = self.embedding_warmup
+        service.index_generation = generation
+        service.index_generation_slot = generation_slot
         service.compatibility_service = None
         if profile.compatibility.adapter:
             service.compatibility_service = (
@@ -272,6 +473,8 @@ class TenantServicePool:
     def close(self) -> None:
         with self._lock:
             services = list(self._services.values())
+            services.extend(service for _, service in self._retired_services)
             self._services.clear()
+            self._retired_services.clear()
         for service in services:
             service.close()

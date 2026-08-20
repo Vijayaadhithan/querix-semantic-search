@@ -13,6 +13,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from core.tenant_config import load_tenant_registry
 from providers.ollama import embed_texts
+from storage.index_generations import resolve_generation
 from storage.vector import get_tenant_vector_collection
 
 DEFAULT_QUERIES = (
@@ -23,7 +24,9 @@ DEFAULT_QUERIES = (
 
 
 def warm_hnsw(company_id: str, queries: list[str], candidates: int) -> None:
-    profile = load_tenant_registry(require_api_keys=False).get(company_id)
+    profile = resolve_generation(
+        load_tenant_registry(require_api_keys=False).get(company_id)
+    ).profile
     collection = get_tenant_vector_collection(profile, create=False)
     row_count = collection.count()
     if row_count <= 0:

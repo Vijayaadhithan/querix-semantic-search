@@ -7,7 +7,7 @@ LOCK_FILE="${LOCK_FILE:-/tmp/semantic-search-production-backup.lock}"
 
 cd "$PROJECT_DIR"
 
-for command_name in docker flock python3 sha256sum tar; do
+for command_name in cp docker flock python3 sha256sum tar; do
   if ! command -v "$command_name" >/dev/null 2>&1; then
     echo "Required backup command is missing: ${command_name}" >&2
     exit 1
@@ -66,6 +66,20 @@ with sqlite3.connect(f"file:{source_path}?mode=ro", uri=True) as source:
             raise SystemExit(f"SQLite quick_check failed for {source_path}")
 PY
 done < <(find ./storage -type f \( -name '*.sqlite' -o -name '*.sqlite3' \) -print0)
+
+# Generation selection is a tiny JSON control-plane artifact. Without it a
+# restore could open the older slot even though both physical indexes were
+# recovered successfully.
+while IFS= read -r -d '' source_path; do
+  relative_path="${source_path#./}"
+  target_path="$sqlite_root/$relative_path"
+  mkdir -p "$(dirname "$target_path")"
+  cp -- "$source_path" "$target_path"
+done < <(
+  find ./storage -type f \
+    \( -name 'index-generations.json' -o -name 'ingestion-manifest.json' \) \
+    -print0
+)
 
 tar -C "$sqlite_root" -czf "$work_dir/storage-sqlite.tar.gz" storage
 (

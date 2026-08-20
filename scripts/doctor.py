@@ -29,6 +29,7 @@ from core.settings import (
     VOYAGE_API_KEY,
 )
 from core.tenant_config import discover_tenant_profiles
+from storage.index_generations import resolve_generation
 from storage.mysql import mysql_connection, quote_mysql_identifier
 from storage.postgres import (
     PostgresRuntimeConfig,
@@ -282,7 +283,7 @@ def main() -> int:
     args = parser.parse_args()
     profiles = discover_tenant_profiles()
     try:
-        profile = profiles[args.company]
+        profile = resolve_generation(profiles[args.company]).profile
     except KeyError:
         available = ", ".join(sorted(profiles)) or "none"
         print(f"Unknown company {args.company!r}; available: {available}")

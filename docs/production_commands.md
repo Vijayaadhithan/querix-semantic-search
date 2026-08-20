@@ -572,13 +572,19 @@ git pull --ff-only origin "$BRANCH" && \
 
 Do not run ingestion automatically for every code-only release. Run it only when source data, embedding content, the embedding model, BM25 data, or index schema changed.
 
-## 15. Daily 03:00 IST incremental ingestion
+## 15. Daily 03:00 IST zero-downtime ingestion
 
-The scheduled job scans the configured source table, embeds only changed
-content, reconciles deleted rows, and restarts the API only after ingestion
-succeeds. A host lock prevents overlapping runs. The BM25 revision now changes
-only when indexed content actually changes, so an unchanged daily scan does not
-invalidate every cached search.
+The scheduled job scans the configured source table while the current tenant
+generation remains live. It updates the inactive pgvector/BM25 slot, embeds
+only changed content, reconciles deleted rows, validates counts and retrieval
+overlap, prewarms the candidate, and hot-activates it. It does not restart or
+stop the API. A host lock prevents overlapping runs. The generation token is
+part of result-cache identity, preventing results from an older generation
+from leaking across promotion.
+
+The first run creates the second physical generation from the existing active
+indexes. Later runs alternate the two bounded slots. A failed candidate is not
+promoted; searches continue against the last validated active generation.
 
 Install the systemd units using the current production checkout path:
 
@@ -600,14 +606,33 @@ systemctl status semantic-search-ingest.timer --no-pager
 journalctl -u semantic-search-ingest.timer -n 50 --no-pager
 ```
 
+During a run, verify that the API remains available and inspect the generation:
+
+```bash
+curl -fsS http://127.0.0.1:8000/api/v1/ready
+docker compose exec -T api python scripts/doctor.py --company gainr
+cat storage/companies/gainr/index-generations.json
+```
+
+If the newly promoted generation later proves unsuitable, hot-roll back to the
+recorded previous slot without restarting the API:
+
+```bash
+docker compose exec -T api sh -lc \
+  'curl -fsS -X POST -H "X-Admin-Key: $API_ADMIN_KEY" \
+  http://127.0.0.1:8000/api/v1/gainr/admin/rollback-index'
+```
+
 The timer uses `Persistent=true`: if the host is down at 03:00 IST, systemd
 runs the missed job after the host starts. The five-minute randomized delay
 keeps the start near 03:00 while avoiding an exact boundary spike.
 
-The systemd service allows up to 48 hours for a genuine large re-embedding.
-The script uses a stable named run container and removes it when systemd stops
-or times out, so a failed unit cannot leave an orphan that overlaps tomorrow's
-run.
+The systemd service allows up to 48 hours for a genuine large re-embedding. The
+script uses `docker compose run --no-deps`, a stable named run container, and
+removes it when systemd stops or times out. It cannot recreate serving
+dependencies or leave an orphan that overlaps tomorrow's run. Candidate
+ingestion state is stored beside the candidate BM25 file and does not make the
+active service unready.
 
 ### Two-hour analytics refresh
 

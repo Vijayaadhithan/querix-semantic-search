@@ -539,9 +539,13 @@ Do not run ingestion for every code deployment. Run it only when source rows, in
 ### Daily 03:00 IST synchronization
 
 Install the timer once using the current checkout path, following
-[Daily 03:00 IST incremental ingestion](production_commands.md#15-daily-0300-ist-incremental-ingestion).
+[Daily 03:00 IST zero-downtime ingestion](production_commands.md#15-daily-0300-ist-zero-downtime-ingestion).
 After later code pulls, the unit continues to call the script from that checkout;
 reinstall it only if the repository path or unit files change.
+
+The timer builds and validates the inactive tenant generation while the active
+generation continues serving, then prewarms and hot-activates it without an API
+restart. The first run performs a one-time second-slot bootstrap.
 
 Set the production-only analytics delivery mode in `.env`:
 

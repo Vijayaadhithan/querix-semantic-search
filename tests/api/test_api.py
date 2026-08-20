@@ -24,6 +24,7 @@ from core.tenant_config import (
     TenantRegistry,
     TenantStorageConfig,
 )
+from storage.index_generations import read_generation_state, record_candidate_ready
 from storage.mysql import MySQLRuntimeConfig
 from storage.postgres import PostgresRuntimeConfig
 from storage.usage import MonthlyUsageStore
@@ -184,6 +185,167 @@ def test_tenant_pool_prewarms_enabled_pgvector_index(tmp_path, monkeypatch):
     assert calls == ["buffer"]
     assert result["alpha"]["status"] == "complete"
     assert result["alpha"]["blocks"] == 10
+
+
+def test_tenant_pool_hot_promotes_generation_without_closing_active_service(
+    tmp_path,
+    monkeypatch,
+):
+    profile = tenant_profile(tmp_path, "alpha")
+    registry = TenantRegistry(
+        {"alpha": profile},
+        api_keys={"alpha": ["alpha-key"]},
+    )
+    pool = TenantServicePool(registry)
+
+    class SwapService:
+        def __init__(self, generation, slot):
+            self.index_generation = generation
+            self.index_generation_slot = slot
+            self.closed = False
+
+        def readiness(self):
+            return {"ok": True, "components": {}}
+
+        def monitor_status(self):
+            return {"active": 0}
+
+        def close(self):
+            self.closed = True
+
+    old = SwapService("legacy-a", "a")
+    new = SwapService("run-1", "b")
+    pool._services["alpha"] = old
+    record_candidate_ready(
+        profile,
+        slot="b",
+        generation="run-1",
+        validation={"source_rows": 10, "vectors": 10, "bm25": 10},
+    )
+    monkeypatch.setattr(pool, "_build_service", lambda *_args, **_kwargs: new)
+
+    result = pool.activate_candidate(
+        "alpha",
+        slot="b",
+        generation="run-1",
+    )
+
+    assert result["status"] == "promoted"
+    assert result["previous_generation"] == "legacy-a"
+    assert pool.get("alpha") is new
+    assert old.closed is False
+    assert read_generation_state(profile)["active_slot"] == "b"
+    pool.close()
+    assert old.closed is True
+    assert new.closed is True
+
+
+def test_candidate_build_does_not_block_requests_on_active_generation(
+    tmp_path,
+    monkeypatch,
+):
+    profile = tenant_profile(tmp_path, "alpha")
+    registry = TenantRegistry(
+        {"alpha": profile},
+        api_keys={"alpha": ["alpha-key"]},
+    )
+    pool = TenantServicePool(registry)
+    build_started = threading.Event()
+    finish_build = threading.Event()
+
+    class SwapService:
+        def __init__(self, generation, slot):
+            self.index_generation = generation
+            self.index_generation_slot = slot
+
+        def readiness(self):
+            return {"ok": True, "components": {}}
+
+        def monitor_status(self):
+            return {"active": 0}
+
+        def close(self):
+            pass
+
+    old = SwapService("legacy-a", "a")
+    new = SwapService("run-2", "b")
+    pool._services["alpha"] = old
+    record_candidate_ready(
+        profile,
+        slot="b",
+        generation="run-2",
+        validation={"source_rows": 10, "vectors": 10, "bm25": 10},
+    )
+
+    def build(*_args, **_kwargs):
+        build_started.set()
+        finish_build.wait(timeout=2)
+        return new
+
+    monkeypatch.setattr(pool, "_build_service", build)
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        promotion = executor.submit(
+            pool.activate_candidate,
+            "alpha",
+            slot="b",
+            generation="run-2",
+        )
+        assert build_started.wait(timeout=1)
+        assert pool.get("alpha") is old
+        finish_build.set()
+        assert promotion.result(timeout=2)["status"] == "promoted"
+
+    assert pool.get("alpha") is new
+    pool.close()
+
+
+def test_tenant_pool_rolls_back_without_closing_active_service(tmp_path, monkeypatch):
+    profile = tenant_profile(tmp_path, "alpha")
+    registry = TenantRegistry(
+        {"alpha": profile},
+        api_keys={"alpha": ["alpha-key"]},
+    )
+    pool = TenantServicePool(registry)
+
+    class SwapService:
+        def __init__(self, generation, slot):
+            self.index_generation = generation
+            self.index_generation_slot = slot
+            self.closed = False
+
+        def readiness(self):
+            return {"ok": True, "components": {}}
+
+        def monitor_status(self):
+            return {"active": 0}
+
+        def close(self):
+            self.closed = True
+
+    old = SwapService("legacy-a", "a")
+    current = SwapService("run-1", "b")
+    restored = SwapService("legacy-a", "a")
+    pool._services["alpha"] = old
+    record_candidate_ready(
+        profile,
+        slot="b",
+        generation="run-1",
+        validation={"source_rows": 10, "vectors": 10, "bm25": 10},
+    )
+    monkeypatch.setattr(pool, "_build_service", lambda *_args, **_kwargs: current)
+    pool.activate_candidate("alpha", slot="b", generation="run-1")
+    monkeypatch.setattr(pool, "_build_service", lambda *_args, **_kwargs: restored)
+
+    result = pool.rollback_generation("alpha")
+
+    assert result["status"] == "rolled_back"
+    assert result["generation"] == "legacy-a"
+    assert pool.get("alpha") is restored
+    assert current.closed is False
+    assert read_generation_state(profile)["active_slot"] == "a"
+    pool.close()
+    assert current.closed is True
+    assert restored.closed is True
 
 
 def test_cursor_pages_one_stable_search_without_repeating_engine_work():
@@ -1358,6 +1520,26 @@ def test_admin_status_requires_separate_key_and_hides_queries(
     )
 
     with TestClient(app) as client:
+        monkeypatch.setattr(
+            app.state.tenant_service_pool,
+            "activate_candidate",
+            lambda company_id, *, slot, generation: {
+                "status": "promoted",
+                "company_id": company_id,
+                "slot": slot,
+                "generation": generation,
+            },
+        )
+        monkeypatch.setattr(
+            app.state.tenant_service_pool,
+            "rollback_generation",
+            lambda company_id: {
+                "status": "rolled_back",
+                "company_id": company_id,
+                "slot": "a",
+                "generation": "legacy-a",
+            },
+        )
         global_missing = client.get("/api/v1/admin/status")
         missing = client.get("/api/v1/gainr/admin/status")
         customer_key = client.get(
@@ -1409,10 +1591,30 @@ def test_admin_status_requires_separate_key_and_hides_queries(
                 "X-Admin-Key": "admin-key-with-at-least-24-chars",
             },
         )
+        reload_missing = client.post(
+            "/api/v1/gainr/admin/reload-index?slot=b&generation=run-1"
+        )
+        reload_index = client.post(
+            "/api/v1/gainr/admin/reload-index?slot=b&generation=run-1",
+            headers={
+                "X-Admin-Key": "admin-key-with-at-least-24-chars",
+            },
+        )
+        rollback_index = client.post(
+            "/api/v1/gainr/admin/rollback-index",
+            headers={
+                "X-Admin-Key": "admin-key-with-at-least-24-chars",
+            },
+        )
 
     assert global_missing.status_code == 401
     assert missing.status_code == 401
     assert customer_key.status_code == 401
+    assert reload_missing.status_code == 401
+    assert reload_index.status_code == 200
+    assert reload_index.json()["status"] == "promoted"
+    assert rollback_index.status_code == 200
+    assert rollback_index.json()["status"] == "rolled_back"
     assert status.status_code == 200
     payload = status.json()
     assert payload["status"] == "ok"

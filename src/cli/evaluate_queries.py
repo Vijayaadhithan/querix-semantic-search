@@ -11,6 +11,7 @@ from search.planner import (
     extract_query_plan,
     query_filter_value_index,
 )
+from storage.index_generations import resolve_generation
 
 DEFAULT_CASES_PATH = PROJECT_ROOT / "eval" / "query_cases.json"
 
@@ -84,7 +85,7 @@ def main() -> None:
     if args.company:
         profiles = discover_tenant_profiles()
         try:
-            profile = profiles[args.company]
+            profile = resolve_generation(profiles[args.company]).profile
         except KeyError as exc:
             available = ", ".join(sorted(profiles)) or "none"
             raise SystemExit(

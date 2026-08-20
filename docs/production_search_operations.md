@@ -78,11 +78,27 @@ receive the new lexical contract, publish the complete artifact atomically,
 then run backend incremental ingestion. Re-embedding is required only if the
 embedding text/hash, model, or vector dimensions changed.
 
-The enabled systemd timer starts this guarded job around 03:00 IST. A source
-scan may read all eligible rows, but it embeds only changed/new content,
-reconciles deletions, and restarts the API only after success. Once readiness
-passes, the job runs several representative unfiltered vector searches to warm
-the shared PostgreSQL HNSW buffer paths before live traffic resumes.
+The enabled systemd timer starts a shadow-generation job around 03:00 IST. A
+source scan may read all eligible rows, but it embeds only changed/new content
+into the inactive tenant slot and reconciles deletions there. The active
+pgvector/BM25 generation continues serving throughout the scan. The candidate
+must match source/vector/BM25 counts and retain the configured vector and BM25
+control-query overlap before promotion (80% minimum by default). It is then
+prewarmed and hot-swapped in
+the tenant service pool; the API process is not restarted and in-flight
+requests finish against the previous generation.
+
+Each tenant owns two bounded physical slots. Only the active generation enters
+cache fingerprints, and the previous generation is retained as the next
+standby and immediate rollback target. A failed build, validation, warm-up, or
+activation leaves the active generation unchanged. The first migration from a
+legacy single index performs a one-time copy of the existing pgvector and BM25
+indexes before applying incremental changes.
+
+If a promoted generation later proves unsuitable, call
+`POST /api/v1/<tenant>/admin/rollback-index` with `X-Admin-Key`. The API opens
+and checks the recorded previous generation before atomically switching back;
+it does not restart the process or interrupt in-flight searches.
 
 Use deletion reconciliation only after a complete scan. Use forced re-embedding when the embedding model or embedding-text contract changes. Use replacement only for an authoritative tenant rebuild, because it clears that tenant's existing vector source and BM25 index before repopulation.
 

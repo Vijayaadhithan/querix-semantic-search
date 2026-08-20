@@ -12,6 +12,7 @@ from search.bm25 import PersistentBM25Index
 from search.engine import ProductSearchEngine
 from search.policy_registry import build_search_policy
 from search.retrieval import extract_product_ids
+from storage.index_generations import resolve_generation
 from storage.mysql import (
     MySQLRuntimeConfig,
     mysql_active_condition,
@@ -604,7 +605,7 @@ def main() -> None:
 
     profiles = discover_tenant_profiles()
     try:
-        profile = profiles[args.company]
+        profile = resolve_generation(profiles[args.company]).profile
     except KeyError as exc:
         available = ", ".join(sorted(profiles)) or "none"
         raise SystemExit(
