@@ -193,7 +193,10 @@ storage:
       # HNSW is the pgvector ANN index. Higher ef_search improves recall but
       # costs CPU per query.
       m: 16
-      ef_construction: 64
+      # Build inactive generations with a denser candidate search so graph
+      # quality is stable across alternating slots. This changes build cost,
+      # not serving-query latency.
+      ef_construction: 128
       ef_search: 100
   bm25_path: storage/companies/gainr/bm25.sqlite3
 

@@ -46,7 +46,14 @@ def _overlap(left: list[str], right: list[str]) -> float:
 
 def _exact_vector_ids(collection, embedding: list[float], limit: int) -> list[str]:
     """Return an exact cosine-distance reference without using HNSW."""
-    with postgres_connection(collection.config, dict_rows=True) as connection:
+    # SET LOCAL applies only to the current transaction. The shared PostgreSQL
+    # helper defaults to autocommit, which would reset these planner settings
+    # before the SELECT and silently compare HNSW against HNSW.
+    with postgres_connection(
+        collection.config,
+        dict_rows=True,
+        autocommit=False,
+    ) as connection:
         with connection.cursor() as cursor:
             cursor.execute("SET LOCAL enable_indexscan = off")
             cursor.execute("SET LOCAL enable_bitmapscan = off")

@@ -187,3 +187,52 @@ def test_candidate_validation_accepts_better_hnsw_when_old_ann_results_differ(
     assert result["vector_overlap"] == [0.0]
     assert result["active_vector_recall"] == [0.0]
     assert result["candidate_vector_recall"] == [1.0]
+
+
+def test_exact_vector_reference_disables_indexes_in_one_transaction(monkeypatch):
+    calls = []
+
+    class Cursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def execute(self, query, params=None):
+            calls.append((query, params))
+
+        def fetchall(self):
+            return [{"id": "doc-1"}]
+
+    class Connection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def cursor(self):
+            return Cursor()
+
+    connection_options = {}
+
+    def connect(config, **kwargs):
+        connection_options.update(kwargs)
+        return Connection()
+
+    monkeypatch.setattr(generations, "postgres_connection", connect)
+    monkeypatch.setattr(
+        generations,
+        "qualified_table",
+        lambda *_args: '"public"."candidate"',
+    )
+    collection = SimpleNamespace(config=object(), table="candidate")
+
+    result = generations._exact_vector_ids(collection, [0.1], 1)
+
+    assert result == ["doc-1"]
+    assert connection_options == {"dict_rows": True, "autocommit": False}
+    assert calls[0][0] == "SET LOCAL enable_indexscan = off"
+    assert calls[1][0] == "SET LOCAL enable_bitmapscan = off"
+    assert "ORDER BY embedding <=> %s::vector" in calls[2][0]
