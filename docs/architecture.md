@@ -204,8 +204,8 @@ preserving their embedding values.
 Production runs a guarded per-tenant shadow-generation job around 03:00 IST.
 The active generation remains read-only to ingestion and continues serving.
 The inactive pgvector table and BM25 file receive the complete incremental
-reconciliation. Count equality, representative vector/BM25 overlap, and warm
-query success gate activation. The tenant service pool builds the candidate
+reconciliation. Count equality, exact-search HNSW recall, representative BM25
+overlap, and warm-query success gate activation. The tenant service pool builds the candidate
 service outside its routing lock and atomically swaps only after readiness;
 in-flight requests retain the previous service until they drain. No API
 container restart is part of scheduled ingestion.

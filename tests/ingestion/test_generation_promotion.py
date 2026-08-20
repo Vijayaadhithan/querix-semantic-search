@@ -84,6 +84,11 @@ def test_candidate_validation_preserves_retrieval_overlap_and_warms_before_swap(
     )
     monkeypatch.setattr(generations, "count_database_rows", lambda *_args: 1)
     monkeypatch.setattr(generations, "embed_texts", lambda *_args, **_kwargs: [[0.1]])
+    monkeypatch.setattr(
+        generations,
+        "_exact_vector_ids",
+        lambda *_args, **_kwargs: ["doc-1"],
+    )
 
     result = generations.validate_and_warm_candidate(
         profile,
@@ -95,6 +100,9 @@ def test_candidate_validation_preserves_retrieval_overlap_and_warms_before_swap(
 
     assert result["source_rows"] == result["vectors"] == result["bm25"] == 1
     assert result["vector_overlap"] == [1.0]
+    assert result["active_vector_recall"] == [1.0]
+    assert result["candidate_vector_recall"] == [1.0]
+    assert result["exact_vector_overlap"] == [1.0]
     assert result["bm25_overlap"] == [1.0]
     assert result["prewarm"]["mode"] == "buffer"
     assert collections["company_vectors__b"].prewarmed is True
@@ -126,3 +134,56 @@ def test_candidate_count_mismatch_fails_before_embedding_or_promotion(
 
     with pytest.raises(RuntimeError, match="count validation failed"):
         generations.validate_and_warm_candidate(profile, queries=("camera",))
+
+
+def test_candidate_validation_accepts_better_hnsw_when_old_ann_results_differ(
+    tmp_path,
+    monkeypatch,
+):
+    profile = _profile(tmp_path)
+    candidate = profile_for_slot(profile, "b")
+    _write_bm25(profile.storage.bm25_path)
+    _write_bm25(candidate.storage.bm25_path)
+
+    class Collection:
+        def __init__(self, table):
+            self.table = table
+
+        def count(self):
+            return 1
+
+        def query(self, **_kwargs):
+            doc_id = "old-ann" if self.table == "company_vectors" else "doc-1"
+            return {"ids": [[doc_id]]}
+
+        def prewarm_hnsw_index(self, *, mode):
+            return {"mode": mode, "duration_ms": 1.0}
+
+    collections = {
+        "company_vectors": Collection("company_vectors"),
+        "company_vectors__b": Collection("company_vectors__b"),
+    }
+    monkeypatch.setattr(
+        generations,
+        "get_tenant_vector_collection",
+        lambda selected, create=False: collections[selected.storage.pgvector_table],
+    )
+    monkeypatch.setattr(generations, "count_database_rows", lambda *_args: 1)
+    monkeypatch.setattr(generations, "embed_texts", lambda *_args, **_kwargs: [[0.1]])
+    monkeypatch.setattr(
+        generations,
+        "_exact_vector_ids",
+        lambda *_args, **_kwargs: ["doc-1"],
+    )
+
+    result = generations.validate_and_warm_candidate(
+        profile,
+        queries=("camera",),
+        overlap_floor=1.0,
+        compare_limit=1,
+        warm_candidates=1,
+    )
+
+    assert result["vector_overlap"] == [0.0]
+    assert result["active_vector_recall"] == [0.0]
+    assert result["candidate_vector_recall"] == [1.0]

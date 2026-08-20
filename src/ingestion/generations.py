@@ -24,6 +24,7 @@ from storage.index_generations import (
     resolve_generation,
     seed_candidate_from_active,
 )
+from storage.postgres import postgres_connection, qualified_table
 from storage.vector import get_tenant_vector_collection
 
 CONTROL_QUERIES = (
@@ -41,6 +42,20 @@ def _ids(result: dict[str, Any]) -> list[str]:
 def _overlap(left: list[str], right: list[str]) -> float:
     denominator = max(min(len(left), len(right)), 1)
     return len(set(left) & set(right)) / denominator
+
+
+def _exact_vector_ids(collection, embedding: list[float], limit: int) -> list[str]:
+    """Return an exact cosine-distance reference without using HNSW."""
+    with postgres_connection(collection.config, dict_rows=True) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute("SET LOCAL enable_indexscan = off")
+            cursor.execute("SET LOCAL enable_bitmapscan = off")
+            table = qualified_table(collection.config, collection.table)
+            cursor.execute(
+                f"SELECT id FROM {table} ORDER BY embedding <=> %s::vector LIMIT %s",
+                (json.dumps(embedding, separators=(",", ":")), limit),
+            )
+            return [str(row["id"]) for row in cursor.fetchall()]
 
 
 def _bm25_ids(path, query: str, limit: int) -> list[str]:
@@ -70,12 +85,18 @@ def validate_and_warm_candidate(
     *,
     queries: tuple[str, ...] = CONTROL_QUERIES,
     overlap_floor: float = 0.80,
+    vector_recall_floor: float = 0.40,
+    vector_regression_tolerance: float = 0.05,
     compare_limit: int = 40,
     warm_candidates: int = 800,
 ) -> dict[str, Any]:
     """Fail closed on count drift or a large retrieval-quality discontinuity."""
     if not 0 <= overlap_floor <= 1:
         raise ValueError("overlap_floor must be between zero and one")
+    if not 0 <= vector_recall_floor <= 1:
+        raise ValueError("vector_recall_floor must be between zero and one")
+    if not 0 <= vector_regression_tolerance <= 1:
+        raise ValueError("vector_regression_tolerance must be between zero and one")
     active = resolve_generation(profile)
     candidate = candidate_generation(profile)
     active_collection = get_tenant_vector_collection(active.profile, create=False)
@@ -102,6 +123,9 @@ def validate_and_warm_candidate(
     started = time.perf_counter()
     embeddings = embed_texts(list(queries), timeout=300)
     vector_overlap = []
+    active_vector_recall = []
+    candidate_vector_recall = []
+    exact_vector_overlap = []
     vector_query_ms = []
     bm25_overlap = []
     bm25_query_ms = []
@@ -122,7 +146,21 @@ def validate_and_warm_candidate(
             )
         )
         vector_query_ms.append((time.perf_counter() - vector_started) * 1000)
-        vector_overlap.append(_overlap(active_ids, candidate_ids[:compare_limit]))
+        candidate_ids = candidate_ids[:compare_limit]
+        vector_overlap.append(_overlap(active_ids, candidate_ids))
+        active_exact_ids = _exact_vector_ids(
+            active_collection,
+            embedding,
+            compare_limit,
+        )
+        candidate_exact_ids = _exact_vector_ids(
+            candidate_collection,
+            embedding,
+            compare_limit,
+        )
+        active_vector_recall.append(_overlap(active_ids, active_exact_ids))
+        candidate_vector_recall.append(_overlap(candidate_ids, candidate_exact_ids))
+        exact_vector_overlap.append(_overlap(active_exact_ids, candidate_exact_ids))
 
         active_bm25_ids = _bm25_ids(
             active.profile.storage.bm25_path,
@@ -140,13 +178,29 @@ def validate_and_warm_candidate(
             _overlap(active_bm25_ids, candidate_bm25_ids[:compare_limit])
         )
 
-    lowest_vector_overlap = min(vector_overlap, default=1.0)
     lowest_bm25_overlap = min(bm25_overlap, default=1.0)
-    if lowest_vector_overlap < overlap_floor or lowest_bm25_overlap < overlap_floor:
+    lowest_candidate_recall = min(candidate_vector_recall, default=1.0)
+    recall_regressions = [
+        active_recall - candidate_recall
+        for active_recall, candidate_recall in zip(
+            active_vector_recall,
+            candidate_vector_recall,
+        )
+    ]
+    largest_recall_regression = max(recall_regressions, default=0.0)
+    if (
+        lowest_candidate_recall < vector_recall_floor
+        or largest_recall_regression > vector_regression_tolerance
+        or lowest_bm25_overlap < overlap_floor
+    ):
         raise RuntimeError(
-            "Candidate retrieval-overlap validation failed: "
-            f"vector={lowest_vector_overlap:.3f} bm25={lowest_bm25_overlap:.3f} "
-            f"required={overlap_floor:.3f}."
+            "Candidate retrieval-quality validation failed: "
+            f"candidate_vector_recall={lowest_candidate_recall:.3f} "
+            f"required={vector_recall_floor:.3f} "
+            f"vector_recall_regression={largest_recall_regression:.3f} "
+            f"allowed={vector_regression_tolerance:.3f} "
+            f"bm25_overlap={lowest_bm25_overlap:.3f} "
+            f"required_bm25={overlap_floor:.3f}."
         )
 
     prewarm = None
@@ -174,6 +228,11 @@ def validate_and_warm_candidate(
         "bm25": bm25_rows,
         "queries": len(queries),
         "vector_overlap": [round(value, 4) for value in vector_overlap],
+        "active_vector_recall": [round(value, 4) for value in active_vector_recall],
+        "candidate_vector_recall": [
+            round(value, 4) for value in candidate_vector_recall
+        ],
+        "exact_vector_overlap": [round(value, 4) for value in exact_vector_overlap],
         "bm25_overlap": [round(value, 4) for value in bm25_overlap],
         "vector_query_ms": [round(value, 1) for value in vector_query_ms],
         "bm25_query_ms": [round(value, 1) for value in bm25_query_ms],

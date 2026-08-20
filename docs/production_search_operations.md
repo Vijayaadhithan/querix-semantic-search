@@ -82,8 +82,9 @@ The enabled systemd timer starts a shadow-generation job around 03:00 IST. A
 source scan may read all eligible rows, but it embeds only changed/new content
 into the inactive tenant slot and reconciles deletions there. The active
 pgvector/BM25 generation continues serving throughout the scan. The candidate
-must match source/vector/BM25 counts and retain the configured vector and BM25
-control-query overlap before promotion (80% minimum by default). It is then
+must match source/vector/BM25 counts. Candidate HNSW recall is measured against
+exact vector search and cannot regress materially from the active generation;
+BM25 control-query overlap remains at least 80% by default. It is then
 prewarmed and hot-swapped in
 the tenant service pool; the API process is not restarted and in-flight
 requests finish against the previous generation.
