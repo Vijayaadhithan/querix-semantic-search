@@ -487,9 +487,16 @@ class AnalyticsSnapshotStore:
         ]
         values: list[Any] = [company_id]
         if not include_filtered_results:
+            # Keep ordinary catalogue/filter browsing out of the default Query
+            # Explorer, but never hide failed requests. A failed browse is an
+            # operational incident rather than demand noise and must remain
+            # visible without a frontend-only opt-in parameter.
             clauses.append(
+                "("
                 f"COALESCE(json_extract(records.{field}, "
-                "'$.request_kind'), 'text_search') = 'text_search'"
+                "'$.request_kind'), 'text_search') = 'text_search' "
+                "OR records.outcome = 'failure'"
+                ")"
             )
         if cursor:
             cursor_created, cursor_request = decode_query_cursor(cursor)

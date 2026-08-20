@@ -643,6 +643,72 @@ def test_daily_refresh_supports_empty_search_telemetry(tmp_path):
     )
 
 
+def test_query_explorer_shows_filtered_failures_by_default(tmp_path):
+    store = AnalyticsSnapshotStore(tmp_path / "snapshots.sqlite3")
+    run_id = store.begin_refresh("gainr")
+    text_search = {
+        "request_id": "text-search",
+        "created_at": "2026-08-20T00:00:00+00:00",
+        "query": "camera rental",
+        "request_kind": "text_search",
+        "outcome": "fulfilled",
+        "categories": ["Camera"],
+        "language": "English",
+    }
+    browse_success = {
+        "request_id": "browse-success",
+        "created_at": "2026-08-20T00:01:00+00:00",
+        "query": "Filtered browse: Camera",
+        "request_kind": "filtered_browse",
+        "outcome": "zero_result",
+        "categories": ["Camera"],
+        "language": "Unknown",
+    }
+    browse_failure = {
+        "request_id": "browse-failure",
+        "created_at": "2026-08-20T00:02:00+00:00",
+        "query": "Filtered browse: Camera",
+        "request_kind": "filtered_browse",
+        "outcome": "failure",
+        "categories": ["Camera"],
+        "language": "Unknown",
+    }
+    store.publish(
+        run_id=run_id,
+        company_id="gainr",
+        generated_at="2026-08-20T00:03:00+00:00",
+        source_watermark=None,
+        source_rows={},
+        company_dashboard={},
+        internal_dashboard={},
+        query_records=[
+            (text_search, text_search),
+            (browse_success, browse_success),
+            (browse_failure, browse_failure),
+        ],
+    )
+
+    for internal in (False, True):
+        default_ids = {
+            item["request_id"]
+            for item in store.query_records("gainr", internal=internal, limit=10)[
+                "items"
+            ]
+        }
+        failure_ids = {
+            item["request_id"]
+            for item in store.query_records(
+                "gainr",
+                internal=internal,
+                limit=10,
+                outcome="failure",
+            )["items"]
+        }
+
+        assert default_ids == {"text-search", "browse-failure"}
+        assert failure_ids == {"browse-failure"}
+
+
 def test_internal_query_marks_missing_operational_telemetry_as_unavailable():
     data = analytics_data()
     data["api_usage"] = data["api_usage"].iloc[0:0].copy()
