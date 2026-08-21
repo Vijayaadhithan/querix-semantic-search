@@ -2,7 +2,7 @@
 
 ## Purpose
 
-The service turns natural-language catalogue queries into tenant-isolated, filter-aware, ranked product results. The configured company database (MySQL or PostgreSQL) remains the source of truth. Retrieval indexes store only the data required to find candidates; returned cards are hydrated from the canonical result table.
+The service turns natural-language catalogue queries into tenant-isolated, filter-aware, ranked product results. The configured tenant database (MySQL or PostgreSQL) remains the source of truth. Retrieval indexes store only the data required to find candidates; returned cards are hydrated from the canonical result table.
 
 ## Components
 
@@ -37,8 +37,12 @@ Runtime code is grouped by responsibility under `src/`:
 - `storage` owns database, pgvector, Redis, and usage persistence adapters.
 - `providers` owns external model-provider clients.
 - `ingestion` owns document preparation and index synchronization.
-- `tenants/<company>` owns compatibility contracts and company-specific search
-  behavior. Generic search modules do not import company vocabulary directly.
+- `verticals/<vertical>` owns reusable domain behavior, such as marketplace
+  offer/wanted interpretation. A vertical must not contain one client's
+  compatibility contract.
+- `tenants/<tenant>` owns client compatibility contracts and client-specific
+  search exceptions. Generic search modules do not import client vocabulary
+  directly.
 - `tenants.compatibility` owns the compatibility-adapter registry. The shared
   API routes call the adapter protocol; tenant request models and legacy
   response shapes stay inside the tenant package.
@@ -111,7 +115,7 @@ payloads for validation and response shaping.
 
 Adding a new compatibility contract should require:
 
-- a tenant package under `src/tenants/<company>/`;
+- a tenant package under `src/tenants/<tenant>/`;
 - adapter request/response parsing inside that package;
 - one registry entry in `src/tenants/compatibility.py`;
 - tenant YAML selecting the adapter name.
@@ -134,19 +138,35 @@ keys are tenant-prefixed, so language guidance cannot leak across companies.
 
 Marketplace-specific interpretation is not selected from `company_id` inside
 the planner or engine. `company.search_policy` is resolved while the tenant
-engine is built. The default policy is identity-only; a tenant policy may
-rewrite semantic/BM25 queries, supply soft category hints, adjust fused
-candidates, and add bounded reranker context. The policy cache key is part of
-the planner fingerprint.
+engine is built. The default policy is identity-only; a reusable vertical policy
+may provide shared marketplace semantics, while a tenant policy may add only
+client-specific rewrites, category exceptions, candidate adjustments, or
+bounded reranker context. The policy cache key is part of the planner
+fingerprint.
 
 A tenant policy may also return a high-confidence `category_intent` for phrases
-whose marketplace meaning is unambiguous. A tenant can use this boundary for service
-requests such as body massage, leaking-pipe repair, and selected technician
-phrases. The resolved subcategory becomes a hard tenant-catalogue filter before
-vector or BM25 retrieval, while explicit equipment phrases such as `massage
-chair` continue through their product category. These inferred task/service
+whose marketplace meaning is unambiguous. The resolved subcategory becomes a
+hard tenant-catalogue filter before vector or BM25 retrieval, while ambiguous
+or equipment/product phrases remain semantic. These inferred task/service
 phrases remain semantic; only literal catalogue/filter expressions can use
 deterministic retrieval.
+
+### Tenant and vertical extension model
+
+Catalog categories are data-driven. A new retail, fashion, product, or service
+category normally requires only that the tenant's search-ready source exposes
+the category and that its planner catalog is rebuilt; it does not require a new
+Python rule for every category. Tenant YAML `query_aliases` can add
+tenant-scoped spelling, colloquial, or transliteration hints, but aliases are
+soft relevance evidence and never fuzzy hard filters.
+
+Add code only when the category has behavior that generic catalog matching
+cannot safely infer, such as a service phrase that must map to a different
+subcategory, a domain-specific ranking adjustment, or a legacy client payload.
+Put reusable behavior in `src/verticals/<vertical>/`, and keep client-only
+exceptions in `src/tenants/<tenant>/`. This lets multiple tenants share a
+marketplace vertical without copying one client's rules into the common search
+engine.
 
 ## Ranking and failure behavior
 

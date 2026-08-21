@@ -77,7 +77,8 @@ src/
   providers/          Gemini/Groq and Ollama clients
   search/             Planning, BM25, retrieval, ranking, and tenant policies
   storage/            MySQL, PostgreSQL/pgvector, Redis, and usage stores
-  tenants/<company>/   Tenant-specific compatibility contracts and policies
+  tenants/<tenant>/   Client-specific compatibility contracts and policies
+  verticals/<vertical>/ Reusable domain behavior shared by multiple tenants
 tests/
   api/                API lifecycle and contract tests
   cli/                CLI and evaluation tests
@@ -87,7 +88,7 @@ tests/
   providers/          External-provider client tests
   search/             Planner, policy, retrieval, and reranker tests
   storage/            Database, pgvector, Redis, and usage-store tests
-  tenants/<company>/   Tenant-specific compatibility tests
+  tenants/<tenant>/   Tenant-specific compatibility tests
 ```
 
 Run application modules from the repository root with `PYTHONPATH=src`, for
@@ -155,10 +156,13 @@ diagnostics, ingestion, backup, and recovery commands.
 
 Keep non-secret defaults in `.env` and tenant YAML files. Keep passwords, API keys, and provider credentials in `.env.keys` or a production secret manager. Never commit either populated file.
 
-Each tenant profile must define a unique endpoint slug, company search-data
+Each tenant profile must define a unique endpoint slug, tenant search-data
 table, BM25 path, and pgvector table. Startup validation rejects shared tenant
-resources. Tenant-specific ranking or interpretation belongs behind the
-`company.search_policy` hook; `default` performs no domain-specific rewriting.
+resources. Reusable domain behavior belongs under `src/verticals/<vertical>/`;
+client-specific ranking or interpretation belongs behind the
+`company.search_policy` hook in `src/tenants/<tenant>/`. `default` performs no
+domain-specific rewriting. The YAML/API `company` names are retained for
+backward compatibility; the isolation model is tenant-based.
 
 The upstream search-ready contract keeps vector text and lexical text separate.
 Listing descriptions are part of both `embedding_content` and `bm25_content`.

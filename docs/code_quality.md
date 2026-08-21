@@ -12,15 +12,17 @@ Docker images; shared infrastructure must not turn them into a single runtime.
 | `src/analytics_service/` | Snapshot refresh, analytics authentication, and analytics HTTP API |
 | `src/search/` | Query planning, retrieval, ranking, and search orchestration |
 | `src/storage/` | Database, pgvector, Redis, usage, and search-history adapters |
-| `src/tenants/<company>/` | Company-specific compatibility contracts and policies |
+| `src/verticals/<vertical>/` | Reusable domain behavior shared by tenants |
+| `src/tenants/<tenant>/` | Client-specific compatibility contracts and policies |
 | `src/core/` | Validated process configuration and tenant configuration |
 | `scripts/` | Operator commands and repository validation utilities |
 | `tests/` | Tests arranged to mirror runtime package ownership |
 
-New company-specific behavior belongs under `src/tenants/<company>/`. Generic
-search or analytics logic must not import from a company frontend repository.
-Secrets, generated credentials, SQLite files, caches, and raw source data stay
-outside Git and outside Docker build contexts.
+Reusable domain behavior belongs under `src/verticals/<vertical>/`; client-only
+behavior belongs under `src/tenants/<tenant>/`. Generic search or analytics
+logic must not import from a client frontend repository or from a specific
+tenant package. Secrets, generated credentials, SQLite files, caches, and raw
+source data stay outside Git and outside Docker build contexts.
 
 ## Required local and CI checks
 
