@@ -27,7 +27,7 @@ Runtime code is grouped by responsibility under `src/`:
 
 - `api` owns HTTP contracts, routes, request services, and tenant-engine
   lifecycle.
-- `analytics_service` owns the separate daily SQL extraction, Search/API/Deep/
+- `analytics_service` owns the separate scheduled SQL extraction, Search/API/Deep/
   Market calculations, versioned snapshot store, and analytics-only API.
 - `analytics_service.adapters` owns company-facing analytics response adapters;
   authentication, snapshot access, and internal-admin contracts stay shared.
@@ -140,7 +140,7 @@ candidates, and add bounded reranker context. The policy cache key is part of
 the planner fingerprint.
 
 A tenant policy may also return a high-confidence `category_intent` for phrases
-whose marketplace meaning is unambiguous. Gainr uses this boundary for service
+whose marketplace meaning is unambiguous. A tenant can use this boundary for service
 requests such as body massage, leaking-pipe repair, and selected technician
 phrases. The resolved subcategory becomes a hard tenant-catalogue filter before
 vector or BM25 retrieval, while explicit equipment phrases such as `massage

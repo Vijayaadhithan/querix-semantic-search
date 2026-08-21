@@ -1,8 +1,8 @@
 # Durable search analytics
 
 MySQL tenants can opt into durable, per-request search analytics with the
-tenant profile `analytics` section. Gainr enables this feature and stores two
-tables in its configured company database:
+tenant profile `analytics` section. An enabled tenant stores two tables in its
+configured company database:
 
 - `semantic_search_history` is the tenant-facing table. It stores only the
   normalized query and UTC timestamp. `id` is its table key and `request_id`
@@ -23,7 +23,7 @@ rental-duration, price-bound, and target-ad-type fields needed for dashboard
 filters. Query text can contain personal information, so database access and
 backups should follow the company's data retention and access policy.
 
-Both tables currently use Gainr's configured MySQL database. The
+Both tables currently use the enabled tenant's configured MySQL database. The
 operator-facing table uses `request_id` as its unique idempotency and
 correlation key, without a foreign key to the tenant table. Provider attempts
 remain ordered inside `attempts_json`. This lets the operator table move to a
@@ -33,13 +33,13 @@ format or losing correlation.
 Create or verify the tables with:
 
 ```bash
-python scripts/migrate_search_analytics.py --company gainr
+python scripts/migrate_search_analytics.py --company acme
 ```
 
 The migration is idempotent and uses the selected tenant profile's own MySQL
 credentials. Production deployment runs it after building the API image and
 before restarting services. Enable analytics separately in each tenant
-profile; Gainr is the only enabled tenant currently.
+profile; enable it independently for each tenant that needs durable analytics.
 
 `SEARCH_ANALYTICS_DELIVERY_MODE=immediate` is the local-development default.
 Searches enqueue one small in-memory event and do not wait for a MySQL insert.
@@ -52,7 +52,7 @@ retain user IDs, route reasons, or arbitrary request fields. The independent
 two-hour analytics timer runs:
 
 ```bash
-python scripts/flush_search_analytics.py --company gainr
+python scripts/flush_search_analytics.py --company acme
 ```
 
 The uploader takes a stable snapshot and commits idempotent batches to the
@@ -96,7 +96,8 @@ Each internal usage row represents one incoming search request, so `COUNT(*)`
 is the request count and `SUM(api_call_count)` is the number of downstream
 planner, embedding, and reranker calls. Its top-level `duration_ms` is the
 server-side search-processing latency measured by a monotonic high-resolution
-clock. For Gainr it covers the compatibility workflow through result mapping;
+clock. For a tenant using a compatibility adapter, it covers that workflow
+through result mapping;
 it does not include internet transit or frontend rendering. Durations inside
 `attempts_json` apply only to individual provider attempts; they can overlap
 and must not be summed to infer endpoint latency. The same applies to values in

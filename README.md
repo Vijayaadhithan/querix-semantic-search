@@ -16,10 +16,10 @@ A tenant-isolated semantic search service for product and classified catalogues.
   dashboards from atomic snapshots.
 - Redis result caching plus graceful vector, BM25, and reranker degradation.
 - Docker deployment with persistent pgvector, Redis, Ollama, and application data.
-- Gainr compatibility pagination with a ranked 20-result first page and
+- Optional tenant compatibility pagination with a ranked first page and
   filtered continuation pages.
 - Real serving-path readiness, bounded overload admission, rotated container
-  logs, and a guarded daily incremental-ingestion timer.
+  logs, and a guarded daily zero-downtime ingestion timer.
 
 The runtime and ingestion vector backend is PostgreSQL/pgvector only. Tenant
 configuration still carries a `storage.vector_backend` discriminator, but
@@ -68,7 +68,7 @@ configs/tenants/      Tenant database, storage, API, and retrieval profiles
 eval/                 Query-planning and retrieval evaluation cases
 scripts/              Diagnostics, key generation, and maintenance utilities
 src/
-  analytics_service/  Daily SQL analytics, snapshots, and analytics API
+  analytics_service/  Scheduled SQL analytics, snapshots, and analytics API
   api/                FastAPI routes, contracts, services, and tenant lifecycle
   cli/                Chat, ingestion, and evaluation entry points
   core/               Settings, tenant configuration, and rate limiting
@@ -77,7 +77,7 @@ src/
   providers/          Gemini/Groq and Ollama clients
   search/             Planning, BM25, retrieval, ranking, and tenant policies
   storage/            MySQL, PostgreSQL/pgvector, Redis, and usage stores
-  tenants/gainr/      Gainr compatibility contract, repository, and policy
+  tenants/<company>/   Tenant-specific compatibility contracts and policies
 tests/
   api/                API lifecycle and contract tests
   cli/                CLI and evaluation tests
@@ -87,12 +87,12 @@ tests/
   providers/          External-provider client tests
   search/             Planner, policy, retrieval, and reranker tests
   storage/            Database, pgvector, Redis, and usage-store tests
-  tenants/gainr/      Gainr compatibility tests
+  tenants/<company>/   Tenant-specific compatibility tests
 ```
 
 Run application modules from the repository root with `PYTHONPATH=src`, for
 example `PYTHONPATH=src .venv/bin/python -m api` or
-`PYTHONPATH=src .venv/bin/python -m cli.ingest --company gainr --list`.
+`PYTHONPATH=src .venv/bin/python -m cli.ingest --company acme --list`.
 
 ## Documentation
 
@@ -136,7 +136,7 @@ docker compose up -d --no-deps --force-recreate analytics-api
 
 # Build a snapshot manually.
 docker compose run --rm --no-deps analytics-api \
-  python -m analytics_service.refresh --company gainr
+  python -m analytics_service.refresh --company acme
 
 # Status, last 500 API log lines, and live logs.
 docker compose ps

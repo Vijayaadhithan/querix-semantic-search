@@ -40,7 +40,7 @@ curl -fsS http://127.0.0.1:8000/api/v1/ready | jq
 # Daily analytics readiness and manual refresh.
 curl -fsS http://127.0.0.1:8010/api/v1/ready | jq
 docker compose run --rm --no-deps analytics-api \
-  python -m analytics_service.refresh --company gainr
+  python -m analytics_service.refresh --company acme
 
 # Analytics-only users (interactive hidden password prompts).
 docker compose run --rm analytics-api \
@@ -48,7 +48,7 @@ docker compose run --rm analytics-api \
     --username analytics-admin --role internal_admin
 docker compose run --rm analytics-api \
   python -m analytics_service.users create \
-    --username gainr-owner --role company_user --company gainr
+    --username acme-owner --role company_user --company acme
 ```
 
 For search-stage timings rather than only container output:
@@ -109,7 +109,7 @@ cd <production-repository-path>
 export BRANCH=main
 git status --short
 git pull --ff-only origin "$BRANCH" && \
-  COMPANY_ID=gainr ./scripts/deploy_production.sh
+  COMPANY_ID=acme ./scripts/deploy_production.sh
 ```
 
 The script automatically validates Compose, rebuilds both API images, ensures
@@ -148,7 +148,7 @@ residue, public port bindings, the ingestion timer, and legacy virtualenv
 references. It does not restart services, ingest data, or delete files.
 
 ```bash
-COMPANY_ID=gainr ./scripts/audit_production_host.sh
+COMPANY_ID=acme ./scripts/audit_production_host.sh
 ```
 
 Install the daily verified backup timer once on the production host. It runs at
@@ -235,7 +235,9 @@ sudo systemctl is-active docker
 Legacy API and Ollama systemd services must remain disabled when Compose owns those services:
 
 ```bash
-sudo systemctl disable --now gainr-api
+export COMPANY_ID="${COMPANY_ID:-acme}"
+export LEGACY_API_SERVICE="${LEGACY_API_SERVICE:-semantic-search-api}"
+sudo systemctl disable --now "$LEGACY_API_SERVICE"
 sudo systemctl disable --now ollama
 ```
 
@@ -509,7 +511,7 @@ curl -fsS -X POST \
   -d '{"query":"example product query","page_size":10}'
 ```
 
-For a tenant configured with the `gainr_legacy` compatibility adapter, use
+For a tenant configured with a legacy compatibility adapter, use
 `/filter-result` instead. Its mobile, web, and other clients must send the
 selected location as `filter.city_id`; `/search` is intentionally disabled:
 
@@ -567,7 +569,7 @@ cd <production-repository-path>
 export BRANCH=main
 git status --short
 git pull --ff-only origin "$BRANCH" && \
-  COMPANY_ID=gainr ./scripts/deploy_production.sh
+  COMPANY_ID=acme ./scripts/deploy_production.sh
 ```
 
 Do not run ingestion automatically for every code-only release. Run it only when source data, embedding content, the embedding model, BM25 data, or index schema changed.
@@ -610,17 +612,17 @@ During a run, verify that the API remains available and inspect the generation:
 
 ```bash
 curl -fsS http://127.0.0.1:8000/api/v1/ready
-docker compose exec -T api python scripts/doctor.py --company gainr
-cat storage/companies/gainr/index-generations.json
+docker compose exec -T api python scripts/doctor.py --company "$COMPANY_ID"
+cat "storage/companies/$COMPANY_ID/index-generations.json"
 ```
 
 If the newly promoted generation later proves unsuitable, hot-roll back to the
 recorded previous slot without restarting the API:
 
 ```bash
-docker compose exec -T api sh -lc \
+docker compose exec -e COMPANY_ID="$COMPANY_ID" -T api sh -lc \
   'curl -fsS -X POST -H "X-Admin-Key: $API_ADMIN_KEY" \
-  http://127.0.0.1:8000/api/v1/gainr/admin/rollback-index'
+  "http://127.0.0.1:8000/api/v1/$COMPANY_ID/admin/rollback-index"'
 ```
 
 The timer uses `Persistent=true`: if the host is down at 03:00 IST, systemd

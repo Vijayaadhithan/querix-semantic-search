@@ -20,8 +20,8 @@ Use one API worker, a tenant engine cache of one, and one concurrent search per 
 The hosted profile uses Voyage 2.5 first, OpenRouter Nemotron free second, and
 Voyage 2.5 Lite last. LangSearch and Jina are not runtime providers. The profile
 reranks 20 candidates, caps each candidate document at 300 characters, and uses
-a 40-item hybrid recall window. Gainr retains the ranked window first and adds
-eligible filtered continuation results only after it.
+a 40-item hybrid recall window. A compatibility adapter may retain the ranked
+window first and add eligible filtered continuation results only after it.
 
 Exact catalogue categories with simple stated filters use the deterministic
 database path and skip the LLM, embedding, pgvector, BM25, and reranker.
@@ -155,17 +155,16 @@ the host filesystem cache; `prewarm_mode: buffer` targets PostgreSQL shared
 buffers and requires a buffer pool larger than the HNSW index. Startup prewarm
 is fail-open and logs the index, mode, blocks, bytes, and duration; it does not
 alter ranking behavior. The periodic local-path warm-up repeats the configured
-index prewarm before its representative HNSW queries. The scheduled Gainr
+index prewarm before its representative HNSW queries. The scheduled tenant
 warm-up uses a deep unfiltered HNSW window after warming the complete vector
 heap and index. Override `WARMUP_CANDIDATES` only after latency and relevance
 testing.
 
-Gainr uses `prewarm_mode: buffer` with a 2 GB PostgreSQL `shared_buffers`
-allocation inside a 4 GB container limit. Startup, hourly warm-up, and the
-post-ingestion warm-up load the vector heap and HNSW index into that fixed
-buffer pool before running representative queries. Do not change the prewarm
-mode, `shared_buffers`, or the container memory limit without comparing
-filtered semantic latency and peak host/cgroup memory.
+For a tenant configured with `prewarm_mode: buffer`, startup, the 30-minute
+warm-up, and the post-ingestion warm-up load the vector heap and HNSW index
+into PostgreSQL's fixed buffer pool before running representative queries. Do
+not change the prewarm mode, `shared_buffers`, or the container memory limit
+without comparing filtered semantic latency and peak host/cgroup memory.
 
 `vector_eligible=1001 vector_eligible_capped=True` means the bounded
 eligibility probe found more than the 1,000-row exact-ranking threshold; it
@@ -186,9 +185,9 @@ curl -fsS \
   -H "X-Admin-Key: $API_ADMIN_KEY" | jq
 ```
 
-Gainr also persists a reduced tenant-facing search history table and a
-separate operator-facing provider-call/token table to its configured MySQL
-database for now. See
+The enabled tenant also persists a reduced tenant-facing search history table
+and a separate operator-facing provider-call/token table to its configured
+MySQL database for now. See
 [`search_analytics.md`](search_analytics.md) for the two-table schema,
 migration command, privacy boundary, and reporting queries.
 
@@ -205,7 +204,7 @@ Use `next_after_id` as the next request's `after_id` to retrieve only newer
 entries. Events are explicitly ordered `oldest_to_newest` and include a small
 `kind` such as `startup`, `search_completed`, `provider_fallback`, `capacity`,
 `http_failure`, `warning`, or `error`. At INFO, the feed keeps one end-to-end
-Gainr completion summary per request rather than every internal search stage.
+tenant completion summary per request rather than every internal search stage.
 It also keeps the startup warm-up summary, provider fallback/capacity events,
 failed HTTP requests, and all warnings/errors. Successful HTTP access logs and
 intermediate plan/retrieval/reranking lines are omitted; use the company admin

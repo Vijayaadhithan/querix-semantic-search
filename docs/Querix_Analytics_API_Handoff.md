@@ -1,6 +1,6 @@
 # Querix Analytics API handoff
 
-Last verified: 30 July 2026  
+Last verified: 21 August 2026
 Service: separate Querix analytics product  
 Production/test base URL: `https://api.querix.co`  
 Local analytics base URL: `http://127.0.0.1:8010`
@@ -8,7 +8,7 @@ Local analytics base URL: `http://127.0.0.1:8010`
 ## 1. Product and tenant model
 
 Analytics is a separate Docker image and process named `analytics-api`. The
-existing semantic-search API, its routes, image, and `GAINR_API_KEY` are not
+existing semantic-search API, its routes, image, and tenant search API keys are not
 modified or reused.
 
 Every snapshot, login, API key, dashboard, and query record is company-scoped:
@@ -79,8 +79,8 @@ Send the company-specific analytics key:
 X-API-Key: <company analytics key>
 ```
 
-For Gainr this value is stored only as `GAINR_ANALYTICS_API_KEY` in the
-server's `/root/Peronsal_rag/.env.keys`. It is separate from `GAINR_API_KEY`.
+For each tenant this value is stored only as its tenant-specific analytics key
+in the server's secret store. It is separate from the tenant's search API key.
 The key does **not** change on a deploy, image rebuild, container recreation, or
 server restart. It changes only when an operator deliberately rotates it using
 the approved secret-management workflow.
@@ -94,13 +94,14 @@ store operator credentials only in the approved password manager.
 
 ## 4. Endpoint summary
 
-Production health routes use the gateway-prefixed paths shown below. Business
-and authentication routes are identical locally and in production.
+Health, business, and authentication routes are identical locally and in
+production. An external gateway must preserve these paths if it fronts the
+analytics service.
 
 | Method | Production path | Authentication | Purpose |
 |---|---|---|---|
-| `GET` | `/api/v1/analytics/live` | none | Process liveness |
-| `GET` | `/api/v1/analytics/ready` | none | Snapshot readiness |
+| `GET` | `/api/v1/live` | none | Process liveness |
+| `GET` | `/api/v1/ready` | none | Snapshot readiness |
 | `POST` | `/api/v1/analytics/company/auth/login` | username/password | Start company session |
 | `GET` | `/api/v1/analytics/company/auth/me` | company cookie | Read company principal |
 | `POST` | `/api/v1/analytics/company/auth/logout` | company cookie | Revoke company session only |
@@ -123,9 +124,7 @@ There is intentionally no `/api/v1/admin/analytics/overview`; it returns 404.
 
 ## 5. Requests and responses
 
-### `GET /api/v1/analytics/live`
-
-Production path: `/api/v1/analytics/live`
+### `GET /api/v1/live`
 
 Response `200`:
 
@@ -133,9 +132,7 @@ Response `200`:
 {"status": "ok"}
 ```
 
-### `GET /api/v1/analytics/ready`
-
-Production path: `/api/v1/analytics/ready`
+### `GET /api/v1/ready`
 
 Response `200` when every configured company has a completed snapshot:
 
@@ -160,7 +157,7 @@ Request:
 
 ```json
 {
-  "username": "gainr-analytics",
+  "username": "acme-analytics",
   "password": "<password>"
 }
 ```
@@ -175,9 +172,9 @@ Company response `200`:
 ```json
 {
   "user": {
-    "username": "gainr-analytics",
+    "username": "acme-analytics",
     "role": "company_user",
-    "company_id": "gainr"
+    "company_id": "acme"
   },
   "expires_at": "2026-07-30T21:00:00+00:00"
 }
@@ -254,7 +251,7 @@ Response `200`:
 {
   "metadata": {
     "schema_version": "2.0",
-    "company_id": "gainr",
+    "company_id": "acme",
     "generated_at": "2026-07-30T17:00:00+00:00",
     "refresh_schedule": "every 2 hours at :30 Asia/Kolkata",
     "source_rows": {
@@ -271,9 +268,9 @@ Response `200`:
       "market_intelligence"
     ],
     "metric_counts": {
-      "search_intelligence": 13,
-      "deep_analytics": 10,
-      "market_intelligence": 8
+      "search_intelligence": 17,
+      "deep_analytics": 19,
+      "market_intelligence": 9
     },
     "individual_query_count": 365
   },
@@ -358,7 +355,7 @@ Company response `200`:
 
 ```json
 {
-  "company_id": "gainr",
+  "company_id": "acme",
   "items": [
     {
       "search_id": 123,
@@ -411,7 +408,7 @@ Response `200`:
 
 ```json
 {
-  "company_id": "gainr",
+  "company_id": "acme",
   "has_snapshot": true,
   "snapshot": {
     "generated_at": "2026-07-30T17:00:00+00:00",
@@ -437,8 +434,8 @@ Response `200`:
 {
   "companies": [
     {
-      "company_id": "gainr",
-      "endpoint_slug": "gainr",
+      "company_id": "acme",
+      "endpoint_slug": "acme",
       "has_snapshot": true,
       "snapshot": {},
       "latest_run": {},
@@ -458,36 +455,36 @@ Set non-secret variables:
 
 ```bash
 export ANALYTICS_BASE_URL="https://api.querix.co"
-export ANALYTICS_COMPANY="gainr"
+export ANALYTICS_COMPANY="acme"
 ```
 
 Load the server-to-server key into the shell without printing it:
 
 ```bash
-read -s GAINR_ANALYTICS_API_KEY
-export GAINR_ANALYTICS_API_KEY
+read -s ACME_ANALYTICS_API_KEY
+export ACME_ANALYTICS_API_KEY
 ```
 
 Liveness/readiness:
 
 ```bash
-curl -fsS "$ANALYTICS_BASE_URL/api/v1/analytics/live" | jq
-curl -fsS "$ANALYTICS_BASE_URL/api/v1/analytics/ready" | jq
+curl -fsS "$ANALYTICS_BASE_URL/api/v1/live" | jq
+curl -fsS "$ANALYTICS_BASE_URL/api/v1/ready" | jq
 ```
 
 Company server-to-server calls:
 
 ```bash
 curl -fsS \
-  -H "X-API-Key: $GAINR_ANALYTICS_API_KEY" \
+  -H "X-API-Key: $ACME_ANALYTICS_API_KEY" \
   "$ANALYTICS_BASE_URL/api/v1/$ANALYTICS_COMPANY/analytics/dashboard" | jq
 
 curl -fsS \
-  -H "X-API-Key: $GAINR_ANALYTICS_API_KEY" \
+  -H "X-API-Key: $ACME_ANALYTICS_API_KEY" \
   "$ANALYTICS_BASE_URL/api/v1/$ANALYTICS_COMPANY/analytics/status" | jq
 
 curl -fsS -G \
-  -H "X-API-Key: $GAINR_ANALYTICS_API_KEY" \
+  -H "X-API-Key: $ACME_ANALYTICS_API_KEY" \
   --data-urlencode "outcome=zero_result" \
   --data-urlencode "limit=50" \
   "$ANALYTICS_BASE_URL/api/v1/$ANALYTICS_COMPANY/analytics/queries" | jq
@@ -500,14 +497,14 @@ export ANALYTICS_COOKIE_JAR="/tmp/querix-company-analytics.cookies"
 
 curl -fsS -c "$ANALYTICS_COOKIE_JAR" \
   -H "Content-Type: application/json" \
-  -d '{"username":"gainr-analytics","password":"<password>"}' \
+  -d '{"username":"acme-analytics","password":"<password>"}' \
   "$ANALYTICS_BASE_URL/api/v1/analytics/company/auth/login" | jq
 
 curl -fsS -b "$ANALYTICS_COOKIE_JAR" \
   "$ANALYTICS_BASE_URL/api/v1/analytics/company/auth/me" | jq
 
 curl -fsS -b "$ANALYTICS_COOKIE_JAR" \
-  "$ANALYTICS_BASE_URL/api/v1/gainr/analytics/dashboard" | jq
+  "$ANALYTICS_BASE_URL/api/v1/acme/analytics/dashboard" | jq
 
 curl -fsS -b "$ANALYTICS_COOKIE_JAR" -X POST \
   "$ANALYTICS_BASE_URL/api/v1/analytics/company/auth/logout" | jq
@@ -530,10 +527,10 @@ curl -fsS -b "$ANALYTICS_ADMIN_COOKIE_JAR" \
   "$ANALYTICS_BASE_URL/api/v1/admin/analytics/companies" | jq
 
 curl -fsS -b "$ANALYTICS_ADMIN_COOKIE_JAR" \
-  "$ANALYTICS_BASE_URL/api/v1/admin/analytics/gainr/dashboard" | jq
+  "$ANALYTICS_BASE_URL/api/v1/admin/analytics/acme/dashboard" | jq
 
 curl -fsS -b "$ANALYTICS_ADMIN_COOKIE_JAR" \
-  "$ANALYTICS_BASE_URL/api/v1/admin/analytics/gainr/queries?limit=50" | jq
+  "$ANALYTICS_BASE_URL/api/v1/admin/analytics/acme/queries?limit=50" | jq
 
 curl -fsS -b "$ANALYTICS_ADMIN_COOKIE_JAR" -X POST \
   "$ANALYTICS_BASE_URL/api/v1/analytics/internal/auth/logout" | jq
@@ -544,8 +541,8 @@ Expected security checks:
 ```bash
 # Existing search-product key must return 403, not 200.
 curl -sS -o /dev/null -w "%{http_code}\n" \
-  -H "X-API-Key: $GAINR_API_KEY" \
-  "$ANALYTICS_BASE_URL/api/v1/gainr/analytics/dashboard"
+  -H "X-API-Key: $ACME_API_KEY" \
+  "$ANALYTICS_BASE_URL/api/v1/acme/analytics/dashboard"
 
 # Company session must return 403 for another company.
 curl -sS -o /dev/null -w "%{http_code}\n" \
@@ -603,13 +600,13 @@ Rules:
 - Adding a tenant creates a separate company snapshot and endpoint; it never
   merges rows with another tenant.
 
-The safe default is intentionally reduced to 31 company metrics:
+The current safe default contains 45 company metrics:
 
-- Search Intelligence: 13
-- Deep Analytics: 10
-- Market Intelligence: 8
+- Search Intelligence: 17
+- Deep Analytics: 19
+- Market Intelligence: 9
 
-Internal adds 15 API Performance metrics. The remaining exploratory reports are
+Internal adds 16 API Performance metrics. The remaining exploratory reports are
 available for deliberate per-company selection, but should be enabled only
 when that company's data semantics and business requirement justify them.
 
@@ -639,8 +636,8 @@ Rotate during a coordinated client change. Generate at least 256 random bits,
 update only the analytics key variable, recreate only `analytics-api`, verify
 the new key, and then remove the old client secret.
 
-Because the current tenant configuration names one Gainr analytics key
-variable, rotation is an atomic cutover. For zero-downtime overlap, temporarily
+Because a tenant configuration normally names one analytics key variable,
+rotation is an atomic cutover. For zero-downtime overlap, temporarily
 add a second key environment variable to `api_key_envs`, deploy, migrate
 clients, then remove the old variable in a later deployment.
 
@@ -698,12 +695,12 @@ database workload every two hours even though it does not affect search
 application code or restart the search API. As data grows, use a database
 replica and incremental watermarks/indexes to isolate that read load further.
 
-The first production verification completed a real Gainr snapshot and kept the
-existing search API healthy and warm. Current known host considerations:
+Production verification should confirm that the tenant database uses verified
+TLS when it is remote. A database that cannot provide TLS must be upgraded at
+the database layer before the connection is treated as fully hardened.
 
-- Gainr's current MySQL server does not offer TLS, so the working connection is
-  temporarily configured with TLS disabled. This should be upgraded at the
-  database layer before treating the connection as fully hardened.
+Current known host considerations:
+
 - The existing search concurrency setting was left unchanged because analytics
   is a separate product and this deployment must not retune search behavior.
 
@@ -719,7 +716,7 @@ curl -fsS http://127.0.0.1:8010/api/v1/ready | jq
 
 # Manual refresh for one company.
 docker compose run --rm --no-deps analytics-api \
-  python -m analytics_service.refresh --company gainr
+  python -m analytics_service.refresh --company acme
 
 # Session cleanup.
 docker compose run --rm --no-deps analytics-api \

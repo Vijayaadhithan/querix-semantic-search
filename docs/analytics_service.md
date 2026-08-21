@@ -19,7 +19,7 @@ The image has two entrypoints:
 python -m analytics_service
 
 # One-shot SQL extraction, calculation, and atomic publication.
-python -m analytics_service.refresh --company gainr
+python -m analytics_service.refresh --company acme
 ```
 
 The snapshot database defaults to
@@ -52,7 +52,8 @@ query request names exactly one company.
 The original exploratory reports remain in the domain source for future
 validation, but only the curated catalogue in `metrics.py` is persisted or
 returned. Misleading estimates, duplicated reports, provider-specific reports,
-and niche Gainr-only questions are excluded.
+and tenant-specific questions are excluded unless explicitly validated and
+enabled for that tenant.
 
 Each tenant can override the curated defaults without changing code. Company
 and internal profiles are separate. Internal profiles accept only operational
@@ -216,8 +217,8 @@ its readiness. Ordinary deployments do not recalculate an existing snapshot.
 Company endpoints accept either a company-bound analytics login session or the
 tenant's `X-API-Key`. The API-key path exists for server-to-server callers; a
 browser frontend must use the login session and must not contain the API key.
-Analytics uses a separate product key such as `GAINR_ANALYTICS_API_KEY`; it
-does not reuse or alter the semantic-search API's `GAINR_API_KEY`.
+Analytics uses a separate product key such as `ACME_ANALYTICS_API_KEY`; it does
+not reuse or alter the semantic-search API's `ACME_API_KEY`.
 
 ```text
 GET /api/v1/{company}/analytics/dashboard
@@ -274,7 +275,7 @@ Dashboard filters apply to the `filtered_overview` search/API activity data,
 including its main time-series graph. Catalogue, user, supply, and market
 questions are snapshot metrics and are intentionally not rewritten by a
 search time filter. Graph buckets and naive custom boundaries use the tenant's
-configured `analytics.timezone` (Gainr uses `Asia/Kolkata`). City and city ID
+configured `analytics.timezone` (for example, `Asia/Kolkata`). City and city ID
 come from the actual resolved request filter captured by the search API; they
 are never inferred from query text. The response provides readable city options
 paired with their IDs. Records written before filter-context capture are
@@ -309,8 +310,8 @@ Example:
 
 ```bash
 curl -fsS \
-  "http://127.0.0.1:8010/api/v1/gainr/analytics/queries?outcome=zero_result&limit=50" \
-  -H "X-API-Key: $GAINR_ANALYTICS_API_KEY" | jq
+  "http://127.0.0.1:8010/api/v1/acme/analytics/queries?outcome=zero_result&limit=50" \
+  -H "X-API-Key: $ACME_ANALYTICS_API_KEY" | jq
 ```
 
 Create the first internal user interactively:
@@ -327,9 +328,9 @@ Create a company-bound dashboard user:
 ```console
 docker compose run --rm analytics-api \
   python -m analytics_service.users create \
-    --username gainr-owner \
+    --username acme-owner \
     --role company_user \
-    --company gainr
+    --company acme
 ```
 
 Passwords are read from a hidden interactive prompt, never from the command
@@ -360,10 +361,10 @@ Generate a strong company credential file without printing its password:
 docker compose run --rm --no-deps --user root \
   -v "$PWD:/credentials" analytics-api \
   python -m analytics_service.users generate-credentials \
-    --file /credentials/.env.analytics.gainr.credentials \
-    --username gainr-owner \
+    --file /credentials/.env.analytics.acme.credentials \
+    --username acme-owner \
     --role company_user \
-    --company gainr
+    --company acme
 ```
 
 Generate the internal file similarly:
@@ -381,7 +382,7 @@ Apply either file to SQLite through an ephemeral container:
 
 ```console
 docker compose run --rm --no-deps \
-  --env-from-file .env.analytics.gainr.credentials \
+  --env-from-file .env.analytics.acme.credentials \
   analytics-api \
   python -m analytics_service.users sync-credentials
 ```
@@ -432,11 +433,11 @@ Browser login example:
 ```console
 curl -c /tmp/querix-analytics-cookies \
   -H "Content-Type: application/json" \
-  -d '{"username":"gainr-owner","password":"your password"}' \
+  -d '{"username":"acme-owner","password":"your password"}' \
   http://127.0.0.1:8010/api/v1/analytics/company/auth/login
 
 curl -b /tmp/querix-analytics-cookies \
-  http://127.0.0.1:8010/api/v1/gainr/analytics/dashboard
+  http://127.0.0.1:8010/api/v1/acme/analytics/dashboard
 ```
 
 Internal users use the independent internal login endpoint, then call one
@@ -449,7 +450,7 @@ curl -c /tmp/querix-internal-analytics-cookies \
   http://127.0.0.1:8010/api/v1/analytics/internal/auth/login
 
 curl -b /tmp/querix-internal-analytics-cookies \
-  http://127.0.0.1:8010/api/v1/admin/analytics/gainr/dashboard
+  http://127.0.0.1:8010/api/v1/admin/analytics/acme/dashboard
 ```
 
 ## Authentication rollout order
@@ -473,9 +474,9 @@ Analytics-enabled tenant YAML files define normalized source tables:
 ```yaml
 analytics:
   enabled: true
-  endpoint_slug: gainr
+  endpoint_slug: acme
   api_key_envs:
-    - GAINR_ANALYTICS_API_KEY
+    - ACME_ANALYTICS_API_KEY
   history_days: 90
   tables:
     search_history: semantic_search_history
@@ -522,15 +523,15 @@ analytics:
     use_company_database: false
     database:
       backend: postgres
-      host_env: GAINR_ANALYTICS_HOST
-      port_env: GAINR_ANALYTICS_PORT
-      database_env: GAINR_ANALYTICS_DATABASE
-      user_env: GAINR_ANALYTICS_USER
-      password_env: GAINR_ANALYTICS_PASSWORD
+      host_env: ACME_ANALYTICS_HOST
+      port_env: ACME_ANALYTICS_PORT
+      database_env: ACME_ANALYTICS_DATABASE
+      user_env: ACME_ANALYTICS_USER
+      password_env: ACME_ANALYTICS_PASSWORD
       schema: public
       tls:
         mode: verify-full
-        ca_file_env: GAINR_ANALYTICS_TLS_CA_FILE
+        ca_file_env: ACME_ANALYTICS_TLS_CA_FILE
 ```
 
 ## Local verification
@@ -549,7 +550,7 @@ docker compose run --rm --no-deps \
   -e ANALYTICS_SNAPSHOT_DB_PATH=/tmp/analytics-test.sqlite3 \
   analytics-api \
   python -m analytics_service.refresh \
-    --company gainr \
+    --company acme \
     --csv-data-dir /analytics-data
 ```
 
@@ -558,7 +559,7 @@ storage:
 
 ```bash
 docker compose run --rm --no-deps analytics-api \
-  python -m analytics_service.refresh --company gainr
+  python -m analytics_service.refresh --company acme
 ```
 
 Start the API:

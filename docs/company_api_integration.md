@@ -190,21 +190,21 @@ The service can enable an optional tenant adapter for an existing frontend contr
 
 These routes are adapter-specific and are not part of the canonical integration contract. New integrations should use `/search`, `/health`, and `/usage` unless compatibility is explicitly required.
 
-Gainr's `filter-result` adapter uses page-number pagination rather than the
+A tenant's `filter-result` adapter may use page-number pagination rather than the
 canonical cursor contract. Resend the same `searchTerm` and `filter` object and
 change only `page`. Exact deterministic requests use the direct catalogue path.
-For a tenant using this adapter, the canonical `/<company-slug>/search` route is
-disabled; mobile, web, and other clients must use `filter-result`. Structured
-frontend location IDs are authoritative, and chat text does not create hard
-state, city, or locality constraints.
+For a tenant using this adapter, the canonical `/<company-slug>/search` route may
+be disabled; clients must use `filter-result` when the tenant contract requires
+it. Structured frontend location IDs are authoritative, and chat text does not
+create hard state, city, or locality constraints.
 Semantic requests keep the ranked vector/BM25 results first, then eligible
 filtered continuation inventory satisfying the same predefined city, locality,
 price, duration, and ad-type constraints. The final page may contain fewer than
-20 rows when eligible inventory is exhausted.
+the configured page size when eligible inventory is exhausted.
 
-These routing and relevance changes do not alter Gainr's legacy input or output
-payload. The adapter still emits only its configured public fields and keeps
-internal search metadata out of the frontend response unless explicitly
+These routing and relevance changes do not alter the tenant's legacy input or
+output payload. The adapter still emits only its configured public fields and
+keeps internal search metadata out of the frontend response unless explicitly
 enabled in tenant configuration.
 
 ## Backend proxy example

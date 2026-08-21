@@ -46,7 +46,8 @@ Both checks should report an enabled and active Docker service.
 Only Docker should own the application ports. Check for older API and Ollama services:
 
 ```bash
-sudo systemctl status gainr-api --no-pager
+export LEGACY_API_SERVICE="${LEGACY_API_SERVICE:-semantic-search-api}"
+sudo systemctl status "$LEGACY_API_SERVICE" --no-pager
 sudo systemctl status ollama --no-pager
 sudo ss -ltnp | grep -E ':(8000|11434)[[:space:]]' || true
 ```
@@ -54,7 +55,7 @@ sudo ss -ltnp | grep -E ':(8000|11434)[[:space:]]' || true
 When migrating both services into Compose, disable the legacy units:
 
 ```bash
-sudo systemctl disable --now gainr-api
+sudo systemctl disable --now "$LEGACY_API_SERVICE"
 sudo systemctl disable --now ollama
 ```
 
@@ -66,7 +67,8 @@ Confirm the ports are available before starting Compose:
 sudo ss -ltnp | grep -E ':(8000|11434)[[:space:]]' || echo "Application ports are free"
 ```
 
-Do not enable the legacy services again. For Docker application logs, use `docker compose logs`, not `journalctl -u gainr-api`.
+Do not enable the legacy services again. For Docker application logs, use
+`docker compose logs`, not `journalctl -u "$LEGACY_API_SERVICE"`.
 
 ## 3. Obtain the repository
 
@@ -158,8 +160,8 @@ PGVECTOR_DATABASE=rag_workbench
 Add the company database hostname, port, database, source table, and result table required by its tenant profile. Do not place passwords in `.env`.
 
 Keep `database.index_namespace` stable when transferring an existing index
-between physical databases. Gainr uses the authoritative company database name
-as its stable namespace. A transferred local index must be re-keyed with the
+between physical databases. Use the authoritative tenant database identity as
+the stable namespace. A transferred local index must be re-keyed with the
 namespace-migration command; this preserves embeddings and avoids a full
 recalculation. Do not change the namespace without another explicit migration.
 
@@ -174,7 +176,7 @@ Tenant query behavior belongs in `configs/tenants/<company>.yaml`:
 ```yaml
 company:
   id: acme
-  planner_adapter: gainr
+  planner_adapter: default
   search_policy: default
 
 planner:
@@ -186,15 +188,17 @@ planner:
     using Acme's catalogue, filters, and listing meanings.
 ```
 
-The planner adapter supplies the common prompt and canonical filter schema.
-`prompt_context` adds company/domain guidance. `query_aliases` handles that
-tenant's spelling, colloquial, or transliterated language as semantic evidence
-only; it never creates a fuzzy hard category filter. Alias configuration is
-part of the plan-cache fingerprint, and Redis keys are tenant-prefixed.
+The shared planner supplies the common prompt and canonical filter schema.
+`planner_adapter` is a tenant profile label; use `default` unless a registered
+adapter is required for a specific contract. `prompt_context` adds
+company/domain guidance. `query_aliases` handles that tenant's spelling,
+colloquial, or transliterated language as semantic evidence only; it never
+creates a fuzzy hard category filter. Alias configuration is part of the
+plan-cache fingerprint, and Redis keys are tenant-prefixed.
 `search_policy` selects optional tenant-owned planning and ranking hooks;
 `default` performs no domain-specific rewrites or score adjustments.
 
-Use the existing `gainr` adapter only when a new tenant shares its canonical
+Reuse an existing adapter only when a new tenant shares its canonical
 marketplace meanings. A company with different filters, listing semantics, or
 payload behavior needs an appropriate adapter and tenant mapping. This changes
 internal interpretation, not the canonical `/search` request/response contract.
@@ -311,7 +315,7 @@ docker compose run --rm analytics-api \
     --username analytics-admin --role internal_admin
 docker compose run --rm analytics-api \
   python -m analytics_service.users create \
-    --username gainr-owner --role company_user --company gainr
+    --username acme-owner --role company_user --company acme
 ```
 
 These accounts authenticate only the analytics product. They do not change or
@@ -469,7 +473,7 @@ curl -fsS --max-time 120 -X POST \
 unset COMPANY_API_KEY
 ```
 
-For a tenant configured with the `gainr_legacy` compatibility adapter, smoke
+For a tenant configured with a legacy compatibility adapter, smoke
 test `/filter-result` with the frontend-selected `filter.city_id` instead. The
 generic `/search` route is intentionally disabled for that tenant.
 
@@ -492,8 +496,8 @@ Each service should report `restart=unless-stopped`.
 Confirm legacy services remain disabled:
 
 ```bash
-systemctl is-enabled gainr-api
-systemctl is-active gainr-api
+systemctl is-enabled "$LEGACY_API_SERVICE"
+systemctl is-active "$LEGACY_API_SERVICE"
 systemctl is-enabled ollama
 systemctl is-active ollama
 ```
@@ -523,7 +527,7 @@ Back up before applying an unverified release. Then update and recreate the API:
 cd <production-repository-path>
 git status --short
 git pull --ff-only origin main && \
-  COMPANY_ID=gainr ./scripts/deploy_production.sh
+  COMPANY_ID=acme ./scripts/deploy_production.sh
 ```
 
 The deployment script performs the Compose validation, API build/recreation,
@@ -644,7 +648,7 @@ Cause: a legacy systemd API or another process still owns the loopback port.
 
 ```bash
 sudo ss -ltnp | grep ':8000'
-sudo systemctl disable --now gainr-api
+sudo systemctl disable --now "$LEGACY_API_SERVICE"
 docker compose --profile ollama up -d --no-deps --force-recreate api
 ```
 

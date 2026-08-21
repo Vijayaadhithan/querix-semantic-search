@@ -1,14 +1,15 @@
 # Retrieval evaluation gates
 
-Run the reviewed Gainr cases with:
+Run the reviewed tenant cases with:
 
 ```bash
+export COMPANY_ID="${COMPANY_ID:-acme}"
 PYTHONPATH=src .venv/bin/python -m cli.evaluate_retrieval \
-  --company gainr \
+  --company "$COMPANY_ID" \
   --cases eval/retrieval_cases.json \
   --runs 3 \
-  --plan-snapshot /tmp/gainr-retrieval-plans.json \
-  --report /tmp/gainr-retrieval-report.json
+  --plan-snapshot "/tmp/${COMPANY_ID}-retrieval-plans.json" \
+  --report "/tmp/${COMPANY_ID}-retrieval-report.json"
 ```
 
 The evaluator plans each query once, retrieves one fused candidate set, and
