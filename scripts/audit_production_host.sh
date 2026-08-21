@@ -2,7 +2,7 @@
 set -uo pipefail
 
 PROJECT_DIR="${PROJECT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
-COMPANY_ID="${COMPANY_ID:-gainr}"
+COMPANY_ID="${COMPANY_ID:?COMPANY_ID must be set explicitly for the tenant}"
 
 failures=0
 warnings=0

@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 PROJECT_DIR="${PROJECT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
-COMPANY_ID="${COMPANY_ID:-gainr}"
+COMPANY_ID="${COMPANY_ID:?COMPANY_ID must be set explicitly for the tenant}"
 READY_URL="${READY_URL:-http://127.0.0.1:8000/api/v1/ready}"
 READINESS_ATTEMPTS="${READINESS_ATTEMPTS:-60}"
 READINESS_INTERVAL_SECONDS="${READINESS_INTERVAL_SECONDS:-3}"

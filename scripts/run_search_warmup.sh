@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 PROJECT_DIR="${PROJECT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
-COMPANY_ID="${COMPANY_ID:-gainr}"
+COMPANY_ID="${COMPANY_ID:?COMPANY_ID must be set explicitly for the tenant}"
 WARMUP_CANDIDATES="${WARMUP_CANDIDATES:-1000}"
 LOCK_FILE="${LOCK_FILE:-/tmp/semantic-search-warmup-${COMPANY_ID}.lock}"
 INGEST_LOCK_FILE="${INGEST_LOCK_FILE:-/tmp/semantic-search-ingest-${COMPANY_ID}.lock}"

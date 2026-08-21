@@ -45,6 +45,7 @@ from observability.admin_logs import LOG_LEVELS
 from search.engine import ProductSearchEngine
 from storage.usage import MonthlyUsageStore
 from storage.vector import get_tenant_vector_collection
+from tenants.compatibility import search_client_contract
 
 LOGGER = logging.getLogger("uvicorn.error")
 
@@ -261,7 +262,7 @@ def create_app(
                 status_code=404,
                 detail="Unknown company endpoint.",
             )
-        if profile.compatibility.adapter == "gainr_legacy":
+        if search_client_contract(profile.compatibility.adapter).blocks_generic_search:
             raise HTTPException(
                 status_code=404,
                 detail=("This tenant uses the compatibility filter-result endpoint."),

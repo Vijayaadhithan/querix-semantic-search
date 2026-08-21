@@ -123,6 +123,7 @@ def test_tenant_profiles_resolve_separate_storage_and_api_keys(
     assert profiles["alpha"].storage.pgvector_table == "alpha_vectors"
     assert profiles["alpha"].storage.pgvector_prewarm_on_startup is True
     assert profiles["alpha"].storage.pgvector_prewarm_mode == "buffer"
+
     assert profiles["alpha"].storage.bm25_path != profiles["beta"].storage.bm25_path
     assert profiles["alpha"].endpoint_slug == "alpha"
     assert profiles["alpha"].search_policy == "default"
@@ -149,6 +150,23 @@ def test_tenant_profiles_resolve_separate_storage_and_api_keys(
     assert registry.resolve_api_key("alpha-key").company_id == "alpha"
     assert registry.resolve_api_key("beta-key").company_id == "beta"
     assert registry.resolve_api_key("wrong") is None
+
+
+def test_tenant_profile_defaults_to_neutral_planner_adapter(tmp_path, monkeypatch):
+    write_profile(tmp_path, "alpha")
+    set_database_environment(monkeypatch, "alpha")
+    profile_path = tmp_path / "alpha.yaml"
+    profile_path.write_text(
+        profile_path.read_text(encoding="utf-8").replace(
+            "  planner_adapter: gainr\n",
+            "",
+        ),
+        encoding="utf-8",
+    )
+
+    profile = discover_tenant_profiles(tmp_path)["alpha"]
+
+    assert profile.planner_adapter == "default"
 
 
 def test_tenant_profile_rejects_unknown_pgvector_prewarm_mode(

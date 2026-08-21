@@ -22,7 +22,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Upload pending local search analytics to tenant MySQL.",
     )
-    parser.add_argument("--company", default="gainr")
+    parser.add_argument("--company", required=True)
     parser.add_argument("--batch-size", type=int, default=500)
     args = parser.parse_args()
 

@@ -11,6 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from core.tenant_config import discover_tenant_profiles
+from tenants.compatibility import search_client_contract
 
 
 def main() -> int:
@@ -36,9 +37,7 @@ def main() -> int:
 
     secret = f"rag_{profile.company_id}_{secrets.token_urlsafe(32)}"
     fingerprint = hashlib.sha256(secret.encode("utf-8")).hexdigest()[:16]
-    route = (
-        "filter-result" if profile.compatibility.adapter == "gainr_legacy" else "search"
-    )
+    route = search_client_contract(profile.compatibility.adapter).route
     print(f"Company: {profile.company_id}")
     print(f"Endpoint: /api/v1/{profile.endpoint_slug}/{route}")
     print(f"Set one of: {', '.join(profile.api_key_envs)}")

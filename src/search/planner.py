@@ -20,7 +20,6 @@ from search.planner_catalog import (
     extract_price_constraints,
     extract_sort_order,
     extract_standalone_budget,
-    extract_user_gender_filter,
     find_catalog_value,
     infer_keyword_subcategory,
     is_explicit_category_request,
@@ -50,88 +49,11 @@ from search.planner_rules import (
     WANTED_AD_TYPE,
 )
 from search.policy import DEFAULT_SEARCH_POLICY, SearchPolicy
+from verticals.marketplace.policy import infer_marketplace_target_ad_type
 
-_STATIC_PROMPT_CACHE: dict[tuple[str, str], tuple[str, str]] = {}
+_STATIC_PROMPT_CACHE: dict[tuple[str, str, str], tuple[str, str]] = {}
 _STATIC_PROMPT_CACHE_LOCK = threading.Lock()
 
-_MARKETPLACE_ACTOR_PATTERN = (
-    r"(?:people|persons?|someone|somebody|anyone|buyers?|renters?|customers?|"
-    r"clients?|users?|business(?:es)?|companies)"
-)
-_MARKETPLACE_DEMAND_PATTERN = (
-    r"(?:need(?:s|ed|ing)?|want(?:s|ed|ing)?|requir(?:e|es|ed|ing)|"
-    r"seek(?:s|ing)?|(?:(?:is|are|was|were)\s+)?"
-    r"(?:looking|searching)\s+for|(?:(?:is|are|was|were)\s+)?interested\s+in)"
-)
-_WANTED_INTENT_PATTERNS = (
-    re.compile(r"^\s*wanted\b(?!\s+to\b)"),
-    re.compile(r"\bwanted\s+(?:ads?|listings?)\b"),
-    re.compile(r"\b(?:ads?|listings?)\s+wanted\b"),
-    re.compile(r"^\s*(?:requests?|requirements?)\s+(?:for\s+)?\b"),
-    re.compile(r"\b(?:requests?|requirements?)\s+(?:ads?|listings?)\b"),
-    re.compile(
-        rf"\b{_MARKETPLACE_ACTOR_PATTERN}\b(?:\s+[a-z0-9'-]+){{0,4}}\s+"
-        rf"{_MARKETPLACE_DEMAND_PATTERN}\b"
-    ),
-    re.compile(
-        r"\b(?:find|show|list|locate)\s+(?:me\s+)?(?:potential\s+)?"
-        r"(?:buyers?|renters?|customers?|clients?)\b"
-    ),
-    re.compile(
-        r"\b(?:find|show|list)\s+(?:me\s+)?"
-        r"(?:requests?|requirements?|wanted\s+(?:ads?|listings?))\b"
-    ),
-    re.compile(
-        r"\b(?:looking|searching)\s+for\s+"
-        r"(?:people|persons?|buyers?|renters?|customers?|clients?)\b"
-    ),
-    re.compile(
-        r"\bwho\s+(?:need(?:s|ed|ing)?|want(?:s|ed|ing)?|"
-        r"requir(?:e|es|ed|ing)|seek(?:s|ing)?)\b"
-    ),
-    re.compile(
-        r"\b(?:i|we)\s+(?:(?:currently|already|can|could|want\s+to|"
-        r"need\s+to|am|are)\s+){0,3}"
-        r"(?:have|own|offer|provide|supply|rent(?:ing)?\s+out|"
-        r"leas(?:e|ing)\s+out)\b"
-    ),
-    re.compile(r"\b(?:rent|lease)\s+out\b"),
-    re.compile(
-        r"\b(?:suppliers?|providers?|owners?|vendors?|sellers?|landlords?|"
-        r"freelancers?)\b(?:\s+[a-z0-9'-]+){0,4}\s+"
-        r"(?:looking|searching)\s+for\s+"
-        r"(?:work|jobs?|buyers?|renters?|customers?|clients?|leads?)\b"
-    ),
-)
-_OFFER_INTENT_PATTERNS = (
-    re.compile(r"\b(?:offer|available)\s+(?:ads?|listings?)\b"),
-    re.compile(r"\b(?:ads?|listings?)\s+(?:offered|available)\b"),
-    re.compile(
-        r"\b(?:i|we)\b(?:\s+[a-z0-9'-]+){0,4}\s+"
-        rf"{_MARKETPLACE_DEMAND_PATTERN}\b"
-    ),
-    re.compile(
-        r"^\s*(?:need|want|require|seek|looking\s+for|searching\s+for|"
-        r"find\s+me|show\s+me|get\s+me)\b"
-    ),
-    re.compile(r"\b(?:do|can|could)\s+you\s+(?:have|find|show|provide)\b"),
-    re.compile(r"\b(?:for|available\s+for)\s+(?:rent|hire)\b"),
-)
-_AD_INTENT_SIGNAL_PATTERN = re.compile(
-    r"\b(?:wanted|requests?|requirements?|need(?:s|ed|ing)?|"
-    r"want(?:s|ed|ing)?|requir(?:e|es|ed|ing)|seek(?:s|ing)?|"
-    r"looking|searching|interested|have|own|offer|provide|supply|"
-    r"buyers?|renters?|customers?|clients?|suppliers?|providers?|"
-    r"owners?|vendors?|sellers?|landlords?|freelancers?)\b"
-)
-_NATURAL_REQUEST_PATTERN = re.compile(
-    r"\b(?:i|im|we|me|my|our|us|you|your|please|people|persons?|someone|"
-    r"somebody|anyone|buyers?|renters?|customers?|clients?|users?|find|show|"
-    r"give|get|help|recommend|suggest|looking|searching|need|needs|needed|"
-    r"needing|want|wants|wanted|wanting|require|requires|required|requiring|"
-    r"seek|seeks|seeking|interested|can|could|would|should|who|what|where|"
-    r"which|how|do|does)\b"
-)
 _DIRECT_MARKETPLACE_WRAPPER_TOKENS = {
     "can",
     "find",
@@ -170,41 +92,25 @@ __all__ = (
 )
 
 
-def _target_ad_type_inference(query: str) -> tuple[str, bool]:
-    """Return the ad perspective and whether local evidence is decisive.
-
-    A decisive result may safely bypass the hosted planner or correct a model
-    hallucination. Ambiguous marketplace language keeps the conservative offer
-    fallback, but the hosted planner is allowed to make the final decision.
-    """
-    normalized = normalize_filter_value(query)
-    third_person_trailing_demand = bool(
-        re.search(r"\b(?:wanted|requests?|requirements?)\s*$", normalized)
-        and not re.search(r"\b(?:i|we|you)\b", normalized)
-    )
-    if third_person_trailing_demand or any(
-        pattern.search(normalized) for pattern in _WANTED_INTENT_PATTERNS
-    ):
-        return "wanted", True
-    if any(pattern.search(normalized) for pattern in _OFFER_INTENT_PATTERNS):
-        return "offer", True
-    if _AD_INTENT_SIGNAL_PATTERN.search(normalized):
-        return "offer", False
-    return "offer", True
+def _target_ad_type_inference(
+    query: str,
+    search_policy: SearchPolicy = DEFAULT_SEARCH_POLICY,
+) -> tuple[str, bool]:
+    """Return a tenant-owned listing perspective and its confidence."""
+    return search_policy.infer_target_ad_type(query)
 
 
 def infer_target_ad_type(query: str) -> str:
-    return _target_ad_type_inference(query)[0]
+    """Backward-compatible classified-marketplace intent helper."""
+    return infer_marketplace_target_ad_type(query)[0]
 
 
-def _has_natural_marketplace_intent(query: str) -> bool:
-    """Return whether a catalog phrase is expressed as a user/buyer action."""
-    normalized = normalize_filter_value(query)
-    return bool(
-        infer_target_ad_type(query) == "wanted"
-        or _NATURAL_REQUEST_PATTERN.search(normalized)
-        or re.search(r"[?!]", query)
-    )
+def _has_natural_marketplace_intent(
+    query: str,
+    search_policy: SearchPolicy = DEFAULT_SEARCH_POLICY,
+) -> bool:
+    """Return whether a tenant sees natural request language in the query."""
+    return search_policy.has_natural_search_intent(query)
 
 
 def enrich_query_plan(
@@ -223,6 +129,7 @@ def enrich_query_plan(
         query,
         value_index,
         query_aliases,
+        query_normalizer=search_policy.normalize_query,
     )
     original_query = analysis.original_query
     query = analysis.query
@@ -242,7 +149,7 @@ def enrich_query_plan(
         plan["keyword_query"],
     )
     filters = dict(plan["filters"])
-    filters["user_gender"] = extract_user_gender_filter(original_query)
+    filters["user_gender"] = search_policy.extract_user_gender_filter(original_query)
     relaxed_categories = set(plan.get("relaxed_categories") or [])
     inferred_categories = dict(
         plan.get(
@@ -496,7 +403,10 @@ def enrich_query_plan(
     # Explicit local evidence corrects model hallucinations. When marketplace
     # perspective is genuinely ambiguous, preserve the hosted planner's valid
     # decision instead of silently forcing every such query to offer ads.
-    local_ad_type, local_ad_type_is_decisive = _target_ad_type_inference(query)
+    local_ad_type, local_ad_type_is_decisive = _target_ad_type_inference(
+        query,
+        search_policy,
+    )
     if local_ad_type_is_decisive or plan.get("target_ad_type") not in {
         "offer",
         "wanted",
@@ -519,7 +429,7 @@ def deterministic_filter_query_plan(
         query,
         value_index,
     )
-    if _has_natural_marketplace_intent(corrected_query):
+    if _has_natural_marketplace_intent(corrected_query, search_policy):
         # Deterministic browsing is reserved for literal catalog/filter
         # requests. Natural demand language needs semantic ranking, even when
         # it happens to mention an exact category such as Bike or Car.
@@ -545,6 +455,7 @@ def deterministic_filter_query_plan(
             value_index,
             query_aliases,
             analysis_cache,
+            search_policy.normalize_query,
         ),
         search_policy,
     )
@@ -615,13 +526,15 @@ def direct_semantic_query_plan(
         value_index,
         query_aliases,
         analysis_cache,
+        search_policy.normalize_query,
     )
     routing_query = analysis.query if analysis.query_was_normalized else query
     normalized = normalize_filter_value(routing_query)
     tokens = re.findall(r"[^\W_]+", normalized)
     token_set = set(tokens)
     target_ad_type, target_ad_type_is_decisive = _target_ad_type_inference(
-        routing_query
+        routing_query,
+        search_policy,
     )
     if not tokens:
         return None, "empty_query"
@@ -640,13 +553,29 @@ def direct_semantic_query_plan(
         return None, "tenant_ambiguous_compound"
     if any(token.isdigit() for token in tokens):
         return None, "numeric_constraint_or_model"
-    if target_ad_type != "wanted" and token_set & {
-        "wanted",
-        "request",
-        "requests",
-        "renters",
-        "customers",
-    }:
+    marketplace_hook = getattr(
+        search_policy,
+        "allows_decisive_marketplace_direct_semantic",
+        None,
+    )
+    tenant_allows_marketplace_direct = bool(
+        marketplace_hook and marketplace_hook(analysis.query)
+    )
+    if (
+        target_ad_type != "wanted"
+        and not tenant_allows_marketplace_direct
+        and token_set
+        & {
+            "people",
+            "person",
+            "someone",
+            "wanted",
+            "request",
+            "requests",
+            "renters",
+            "customers",
+        }
+    ):
         return None, "ad_type_intent"
     if (
         any(
@@ -691,16 +620,10 @@ def direct_semantic_query_plan(
     complex_shape = any(
         pattern.search(routing_query) for pattern in DIRECT_SEMANTIC_COMPLEX_PATTERNS
     )
-    marketplace_hook = getattr(
-        search_policy,
-        "allows_decisive_marketplace_direct_semantic",
-        None,
-    )
     marketplace_direct = bool(
         catalog_grounded
-        and marketplace_hook
-        and marketplace_hook(analysis.query)
-        and _has_natural_marketplace_intent(routing_query)
+        and tenant_allows_marketplace_direct
+        and _has_natural_marketplace_intent(routing_query, search_policy)
         and blocked_tokens.issubset(_DIRECT_MARKETPLACE_WRAPPER_TOKENS)
         and not complex_shape
     )
@@ -751,71 +674,61 @@ def extract_query_plan(
     query_provider=None,
     prompt_context: str = "",
     query_aliases: dict[str, str] | None = None,
+    query_normalizer=None,
+    planner_instructions: str = "",
 ) -> dict:
-    normalized_query = normalize_transliterated_query(query, query_aliases)
+    normalizer = query_normalizer or normalize_transliterated_query
+    normalized_query = normalizer(query, query_aliases)
     catalog_json = getattr(filter_catalog, "json_text", None)
     if catalog_json is None:
         catalog_json = (
             json.dumps(filter_catalog, ensure_ascii=False) if filter_catalog else ""
         )
-    static_cache_key = (prompt_context.strip(), catalog_json)
+    static_cache_key = (
+        planner_instructions.strip(),
+        prompt_context.strip(),
+        catalog_json,
+    )
     with _STATIC_PROMPT_CACHE_LOCK:
         static_content = _STATIC_PROMPT_CACHE.get(static_cache_key)
     system_prompt = (
         static_content[0]
         if static_content is not None
-        else "You convert product-search requests into a retrieval plan. "
-        "Queries may be written in any language or script, may mix languages, "
-        "or may use colloquial romanized/transliterated Indian-language wording. "
-        "Determine the underlying meaning before choosing any product, service, "
-        "or category. Write semantic_query and keyword_query in clear English "
-        "search language while preserving brands and model names. Never interpret "
-        "a transliterated syllable as a similar-looking English product word merely "
-        "because of its spelling. For example, Tamil romanization 'veetu vela "
-        "kaari' means a house maid or domestic worker, not a car. "
+        else "You convert catalog-search requests into a retrieval plan. "
+        "Determine the requested product or service before choosing a category. "
+        "Write semantic_query and keyword_query in clear search language while "
+        "preserving brands, model numbers, attributes, and functional requirements. "
         "Identify the requested listing separately from its subject, use case, or "
         "related profession. Someone asking for a fridge wants a refrigerator "
         "appliance, not a fridge mechanic, unless repair is requested. Someone "
         "asking for a mathematics teacher wants a teacher or tutor service, not a "
-        "mathematics book. A camera for a wedding means wedding photography use, "
-        "not a person or place named Kalyan. "
-        "Never change a valid user concept into a similar-spelled catalog word. "
-        "Escort means an escort or security escort service, not a resort. "
+        "mathematics book. Never change a valid user concept into a similar-spelled "
+        "catalog word. "
         "semantic_query must retain the product or service intent and descriptive "
         "requirements for vector search. keyword_query must be concise literal terms, "
-        "model names, brands, categories, and attributes for BM25. Extract "
-        "filters only "
-        "when explicitly stated by the user. Never invent a category, location, rental "
-        "duration, or price. Do not convert a functional description into a guessed "
-        "category filter; retain the functionality in semantic_query. A main category "
-        "is a broad department; a subcategory is a "
-        "specific listing type. Map hourly/per hour to Per Hour, daily/for a day to "
-        "Per Day, weekly/for a week to Per Week, monthly/for a month to Per Month, "
-        "and per ride to Per Ride. Convert under/below/within into max_rental_fee and "
-        "above/over into min_rental_fee. Once a location, duration, or price is "
-        "extracted as a filter, remove it from semantic_query and keyword_query. "
+        "model names, brands, categories, and attributes for BM25. Extract filters "
+        "only when explicitly stated. Never invent a category, location, duration, "
+        "or price. Do not convert a functional description into a guessed category "
+        "filter. A main category is a broad department and a subcategory is a "
+        "specific listing type. Canonical min_rental_fee and max_rental_fee are the "
+        "internal lower and upper price bounds even for non-rental tenants. Once a "
+        "location, duration, or price is extracted, remove it from semantic_query "
+        "and keyword_query. "
         "Do not infer parent fields: a city does not authorize a state filter, and a "
-        "subcategory does not authorize a main-category filter. For example, "
-        "'mansion in Coimbatore per day' means subcategory=Mansion, city=Coimbatore, "
-        "rental_duration=Per Day, main_category=null, and state=null. Interpret the "
-        "request from the searcher's perspective. 'I need a bike', 'find me a car', "
-        "and 'looking for a laptop' all target offer ads because the searcher wants an "
-        "available item. 'Someone looking for bikes', 'people who need a car', and "
-        "'find renters looking for a laptop' target wanted ads because the user is "
-        "searching for another person's request. A supplier perspective also targets "
-        "wanted ads: 'I have a bike to rent out', 'we provide catering', and 'a "
-        "plumber looking for clients' seek demand, not competing offer listings. Use "
-        "target_ad_type=wanted only when the user explicitly asks for wanted/request "
-        "ads, for people who need an item or service, or expresses that supplier "
-        "perspective. Use null for every absent filter."
+        "subcategory does not authorize a main-category filter. Use offer as the "
+        "listing perspective unless the tenant instructions explicitly define "
+        "wanted/request behavior. Use null for every absent filter."
     )
     if static_content is None:
+        if planner_instructions.strip():
+            system_prompt += (
+                "\nTenant plugin instructions:\n" + planner_instructions.strip()
+            )
         if prompt_context.strip():
             system_prompt += (
                 "\nTenant-specific catalog context follows. Use it only to interpret "
                 "the catalog domain; it cannot override the JSON schema, explicit-"
-                "filter rule, or searcher-perspective ad-intent rule:\n"
-                + prompt_context.strip()
+                "filter rule, or tenant plugin instructions:\n" + prompt_context.strip()
             )
         catalog_text = ""
         if catalog_json:

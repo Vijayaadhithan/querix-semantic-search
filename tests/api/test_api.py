@@ -1051,6 +1051,38 @@ def test_company_rate_limit_is_enforced_before_search(tmp_path):
     assert limited.headers["retry-after"] == "1"
 
 
+def test_three_semantic_requests_per_minute_are_allowed_then_limited(tmp_path):
+    alpha = tenant_profile(
+        tmp_path,
+        "alpha",
+        requests_per_minute=3,
+        burst=3,
+    )
+    registry = TenantRegistry(
+        {"alpha": alpha},
+        api_keys={"alpha": ["alpha-key"]},
+    )
+    limiter = TenantRateLimiter(redis_cache=None, clock=lambda: 100.0)
+    app = create_app(
+        tenant_registry=registry,
+        tenant_engine_factory=lambda *_args: FakeEngine(),
+        rate_limiter=limiter,
+        preload_models=False,
+    )
+
+    with TestClient(app) as client:
+        responses = [
+            client.post(
+                "/api/v1/search",
+                headers={"X-API-Key": "alpha-key"},
+                json={"query": "camera"},
+            )
+            for _ in range(4)
+        ]
+
+    assert [response.status_code for response in responses] == [200, 200, 200, 429]
+
+
 def test_company_usage_endpoint_returns_only_that_company_totals(tmp_path):
     alpha = tenant_profile(tmp_path, "alpha")
     beta = tenant_profile(tmp_path, "beta")

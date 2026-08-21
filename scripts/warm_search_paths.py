@@ -88,7 +88,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description=("Warm Ollama embeddings and representative HNSW/BM25 queries."),
     )
-    parser.add_argument("--company", default="gainr")
+    parser.add_argument("--company", required=True)
     parser.add_argument("--candidates", type=int, default=100)
     parser.add_argument("--query", action="append", dest="queries")
     args = parser.parse_args()

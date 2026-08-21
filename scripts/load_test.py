@@ -17,6 +17,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from core.tenant_config import discover_tenant_profiles
+from tenants.compatibility import search_client_contract
 
 
 def percentile(values: list[float], fraction: float) -> float:
@@ -85,7 +86,7 @@ def main() -> int:
     parser.add_argument(
         "--city-id",
         type=int,
-        help="selected frontend city ID (required by gainr_legacy)",
+        help="selected frontend city ID when required by the tenant contract",
     )
     parser.add_argument("--timeout-seconds", type=float, default=180)
     parser.add_argument("--warmup", type=int, default=1)
@@ -119,25 +120,20 @@ def main() -> int:
         parser.error("no API key configured in: " + ", ".join(profile.api_key_envs))
 
     queries = args.queries or ["portable camera"]
-    compatibility_enabled = profile.compatibility.adapter == "gainr_legacy"
-    if compatibility_enabled and (args.city_id is None or args.city_id <= 0):
-        parser.error("--city-id must be a positive integer for gainr_legacy")
-    route = "filter-result" if compatibility_enabled else "search"
+    client_contract = search_client_contract(profile.compatibility.adapter)
+    if client_contract.requires_city_id and (args.city_id is None or args.city_id <= 0):
+        parser.error("--city-id must be a positive integer for this tenant")
+    route = client_contract.route
     url = f"{args.base_url.rstrip('/')}/api/v1/{profile.endpoint_slug}/{route}"
 
     def payload(number: int) -> dict:
         query = queries[number % len(queries)]
-        if compatibility_enabled:
-            return {
-                "searchTerm": query,
-                "filter": {"city_id": args.city_id},
-                "page": 1,
-            }
-        mapping = profile.payload.request_mapping
-        return {
-            mapping["query"]: query,
-            mapping["page_size"]: args.page_size,
-        }
+        return client_contract.build_payload(
+            profile,
+            query,
+            args.page_size,
+            args.city_id,
+        )
 
     for number in range(args.warmup):
         warmup_result = send_search(

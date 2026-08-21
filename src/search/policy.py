@@ -1,5 +1,15 @@
+import re
 from dataclasses import dataclass
 from typing import Protocol
+
+_NATURAL_CATALOG_REQUEST_PATTERN = re.compile(
+    r"\b(?:i|im|we|me|my|our|us|you|your|please|people|persons?|someone|"
+    r"somebody|anyone|find|show|give|get|help|recommend|suggest|looking|"
+    r"searching|need|needs|needed|want|wants|required?|require|requires|"
+    r"seek|seeks|seeking|interested|can|could|would|should|who|what|where|"
+    r"which|how|do|does)\b",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
@@ -25,6 +35,20 @@ class SearchPolicy(Protocol):
     """Tenant-owned hooks around otherwise generic planning and ranking."""
 
     cache_key: str
+
+    def normalize_query(
+        self,
+        query: str,
+        query_aliases: dict[str, str] | None = None,
+    ) -> str: ...
+
+    def extract_user_gender_filter(self, query: str) -> int | None: ...
+
+    def infer_target_ad_type(self, query: str) -> tuple[str, bool]: ...
+
+    def has_natural_search_intent(self, query: str) -> bool: ...
+
+    def planner_instructions(self) -> str: ...
 
     def rewrite_semantic_query(self, query: str, semantic_query: str) -> str: ...
 
@@ -59,6 +83,33 @@ class DefaultSearchPolicy:
     """Identity policy used by tenants without marketplace-specific rules."""
 
     cache_key = "default-v1"
+
+    def normalize_query(
+        self,
+        query: str,
+        query_aliases: dict[str, str] | None = None,
+    ) -> str:
+        from search.planner_catalog import normalize_transliterated_query
+
+        return normalize_transliterated_query(query, query_aliases)
+
+    def extract_user_gender_filter(self, query: str) -> int | None:
+        return None
+
+    def infer_target_ad_type(self, query: str) -> tuple[str, bool]:
+        return "offer", True
+
+    def has_natural_search_intent(self, query: str) -> bool:
+        return bool(
+            _NATURAL_CATALOG_REQUEST_PATTERN.search(query) or re.search(r"[?!]", query)
+        )
+
+    def planner_instructions(self) -> str:
+        return (
+            "This is a general product and service catalog. Target available offer "
+            "listings. Do not infer wanted/request advertisements unless a tenant "
+            "plugin explicitly enables classified-marketplace behavior."
+        )
 
     def rewrite_semantic_query(self, query: str, semantic_query: str) -> str:
         return semantic_query

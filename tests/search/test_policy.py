@@ -27,6 +27,8 @@ CANDIDATES = [
 def test_default_policy_does_not_apply_gainr_behavior():
     policy = DefaultSearchPolicy()
 
+    assert policy.normalize_query("kaam wali bai") == "kaam wali bai"
+    assert policy.extract_user_gender_filter("female bike instructor") is None
     assert policy.category_intent("body massage", {}) is None
     assert policy.adjust_candidates(QUERY_PLAN, CANDIDATES) is CANDIDATES
     assert policy.rerank_context(QUERY_PLAN) is None
@@ -43,6 +45,8 @@ def test_gainr_policy_is_selected_explicitly():
     policy = build_search_policy("gainr")
 
     assert isinstance(policy, GainrSearchPolicy)
+    assert policy.normalize_query("kaam wali bai") == "house maid domestic worker"
+    assert policy.extract_user_gender_filter("female bike instructor") == 2
     assert policy.adjust_candidates(QUERY_PLAN, CANDIDATES)[0]["id"] == "driver"
     assert policy.rerank_context(QUERY_PLAN)
 

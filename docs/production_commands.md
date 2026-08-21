@@ -588,6 +588,16 @@ The first run creates the second physical generation from the existing active
 indexes. Later runs alternate the two bounded slots. A failed candidate is not
 promoted; searches continue against the last validated active generation.
 
+The scheduled units read the tenant explicitly from a host-only environment
+file. Create it once before enabling the timers:
+
+```bash
+sudo install -d -m 0750 /etc/semantic-search
+printf 'COMPANY_ID=%s\n' "$COMPANY_ID" | \
+  sudo tee /etc/semantic-search/tenant.env >/dev/null
+sudo chmod 0640 /etc/semantic-search/tenant.env
+```
+
 Install the systemd units using the current production checkout path:
 
 ```bash

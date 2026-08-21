@@ -15,27 +15,6 @@ QUERY_FILTER_KEYS = (
     "max_rental_fee",
 )
 
-# Gainr users.gender: 1 male, 2 female, 3 trans. These patterns are deliberately
-# deterministic so every planner path applies the same explicit user constraint.
-USER_GENDER_PATTERNS = {
-    1: re.compile(
-        r"(?<!\w)(?:male|man|men|gentleman|boy|boys|purush|aadmi|admi|"
-        r"ladka|aan|aambala|ஆண்|ஆண்கள்|पुरुष|आदमी|लड़का)(?!\w)",
-        re.IGNORECASE,
-    ),
-    2: re.compile(
-        r"(?<!\w)(?:female|woman|women|lady|ladies|girl|girls|mahila|"
-        r"ladki|ladkiyan|aurat|kaam\s+wali|ponnu|pennu|penn|pengal|"
-        r"பெண்|பெண்கள்|பெண்மணி|महिला|महिलाओं|लड़की|लड़कियां|औरत|औरतें)(?!\w)",
-        re.IGNORECASE,
-    ),
-    3: re.compile(
-        r"(?<!\w)(?:transgender|trans\s+(?:woman|man|person)|trans|hijra|"
-        r"kinnar|திருநங்கை|திருநம்பி|हिजड़ा|किन्नर)(?!\w)",
-        re.IGNORECASE,
-    ),
-}
-
 QUERY_FILTER_ALIASES = {
     "state": {
         "orissa": "odisha",
@@ -57,35 +36,6 @@ QUERY_FILTER_ALIASES = {
     },
 }
 
-# Small, high-confidence phrase normalizations protect retrieval from a model
-# treating romanized Indian-language words as similarly spelled English product
-# names. Keep these replacements narrow: the LLM planner remains responsible for
-# general multilingual interpretation, while confirmed marketplace phrases can be
-# added here without changing the public request or response contract.
-TRANSLITERATED_QUERY_REWRITES = (
-    (
-        re.compile(
-            r"(?<!\w)ve{1,2}t{1,2}u\s+ve(?:lai|la)\s*kaa?ri(?!\w)",
-            re.IGNORECASE,
-        ),
-        "house maid domestic worker",
-    ),
-    (
-        re.compile(
-            r"(?<!\w)(?:ghar\s+k[ai]\s+)?kaam\s+wali\s+bai(?!\w)",
-            re.IGNORECASE,
-        ),
-        "house maid domestic worker",
-    ),
-    (
-        re.compile(
-            r"(?<!\w)(?:kalyanathuku|kalyanathukku|"
-            r"kalyaanathuku|kalyaanathukku)(?!\w)",
-            re.IGNORECASE,
-        ),
-        "for wedding",
-    ),
-)
 FUZZY_MATCH_THRESHOLDS = {
     "main_category": 0.90,
     "subcategory": 0.90,
@@ -523,8 +473,6 @@ __all__ = (
     "QUERY_FILTER_ALIASES",
     "QUERY_FILTER_FIELDS",
     "QUERY_FILTER_KEYS",
-    "USER_GENDER_PATTERNS",
     "QUERY_PLAN_SCHEMA",
-    "TRANSLITERATED_QUERY_REWRITES",
     "WANTED_AD_TYPE",
 )

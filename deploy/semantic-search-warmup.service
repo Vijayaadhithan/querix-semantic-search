@@ -8,7 +8,8 @@ Wants=network-online.target
 Type=oneshot
 WorkingDirectory=/opt/semantic-search
 Environment=PROJECT_DIR=/opt/semantic-search
-Environment=COMPANY_ID=gainr
+# Create /etc/semantic-search/tenant.env with COMPANY_ID=<tenant-slug>.
+EnvironmentFile=-/etc/semantic-search/tenant.env
 ExecStart=/opt/semantic-search/scripts/run_search_warmup.sh
 TimeoutStartSec=10m
 Nice=10

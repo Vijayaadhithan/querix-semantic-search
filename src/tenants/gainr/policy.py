@@ -1,7 +1,54 @@
 import re
 
-from search.planner_catalog import normalize_filter_value
+from search.planner_catalog import (
+    normalize_filter_value,
+    normalize_transliterated_query,
+)
 from search.policy import CategoryIntent
+from verticals.marketplace.policy import MarketplaceSearchPolicy
+
+_GAINR_USER_GENDER_PATTERNS = {
+    1: re.compile(
+        r"(?<!\w)(?:male|man|men|gentleman|boy|boys|purush|aadmi|admi|"
+        r"ladka|aan|aambala|ஆண்|ஆண்கள்|पुरुष|आदमी|लड़का)(?!\w)",
+        re.IGNORECASE,
+    ),
+    2: re.compile(
+        r"(?<!\w)(?:female|woman|women|lady|ladies|girl|girls|mahila|"
+        r"ladki|ladkiyan|aurat|kaam\s+wali|ponnu|pennu|penn|pengal|"
+        r"பெண்|பெண்கள்|பெண்மணி|महिला|महिलाओं|लड़की|लड़कियां|औरत|औरतें)(?!\w)",
+        re.IGNORECASE,
+    ),
+    3: re.compile(
+        r"(?<!\w)(?:transgender|trans\s+(?:woman|man|person)|trans|hijra|"
+        r"kinnar|திருநங்கை|திருநம்பி|हिजड़ा|किन्नर)(?!\w)",
+        re.IGNORECASE,
+    ),
+}
+_GAINR_TRANSLITERATED_QUERY_REWRITES = (
+    (
+        re.compile(
+            r"(?<!\w)ve{1,2}t{1,2}u\s+ve(?:lai|la)\s*kaa?ri(?!\w)",
+            re.IGNORECASE,
+        ),
+        "house maid domestic worker",
+    ),
+    (
+        re.compile(
+            r"(?<!\w)(?:ghar\s+k[ai]\s+)?kaam\s+wali\s+bai(?!\w)",
+            re.IGNORECASE,
+        ),
+        "house maid domestic worker",
+    ),
+    (
+        re.compile(
+            r"(?<!\w)(?:kalyanathuku|kalyanathukku|"
+            r"kalyaanathuku|kalyaanathukku)(?!\w)",
+            re.IGNORECASE,
+        ),
+        "for wedding",
+    ),
+)
 
 _VEHICLE_INTENT_TERMS = {
     "automobile",
@@ -404,10 +451,45 @@ def _candidate_text(candidate: dict) -> str:
     return " ".join(parts)
 
 
-class GainrSearchPolicy:
+class GainrSearchPolicy(MarketplaceSearchPolicy):
     """Gainr marketplace interpretation without coupling it to the engine."""
 
-    cache_key = "gainr-marketplace-v12"
+    cache_key = "gainr-marketplace-v13"
+
+    def normalize_query(
+        self,
+        query: str,
+        query_aliases: dict[str, str] | None = None,
+    ) -> str:
+        return normalize_transliterated_query(
+            query,
+            query_aliases,
+            _GAINR_TRANSLITERATED_QUERY_REWRITES,
+        )
+
+    def extract_user_gender_filter(self, query: str) -> int | None:
+        matches = {
+            gender
+            for gender, pattern in _GAINR_USER_GENDER_PATTERNS.items()
+            if pattern.search(query)
+        }
+        if 3 in matches:
+            # "trans woman" contains another gender word but maps to the
+            # dedicated Gainr value unambiguously.
+            return 3
+        return next(iter(matches)) if len(matches) == 1 else None
+
+    def planner_instructions(self) -> str:
+        return (
+            super().planner_instructions()
+            + " Gainr is a rental advertisement marketplace containing products, "
+            "equipment, properties, vehicles, and services. Queries may use "
+            "romanized/transliterated Indian-language wording. Resolve the intended "
+            "meaning before selecting a catalog value; Tamil 'veetu vela kaari' "
+            "means a house maid or domestic worker, not a car. Keep rental duration "
+            "and rental-fee semantics. A person hiring an available listing targets "
+            "offer ads; a supplier searching for customers targets wanted ads."
+        )
 
     @staticmethod
     def _is_tamil_load_transport_request(query: str) -> bool:

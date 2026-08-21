@@ -6,6 +6,8 @@ from collections import deque
 from datetime import UTC, datetime
 from typing import Any
 
+from tenants.registry import tenant_logger_names
+
 LOG_LEVELS = {
     "DEBUG": logging.DEBUG,
     "INFO": logging.INFO,
@@ -35,8 +37,8 @@ _OPERATIONAL_INFO_EVENTS = (
     ("capacity", "step=request_coalesce status=waited"),
 )
 _FILTERED_APPLICATION_LOGGERS = {
-    "gainr_compat",
     "uvicorn.error",
+    *tenant_logger_names(),
 }
 
 

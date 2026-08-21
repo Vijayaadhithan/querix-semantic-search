@@ -12,22 +12,38 @@ from typing import Any
 import yaml
 
 from core.settings import PROJECT_ROOT
-from search.policy_registry import supported_search_policies
 from storage.mysql import MySQLRuntimeConfig
 from storage.postgres import PostgresRuntimeConfig
 from tenants.compatibility import supported_compatibility_adapters
+from tenants.registry import (
+    get_tenant_plugin,
+    plugin_for_search_policy,
+    supported_tenant_plugins,
+)
 
 TENANT_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,62}$")
 DEFAULT_TENANT_CONFIG_DIR = PROJECT_ROOT / "configs" / "tenants"
-GAINR_FILTER_FIELDS = {
-    "main_category_name",
-    "subcategory_name",
-    "state_name",
-    "city_name",
-    "locality_name",
-    "rental_duration",
-    "rental_fee",
-}
+
+CANONICAL_INDEX_FIELDS = frozenset(
+    {
+        "ad_type",
+        "city_id",
+        "city_name",
+        "is_rent_negotiable",
+        "locality_id",
+        "locality_name",
+        "main_category_id",
+        "main_category_name",
+        "rental_duration",
+        "rental_fee",
+        "state_id",
+        "state_name",
+        "subcategory_id",
+        "subcategory_name",
+        "user_gender",
+        "user_is_aadhaar_gst_verified",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -161,6 +177,43 @@ class TenantAnalyticsConfig:
 
 
 @dataclass(frozen=True)
+class TenantIngestionConfig:
+    """Map a company search-ready row into the canonical retrieval schema."""
+
+    field_mapping: dict[str, str] = field(default_factory=dict)
+    field_defaults: dict[str, bool | int | float | str | None] = field(
+        default_factory=dict
+    )
+
+    def __post_init__(self) -> None:
+        identifier_pattern = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,62}$")
+        unknown = sorted(
+            (set(self.field_mapping) | set(self.field_defaults))
+            - CANONICAL_INDEX_FIELDS
+        )
+        if unknown:
+            raise ValueError(f"Unsupported canonical ingestion fields: {unknown}")
+        invalid_sources = sorted(
+            source
+            for source in self.field_mapping.values()
+            if not identifier_pattern.fullmatch(source)
+        )
+        if invalid_sources:
+            raise ValueError(
+                f"Ingestion source fields must be safe identifiers: {invalid_sources}"
+            )
+        invalid_defaults = sorted(
+            key
+            for key, value in self.field_defaults.items()
+            if not isinstance(value, (bool, int, float, str, type(None)))
+        )
+        if invalid_defaults:
+            raise ValueError(
+                f"Ingestion defaults must be scalar values: {invalid_defaults}"
+            )
+
+
+@dataclass(frozen=True)
 class TenantProfile:
     company_id: str
     database: MySQLRuntimeConfig | PostgresRuntimeConfig
@@ -180,6 +233,8 @@ class TenantProfile:
         default_factory=TenantCompatibilityConfig
     )
     analytics: TenantAnalyticsConfig = field(default_factory=TenantAnalyticsConfig)
+    tenant_plugin: str = "default"
+    ingestion: TenantIngestionConfig = field(default_factory=TenantIngestionConfig)
 
 
 def validate_tenant_id(value: str) -> str:
@@ -248,17 +303,35 @@ def load_tenant_profile(path: Path) -> TenantProfile:
             f"Tenant profile {path.name} declares company.id={company_id!r}; "
             f"expected {path.stem!r}."
         )
-    planner_adapter = str(company.get("planner_adapter", "gainr")).strip()
+    configured_plugin = str(company.get("plugin", "")).strip().casefold()
+    configured_policy = str(company.get("search_policy", "")).strip().casefold()
+    if configured_plugin:
+        tenant_plugin = get_tenant_plugin(configured_plugin)
+    elif configured_policy:
+        tenant_plugin = plugin_for_search_policy(configured_policy)
+        if tenant_plugin is None:
+            supported = ", ".join(supported_tenant_plugins())
+            raise ValueError(
+                f"Tenant {company_id!r} has unsupported search_policy "
+                f"{configured_policy!r}; tenant plugins: {supported}"
+            )
+    else:
+        tenant_plugin = get_tenant_plugin("default")
+    planner_adapter = str(
+        company.get("planner_adapter", tenant_plugin.default_planner_adapter)
+    ).strip()
     if not planner_adapter:
         raise ValueError(f"Tenant {company_id!r} must configure planner_adapter")
-    search_policy = str(company.get("search_policy", "default")).strip().casefold()
+    search_policy = configured_policy or tenant_plugin.default_search_policy
     if not TENANT_ID_RE.fullmatch(search_policy):
         raise ValueError(
             f"Tenant {company_id!r} has invalid search_policy {search_policy!r}"
         )
-    if search_policy not in supported_search_policies():
+    if search_policy not in tenant_plugin.search_policies:
+        supported = ", ".join(sorted(tenant_plugin.search_policies))
         raise ValueError(
-            f"Tenant {company_id!r} has unsupported search_policy {search_policy!r}"
+            f"Tenant {company_id!r} plugin {tenant_plugin.name!r} does not own "
+            f"search_policy {search_policy!r}; expected one of: {supported}"
         )
     planner = dict(raw.get("planner", {}))
     planner_enabled = bool(planner.get("enabled", True))
@@ -552,13 +625,6 @@ def load_tenant_profile(path: Path) -> TenantProfile:
             f"Tenant {company_id!r} has unsupported filter types: "
             f"{invalid_filter_types}"
         )
-    if planner_adapter == "gainr":
-        unsupported_fields = sorted(set(filter_schema) - GAINR_FILTER_FIELDS)
-        if unsupported_fields:
-            raise ValueError(
-                f"Tenant {company_id!r} gainr planner requires canonical "
-                f"filter fields; unsupported: {unsupported_fields}"
-            )
     request_mapping = {
         "query": "query",
         "cursor": "cursor",
@@ -650,6 +716,16 @@ def load_tenant_profile(path: Path) -> TenantProfile:
             compatibility.get("serves_cards_from_search_ready", False)
         ),
     )
+    if (
+        compatibility_config.adapter
+        and compatibility_config.adapter not in tenant_plugin.compatibility_adapters
+    ):
+        supported = ", ".join(sorted(tenant_plugin.compatibility_adapters)) or "none"
+        raise ValueError(
+            f"Tenant {company_id!r} plugin {tenant_plugin.name!r} does not own "
+            f"compatibility adapter {compatibility_config.adapter!r}; "
+            f"expected one of: {supported}"
+        )
     analytics = dict(raw.get("analytics", {}))
     analytics_config = TenantAnalyticsConfig(
         enabled=bool(analytics.get("enabled", False)),
@@ -675,6 +751,28 @@ def load_tenant_profile(path: Path) -> TenantProfile:
             f"Tenant {company_id!r} enables analytics, but durable search "
             "analytics currently requires a MySQL company database"
         )
+    ingestion = dict(raw.get("ingestion", {}))
+    raw_ingestion_mapping = ingestion.get("field_mapping", {})
+    raw_ingestion_defaults = ingestion.get("field_defaults", {})
+    if not isinstance(raw_ingestion_mapping, dict) or not isinstance(
+        raw_ingestion_defaults,
+        dict,
+    ):
+        raise ValueError(
+            f"Tenant {company_id!r} ingestion mapping/defaults must be objects"
+        )
+    ingestion_config = TenantIngestionConfig(
+        field_mapping={
+            str(canonical).strip(): str(source).strip()
+            for canonical, source in raw_ingestion_mapping.items()
+            if str(canonical).strip() and str(source).strip()
+        },
+        field_defaults={
+            str(canonical).strip(): value
+            for canonical, value in raw_ingestion_defaults.items()
+            if str(canonical).strip()
+        },
+    )
 
     return TenantProfile(
         company_id=company_id,
@@ -698,6 +796,8 @@ def load_tenant_profile(path: Path) -> TenantProfile:
         retrieval=retrieval_config,
         compatibility=compatibility_config,
         analytics=analytics_config,
+        tenant_plugin=tenant_plugin.name,
+        ingestion=ingestion_config,
     )
 
 

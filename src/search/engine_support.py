@@ -514,6 +514,8 @@ class SearchEngineSupportMixin:
                     query_provider=self.query_provider,
                     prompt_context=self.planner_prompt_context,
                     query_aliases=self.planner_query_aliases,
+                    query_normalizer=self.search_policy.normalize_query,
+                    planner_instructions=self.search_policy.planner_instructions(),
                 )
                 if self.planner_enabled
                 else _engine_dependency(
@@ -537,6 +539,7 @@ class SearchEngineSupportMixin:
                     self.filter_value_index,
                     self.planner_query_aliases,
                     analysis_cache,
+                    self.search_policy.normalize_query,
                 ),
                 search_policy=self.search_policy,
             )

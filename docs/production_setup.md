@@ -20,6 +20,10 @@ The production services are:
 
 Docker is managed by systemd. Application services use `restart: unless-stopped`, so they continue after the SSH session closes and restart after a host reboot. Do not run a second API or Ollama process through systemd on the same ports.
 
+Tenant-scoped scheduled units do not assume a particular client. Before
+enabling ingestion, analytics, or warm-up timers, create
+`/etc/semantic-search/tenant.env` with `COMPANY_ID=<tenant-slug>`.
+
 ## 1. Prepare the host
 
 Confirm the required commands are installed:

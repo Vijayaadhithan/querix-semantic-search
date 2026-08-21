@@ -2,7 +2,10 @@ company:
   # Copy this file to configs/tenants/acme.yaml and make the ID match the
   # filename exactly.
   id: acme
-  planner_adapter: gainr
+  # Select default, gainr, retail, or fashion. Custom client behavior belongs
+  # in its plugin rather than in the shared retrieval engine.
+  plugin: default
+  planner_adapter: default
   search_policy: default
 
 planner:
@@ -13,9 +16,9 @@ planner:
   # hard filters. Example: tehcnician: technician
   query_aliases: {}
   prompt_context: >-
-    Acme is an equipment-rental marketplace. The public payload calls the
-    rental fee "price". Only extract filters represented by this company's
-    canonical adapter.
+    Acme is a catalog marketplace. Listings may represent products or
+    services. Only extract filters represented by this company's canonical
+    adapter and preserve the configured offer/wanted listing semantics.
 
 retrieval:
   # Each company can tune semantic precision independently.

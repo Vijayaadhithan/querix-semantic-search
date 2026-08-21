@@ -34,12 +34,13 @@ from providers.ollama import preload_ollama_embedding
 from search.engine import ProductSearchEngine
 from storage.redis import create_redis_cache
 from storage.usage import MonthlyUsageStore
+from tenants.registry import tenant_logger_names
 
 LOGGER = logging.getLogger("uvicorn.error")
 CAPTURED_LOGGER_NAMES = (
     "uvicorn.error",
     "uvicorn.access",
-    "gainr_compat",
+    *tenant_logger_names(),
 )
 
 

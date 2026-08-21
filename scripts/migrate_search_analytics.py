@@ -24,7 +24,7 @@ def main() -> None:
             "Create or migrate durable tenant history and internal API-usage tables."
         ),
     )
-    parser.add_argument("--company", default="gainr")
+    parser.add_argument("--company", required=True)
     args = parser.parse_args()
 
     profile = load_tenant_registry(require_api_keys=False).get(args.company)

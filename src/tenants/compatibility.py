@@ -1,7 +1,9 @@
 from __future__ import annotations
 
-from collections.abc import Callable
 from typing import Any, Protocol
+
+from tenants.plugin import SearchClientContract
+from tenants.registry import tenant_plugins
 
 
 class CompatibilityAdapter(Protocol):
@@ -34,26 +36,29 @@ class CompatibilityAdapter(Protocol):
     def recent_searches(self, user_id: str | None) -> dict[str, Any]: ...
 
 
-AdapterFactory = Callable[[Any, Any, Any], CompatibilityAdapter]
-
-
-def _build_gainr_legacy(profile, product_search_service, shared_cache=None):
-    from tenants.gainr.compatibility import GainrCompatibilityService
-
-    return GainrCompatibilityService(
-        profile,
-        product_search_service,
-        shared_cache,
-    )
-
-
-_ADAPTER_FACTORIES: dict[str, AdapterFactory] = {
-    "gainr_legacy": _build_gainr_legacy,
-}
+def _adapter_registrations():
+    return {
+        name: registration
+        for plugin in tenant_plugins().values()
+        for name, registration in plugin.compatibility_adapters.items()
+    }
 
 
 def supported_compatibility_adapters() -> tuple[str, ...]:
-    return tuple(sorted(_ADAPTER_FACTORIES))
+    return tuple(sorted(_adapter_registrations()))
+
+
+def search_client_contract(name: str = "") -> SearchClientContract:
+    normalized = name.strip().casefold()
+    if not normalized:
+        return SearchClientContract()
+    try:
+        return _adapter_registrations()[normalized].client_contract
+    except KeyError as exc:
+        supported = ", ".join(supported_compatibility_adapters())
+        raise ValueError(
+            f"Unsupported compatibility adapter {name!r}; expected one of: {supported}"
+        ) from exc
 
 
 def build_compatibility_adapter(
@@ -64,10 +69,10 @@ def build_compatibility_adapter(
 ) -> CompatibilityAdapter:
     adapter_name = name.strip().casefold()
     try:
-        factory = _ADAPTER_FACTORIES[adapter_name]
+        registration = _adapter_registrations()[adapter_name]
     except KeyError as exc:
         supported = ", ".join(supported_compatibility_adapters())
         raise ValueError(
             f"Unsupported compatibility adapter {name!r}; expected one of: {supported}"
         ) from exc
-    return factory(profile, product_search_service, shared_cache)
+    return registration.factory(profile, product_search_service, shared_cache)

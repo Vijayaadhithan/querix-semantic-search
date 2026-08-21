@@ -8,7 +8,8 @@ Wants=network-online.target
 Type=oneshot
 WorkingDirectory=/opt/semantic-search
 Environment=PROJECT_DIR=/opt/semantic-search
-Environment=COMPANY_ID=gainr
+# Create /etc/semantic-search/tenant.env with COMPANY_ID=<tenant-slug>.
+EnvironmentFile=-/etc/semantic-search/tenant.env
 ExecStart=/opt/semantic-search/scripts/run_scheduled_ingestion.sh
 # A genuine full re-embedding can exceed one day on the 8 GB CPU host. The
 # script lock prevents overlap, and its signal trap removes the run container.

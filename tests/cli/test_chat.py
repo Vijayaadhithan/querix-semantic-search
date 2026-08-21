@@ -30,6 +30,7 @@ from search.retrieval import (
 )
 from storage.mysql import fetch_products_by_ids
 from tenants.gainr.policy import GainrSearchPolicy
+from verticals.marketplace.policy import MarketplaceSearchPolicy
 
 
 class FakeCursor:
@@ -932,7 +933,12 @@ def test_enrich_query_plan_preserves_llm_ad_type_when_local_intent_is_ambiguous(
         "rental_duration": {},
     }
 
-    enriched = enrich_query_plan("local equipment supplier", plan, value_index)
+    enriched = enrich_query_plan(
+        "local equipment supplier",
+        plan,
+        value_index,
+        search_policy=MarketplaceSearchPolicy(),
+    )
 
     assert enriched["target_ad_type"] == "wanted"
 
@@ -977,6 +983,7 @@ def test_enrich_query_plan_handles_people_seeking_hourly_bikes():
         "someone looking for bikes in 1000 range per hour",
         plan,
         value_index,
+        search_policy=MarketplaceSearchPolicy(),
     )
 
     assert enriched["target_ad_type"] == "wanted"

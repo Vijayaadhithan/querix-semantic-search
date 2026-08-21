@@ -490,6 +490,7 @@ def test_explicit_multilingual_gender_is_a_hard_user_filter(tmp_path):
             query,
             default_query_plan(query),
             value_index,
+            search_policy=GainrSearchPolicy(),
         )
         resolved, unresolved = query_planner_catalog.resolve_query_filters(
             plan["filters"],
@@ -777,6 +778,7 @@ def test_transliterated_queries_receive_trusted_semantic_normalization(tmp_path)
         bm25_index=index,
         query_provider=provider,
         direct_semantic_fast_path=False,
+        search_policy=GainrSearchPolicy(),
     )
     try:
         result = engine.plan("veetu vela kaari in Chennai")
@@ -792,19 +794,16 @@ def test_transliterated_queries_receive_trusted_semantic_normalization(tmp_path)
 
 
 def test_transliterated_query_normalization_is_narrow_and_spelling_tolerant():
-    assert normalize_transliterated_query("veetu vela kaari") == (
-        "house maid domestic worker"
-    )
-    assert normalize_transliterated_query("veettu velai kari Chennai") == (
+    policy = GainrSearchPolicy()
+    assert policy.normalize_query("veetu vela kaari") == ("house maid domestic worker")
+    assert policy.normalize_query("veettu velai kari Chennai") == (
         "house maid domestic worker Chennai"
     )
-    assert normalize_transliterated_query("kaam wali bai") == (
-        "house maid domestic worker"
-    )
-    assert normalize_transliterated_query("kalyanathuku camera venum") == (
+    assert policy.normalize_query("kaam wali bai") == ("house maid domestic worker")
+    assert policy.normalize_query("kalyanathuku camera venum") == (
         "for wedding camera venum"
     )
-    assert normalize_transliterated_query("Ford car for rent") == ("Ford car for rent")
+    assert policy.normalize_query("Ford car for rent") == ("Ford car for rent")
 
 
 def test_company_intent_is_not_rewritten_by_shared_normalization():
@@ -902,21 +901,21 @@ def test_gainr_reviewed_tamil_search_terms_use_semantic_normalization(tmp_path):
     assert astrology["filters"]["subcategory"] is None
     assert astrology["inferred_categories"]["subcategory"] == "Astrologer"
     assert (
-        normalize_transliterated_query(
+        policy.normalize_query(
             "enaku veedu vadaiku venum",
             housing_aliases,
         )
         == "house home residential accommodation for rent"
     )
     astrology_intent = policy.category_intent(
-        normalize_transliterated_query("josiyakar", astrology_aliases),
+        policy.normalize_query("josiyakar", astrology_aliases),
         value_index["subcategory"],
     )
     assert astrology_intent is not None
     assert astrology_intent.subcategory == "Astrologer"
     assert (
         policy.infer_main_category(
-            normalize_transliterated_query(
+            policy.normalize_query(
                 "enaku veedu vadaiku venum",
                 housing_aliases,
             ),
@@ -1006,6 +1005,7 @@ def test_transliterated_phrase_tokens_do_not_become_fuzzy_locations(tmp_path):
         collection=FakeCollection(),
         bm25_index=index,
         query_provider=CapturingQueryProvider(),
+        search_policy=GainrSearchPolicy(),
     )
     try:
         result = engine.plan("kaam wali bai")

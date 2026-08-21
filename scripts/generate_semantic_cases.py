@@ -19,8 +19,6 @@ from storage.postgres import (
     quote_postgres_identifier,
 )
 
-DEFAULT_OUTPUT = ROOT / "eval" / "gainr_semantic_cases.generated.json"
-
 CASE_TEMPLATES = [
     {
         "name": "daily_car_chennai",
@@ -211,11 +209,12 @@ def fetch_relevant_ids(config, filters: dict[str, Any], limit: int) -> list[str]
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=(
-            "Generate labelled Gainr semantic retrieval cases from live DB rows."
+            "Generate labelled semantic retrieval cases for one tenant "
+            "from live DB rows."
         )
     )
-    parser.add_argument("--company", default="gainr")
-    parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
+    parser.add_argument("--company", required=True)
+    parser.add_argument("--output", type=Path)
     parser.add_argument("--relevant-limit", type=int, default=12)
     args = parser.parse_args()
     if args.relevant_limit <= 0:
@@ -228,6 +227,9 @@ def main() -> int:
         available = ", ".join(sorted(profiles)) or "none"
         parser.error(f"unknown company {args.company!r}; available: {available}")
 
+    output = args.output or (
+        ROOT / "eval" / f"{args.company}_semantic_cases.generated.json"
+    )
     cases = []
     skipped = []
     for template in CASE_TEMPLATES:
@@ -253,12 +255,12 @@ def main() -> int:
             }
         )
 
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(
         json.dumps(cases, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
-    print(f"Wrote {len(cases)} cases to {args.output}")
+    print(f"Wrote {len(cases)} cases to {output}")
     if skipped:
         print("Skipped without matching DB rows: " + ", ".join(skipped))
     for case in cases:

@@ -11,6 +11,8 @@ from search.planner import (
     extract_query_plan,
     query_filter_value_index,
 )
+from search.policy import DEFAULT_SEARCH_POLICY
+from search.policy_registry import build_search_policy
 from storage.index_generations import resolve_generation
 
 DEFAULT_CASES_PATH = PROJECT_ROOT / "eval" / "query_cases.json"
@@ -29,18 +31,21 @@ def evaluate_case(
     catalog: dict,
     prompt_context: str = "",
     query_aliases: dict[str, str] | None = None,
+    search_policy=DEFAULT_SEARCH_POLICY,
 ) -> tuple[dict, list]:
     plan = extract_query_plan(
         case["query"],
         catalog,
         prompt_context=prompt_context,
         query_aliases=query_aliases,
+        query_normalizer=search_policy.normalize_query,
     )
     plan = enrich_query_plan(
         case["query"],
         plan,
         value_index,
         query_aliases,
+        search_policy=search_policy,
     )
     failures = []
     for path, expected in case["expected"].items():
@@ -96,6 +101,11 @@ def main() -> None:
         if profile
         else PersistentBM25Index()
     )
+    search_policy = (
+        build_search_policy(profile.search_policy)
+        if profile is not None
+        else DEFAULT_SEARCH_POLICY
+    )
     try:
         value_index = query_filter_value_index(index)
         catalog = build_query_filter_catalog(value_index)
@@ -107,6 +117,7 @@ def main() -> None:
                 catalog,
                 profile.planner_prompt_context if profile else "",
                 profile.planner_query_aliases if profile else None,
+                search_policy,
             )
             if failures:
                 failed += 1

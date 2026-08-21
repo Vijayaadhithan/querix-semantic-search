@@ -382,8 +382,8 @@ def prepare_bm25_index_row(
         "state_id": metadata_value(row.get("state_id")),
         "city_id": metadata_value(row.get("city_id")),
         "locality_id": metadata_value(row.get("locality_id")),
-        # These two fields are intentionally optional. Gainr can add them to
-        # ads_search_ready later without blocking today's ingestion.
+        # Listing perspective and negotiation are optional canonical fields.
+        # Tenant ingestion mappings can supply them from company-specific names.
         "ad_type": metadata_value(row.get("type", row.get("ad_type"))),
         "is_rent_negotiable": metadata_value(row.get("is_rent_negotiable")),
         "user_gender": metadata_value(row.get("user_gender")),

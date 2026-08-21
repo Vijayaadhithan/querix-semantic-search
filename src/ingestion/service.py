@@ -10,8 +10,9 @@ from core.settings import (
     MYSQL_DATABASE,
     MYSQL_TABLE,
 )
-from core.tenant_config import TenantProfile
+from core.tenant_config import TenantIngestionConfig, TenantProfile
 from ingestion.documents import metadata_hash, prepare_bm25_index_row, prepare_mysql_row
+from ingestion.mapping import canonicalize_search_ready_row
 from ingestion.state import (
     begin_ingestion,
     complete_ingestion,
@@ -419,8 +420,12 @@ def _ingest_mysql_source(
         mysql_config,
         fetch_batch_size=batch_size,
     ):
-        prepared = prepare_mysql_row(
+        index_row = canonicalize_search_ready_row(
             row,
+            getattr(tenant, "ingestion", TenantIngestionConfig()),
+        )
+        prepared = prepare_mysql_row(
+            index_row,
             content_column,
             detected_primary_key,
             mysql_config=mysql_config,
@@ -437,7 +442,7 @@ def _ingest_mysql_source(
         documents.append(document)
         metadatas.append(metadata)
         bm25_row = prepare_bm25_index_row(
-            row,
+            index_row,
             bm25_column,
             detected_primary_key,
             mysql_config=mysql_config,

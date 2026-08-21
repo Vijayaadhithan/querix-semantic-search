@@ -1,5 +1,6 @@
 import json
 import re
+from collections.abc import Callable
 from copy import copy
 from difflib import SequenceMatcher, get_close_matches
 
@@ -17,8 +18,6 @@ from search.planner_rules import (
     QUERY_FILTER_ALIASES,
     QUERY_FILTER_FIELDS,
     QUERY_FILTER_KEYS,
-    TRANSLITERATED_QUERY_REWRITES,
-    USER_GENDER_PATTERNS,
 )
 
 
@@ -93,20 +92,6 @@ def optional_user_gender(value) -> int | None:
     except (TypeError, ValueError):
         return None
     return gender if gender in {1, 2, 3} else None
-
-
-def extract_user_gender_filter(query: str) -> int | None:
-    """Return a requested Gainr user gender from multilingual query text."""
-    matches = {
-        gender
-        for gender, pattern in USER_GENDER_PATTERNS.items()
-        if pattern.search(query)
-    }
-    if 3 in matches:
-        # Phrases such as "trans woman" contain another gender word but are
-        # unambiguously represented by the dedicated Gainr value.
-        return 3
-    return next(iter(matches)) if len(matches) == 1 else None
 
 
 def text_mentions_filter(text: str, value: str) -> bool:
@@ -271,10 +256,11 @@ def parse_query_plan(content: str, original_query: str) -> dict:
 def normalize_transliterated_query(
     query: str,
     query_aliases: dict[str, str] | None = None,
+    rewrite_rules: tuple[tuple[re.Pattern, str], ...] = (),
 ) -> str:
     """Normalize confirmed marketplace phrases to their search meaning."""
     normalized = query
-    for pattern, replacement in TRANSLITERATED_QUERY_REWRITES:
+    for pattern, replacement in rewrite_rules:
         normalized = pattern.sub(replacement, normalized)
     for source, target in sorted(
         (query_aliases or {}).items(),
@@ -430,9 +416,11 @@ class QueryAnalysis:
         value_index: dict,
         query_aliases: dict[str, str] | None = None,
         normalized_query: str | None = None,
+        query_normalizer: Callable[[str, dict[str, str] | None], str] | None = None,
     ):
         self.original_query = query
-        self.query = normalized_query or normalize_transliterated_query(
+        normalizer = query_normalizer or normalize_transliterated_query
+        self.query = normalized_query or normalizer(
             query,
             query_aliases,
         )
@@ -525,8 +513,10 @@ def query_analysis(
     value_index: dict,
     query_aliases: dict[str, str] | None = None,
     cache: dict[tuple[str, str], QueryAnalysis] | None = None,
+    query_normalizer: Callable[[str, dict[str, str] | None], str] | None = None,
 ) -> QueryAnalysis:
-    normalized_query = normalize_transliterated_query(query, query_aliases)
+    normalizer = query_normalizer or normalize_transliterated_query
+    normalized_query = normalizer(query, query_aliases)
     cache_key = (
         normalize_filter_value(query),
         normalize_filter_value(normalized_query),
@@ -544,6 +534,7 @@ def query_analysis(
         value_index,
         query_aliases,
         normalized_query,
+        normalizer,
     )
     if cache is not None:
         cache[cache_key] = analysis

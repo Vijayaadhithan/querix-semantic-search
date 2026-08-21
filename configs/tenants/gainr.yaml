@@ -1,5 +1,7 @@
 company:
   id: gainr
+  # Loads Gainr-owned policy, compatibility, analytics, and client contracts.
+  plugin: gainr
   planner_adapter: gainr
   # Tenant-owned planning and ranking hooks. Generic tenants use "default".
   search_policy: gainr
@@ -251,7 +253,7 @@ analytics:
   # Dashboard period boundaries and graph buckets use the tenant's business time.
   timezone: Asia/Kolkata
   # Company-facing dashboard, query, and status response contract.
-  adapter: default
+  adapter: gainr
   # Separate product credential: the search API continues using GAINR_API_KEY.
   api_key_envs:
     - GAINR_ANALYTICS_API_KEY

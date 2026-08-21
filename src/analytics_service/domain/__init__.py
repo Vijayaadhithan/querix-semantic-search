@@ -1,4 +1,4 @@
-"""Analytics calculations ported from the standalone Gainr analytics project."""
+"""Reusable catalog and marketplace analytics metric packs."""
 
 from .part_a_search import process_part_a
 from .part_b_api import process_part_b
