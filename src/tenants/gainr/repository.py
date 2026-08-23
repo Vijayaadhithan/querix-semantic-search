@@ -211,8 +211,26 @@ class GainrDatabaseRepository:
     ) -> tuple[str, list[Any]]:
         conditions = []
         card_alias = "sr" if self.serves_cards_from_search_ready else "a"
-        if not self.serves_cards_from_search_ready:
-            conditions.append("(a.deleted_at IS NULL OR TRIM(a.deleted_at) = '')")
+        if self.serves_cards_from_search_ready:
+            # Search-ready is an ETL projection and can briefly remain active
+            # after the authoritative ad has been disabled or deleted. Every
+            # client-facing card query must recheck the live ad row.
+            conditions.append(
+                "EXISTS ("
+                f"SELECT 1 FROM {self.result_table} AS live_ad "
+                "WHERE live_ad.id = sr.id "
+                "AND live_ad.status = 1 "
+                "AND (live_ad.deleted_at IS NULL "
+                "OR TRIM(live_ad.deleted_at) = '')"
+                ")"
+            )
+        else:
+            conditions.extend(
+                (
+                    "a.status = 1",
+                    "(a.deleted_at IS NULL OR TRIM(a.deleted_at) = '')",
+                )
+            )
         if self.search_active_qualified_condition:
             conditions.insert(0, self.search_active_qualified_condition)
         params: list[Any] = []

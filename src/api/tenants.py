@@ -5,6 +5,7 @@ import time
 from collections import OrderedDict
 from typing import Any
 
+from api.contracts import SearchSessionStore
 from api.service import ProductSearchService
 from core.settings import (
     API_TENANT_ENGINE_CACHE_SIZE,
@@ -51,6 +52,7 @@ class TenantServicePool:
         engine_factory=None,
         compatibility_factory=None,
         usage_store: MonthlyUsageStore | None = None,
+        sessions: SearchSessionStore | None = None,
     ):
         if max_services <= 0:
             raise ValueError("max_services must be greater than zero")
@@ -60,6 +62,10 @@ class TenantServicePool:
         self.engine_factory = engine_factory
         self.compatibility_factory = compatibility_factory
         self.usage_store = usage_store
+        # Cursor sessions belong to the API application, not to an evictable
+        # tenant engine. Company checks in ProductSearchService keep this
+        # shared store tenant-bound.
+        self.sessions = sessions if sessions is not None else SearchSessionStore()
         self.shared_reranker = SharedReranker()
         self.reranker_load_ms = 0.0
         self.embedding_warmup: dict[str, Any] = {}
@@ -449,6 +455,7 @@ class TenantServicePool:
                 )
         service = ProductSearchService(
             engine,
+            sessions=self.sessions,
             company_id=profile.company_id,
             public_fields=profile.payload.public_fields,
             field_mapping=profile.payload.field_mapping,

@@ -1021,6 +1021,48 @@ def test_six_company_endpoints_remain_isolated_across_pool_eviction(tmp_path):
     assert repeated.json()["items"] == [{"id": 1, "title": "tenant-0-result"}]
 
 
+def test_cursor_survives_tenant_engine_pool_eviction(tmp_path):
+    alpha = tenant_profile(tmp_path, "alpha")
+    beta = tenant_profile(tmp_path, "beta")
+    registry = TenantRegistry(
+        {"alpha": alpha, "beta": beta},
+        api_keys={"alpha": ["alpha-key"], "beta": ["beta-key"]},
+    )
+
+    def engine_factory(profile, _cache, _shared_reranker):
+        engine = FakeEngine()
+        original_search = engine.search
+
+        def company_search(query, limit=None):
+            result = original_search(query, limit)
+            result["products"] = [
+                {"id": number, "title": f"{profile.company_id}-{number}"}
+                for number in range(1, 4)
+            ]
+            return result
+
+        engine.search = company_search
+        return engine
+
+    pool = TenantServicePool(
+        registry,
+        max_services=1,
+        engine_factory=engine_factory,
+    )
+    try:
+        first = pool.get("alpha").search(SearchRequest(query="camera", page_size=1))
+        pool.get("beta")
+        continued = pool.get("alpha").search(
+            SearchRequest(cursor=first.pagination.next_cursor, page_size=1)
+        )
+    finally:
+        pool.close()
+
+    assert first.items == [{"id": 1, "title": "alpha-1"}]
+    assert continued.items == [{"id": 2, "title": "alpha-2"}]
+    assert continued.pagination.offset == 1
+
+
 def test_users_in_the_same_company_can_search_concurrently():
     barrier = threading.Barrier(2)
 

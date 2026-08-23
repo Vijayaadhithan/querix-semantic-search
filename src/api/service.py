@@ -79,7 +79,7 @@ class ProductSearchService:
         if search_slot_timeout_seconds <= 0:
             raise ValueError("Search slot timeout must be greater than zero.")
         self.engine = engine
-        self.sessions = sessions or SearchSessionStore()
+        self.sessions = sessions if sessions is not None else SearchSessionStore()
         self.max_results = max_results
         self.company_id = company_id
         self.public_fields = tuple(public_fields)
@@ -644,6 +644,8 @@ class ProductSearchService:
         else:
             search_id, offset = decode_cursor(request.cursor or "")
             session = self.sessions.get(search_id)
+            if session.company_id != self.company_id:
+                raise InvalidCursorError("The cursor is invalid for this company.")
             cached = True
         return self._page(session, offset, request.page_size, cached)
 

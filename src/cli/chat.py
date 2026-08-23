@@ -111,8 +111,11 @@ def main():
     engine = build_engine(args.company)
     bm25_count = engine.bm25_index.count()
     if not bm25_count:
-        command = f"python -m cli.ingest --company {args.company} --bm25-only"
-        print("No persistent BM25 product index found. Run: " + command)
+        print(
+            "No persistent BM25 product index found. Run the shadow ingestion "
+            "workflow; direct BM25-only rebuilds are blocked because they "
+            "would mutate the active index."
+        )
         engine.close()
         return
 

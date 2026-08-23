@@ -15,7 +15,11 @@ The production service should provide:
 
 ## Recommended 8 GB profile
 
-Use one API worker, a tenant engine cache of one, and one concurrent search per tenant as the safe starting point. Keep pgvector and Redis on private Docker networking and expose the API only through a TLS reverse proxy.
+Use one API worker, a tenant engine cache of up to three, and one concurrent
+search per tenant as the safe starting point. Cursor sessions are shared at the
+application level and remain tenant-bound when an engine is evicted. Keep
+pgvector and Redis on private Docker networking and expose the API only through
+a TLS reverse proxy.
 
 The hosted profile uses Voyage 2.5 first, OpenRouter Nemotron free second, and
 Voyage 2.5 Lite last. LangSearch and Jina are not runtime providers. The profile
@@ -88,6 +92,10 @@ BM25 control-query overlap remains at least 80% by default. It is then
 prewarmed and hot-swapped in
 the tenant service pool; the API process is not restarted and in-flight
 requests finish against the previous generation.
+
+The direct `--bm25-only` command is intentionally blocked because it would
+clear the active SQLite index in place. Use the shadow-generation job for BM25
+changes; it writes the inactive slot and promotes only after validation.
 
 Each tenant owns two bounded physical slots. Only the active generation enters
 cache fingerprints, and the previous generation is retained as the next

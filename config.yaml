@@ -106,8 +106,9 @@ api:
   auth_enabled: false
   rate_limit_enabled: true
   tenant_config_dir: configs/tenants
-  # Conservative defaults for a one-company 8 GB deployment.
-  tenant_engine_cache_size: 1
+  # Keep several tenant engines warm; cursor sessions are application-scoped
+  # and remain valid even if a service is evicted from this cache.
+  tenant_engine_cache_size: 3
   tenant_max_concurrent_searches: 1
   # Reject excess work after a short bounded wait instead of building an
   # unbounded in-process queue on the 8 GB host.

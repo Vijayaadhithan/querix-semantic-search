@@ -18,6 +18,7 @@ from ingestion.service import (
     database_current_ids,
     database_row_changes,
     ingest_mysql_source,
+    rebuild_mysql_bm25_index,
     reconcile_deleted_documents,
 )
 from search.bm25 import PersistentBM25Index
@@ -541,3 +542,8 @@ def test_small_ingestion_sample_refreshes_metadata_and_new_vectors(
     index.close()
     assert not (tmp_path / ".ingestion-state.json").exists()
     assert (tmp_path / "ingestion-manifest.json").exists()
+
+
+def test_bm25_only_rebuild_refuses_active_index():
+    with pytest.raises(RuntimeError, match="blocked for active indexes"):
+        rebuild_mysql_bm25_index()

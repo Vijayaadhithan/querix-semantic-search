@@ -6,7 +6,6 @@ from ingestion.service import (
     MYSQL_BATCH_SIZE,
     check_mysql_source,
     ingest_mysql_source,
-    rebuild_mysql_bm25_index,
 )
 from storage.index_generations import resolve_generation
 from storage.vector import (
@@ -81,7 +80,9 @@ def main() -> None:
         "--mysql-bm25-only",
         dest="bm25_only",
         action="store_true",
-        help="rebuild only BM25 from the configured database; no embeddings",
+        help=(
+            "blocked for active indexes; use the scheduled shadow ingestion workflow"
+        ),
     )
     parser.add_argument(
         "--limit",
@@ -139,6 +140,12 @@ def main() -> None:
         raise SystemExit(
             f"Unknown company {args.company!r}; available: {available}"
         ) from exc
+    if args.bm25_only:
+        raise SystemExit(
+            "BM25-only rebuild is disabled because it would clear the active "
+            "index in place. Run scripts/run_scheduled_ingestion.sh so the "
+            "inactive generation is validated and atomically promoted."
+        )
     tenant = resolve_generation(tenant).profile
 
     if args.list:
@@ -187,14 +194,6 @@ def main() -> None:
             )
             else 1
         )
-    if args.bm25_only:
-        rebuild_mysql_bm25_index(
-            limit=args.limit,
-            batch_size=args.mysql_batch_size,
-            primary_key_column=args.mysql_primary_key,
-            tenant=tenant,
-        )
-        return
     if args.database:
         ingest_mysql_source(
             limit=args.limit,

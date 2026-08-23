@@ -1080,7 +1080,7 @@ def test_card_keeps_full_verification_null_for_ordinary_user(tmp_path):
     assert card["is_aadhar_gst_verified"] is None
 
 
-def test_gainr_repository_does_not_filter_ad_status(tmp_path):
+def test_gainr_repository_requires_current_ad_status(tmp_path):
     repository = GainrDatabaseRepository(profile(tmp_path))
 
     where_clause, params = repository._where_clause(
@@ -1089,7 +1089,27 @@ def test_gainr_repository_does_not_filter_ad_status(tmp_path):
         allowed_ad_types={"1"},
     )
 
-    assert "a.status" not in where_clause
+    assert "a.status = 1" in where_clause
+    assert "a.deleted_at IS NULL" in where_clause
+    assert "`sr`.`is_search_active` = 1" in where_clause
+    assert params == ["1"]
+
+
+def test_search_ready_cards_recheck_authoritative_ad_status(tmp_path):
+    repository = GainrDatabaseRepository(
+        profile(tmp_path, serves_cards_from_search_ready=True)
+    )
+
+    where_clause, params = repository._where_clause(
+        {"categorical": {}},
+        GainrFilterResultRequest().filter,
+        allowed_ad_types={"1"},
+    )
+
+    assert "EXISTS (SELECT 1 FROM `ads` AS live_ad" in where_clause
+    assert "live_ad.id = sr.id" in where_clause
+    assert "live_ad.status = 1" in where_clause
+    assert "live_ad.deleted_at IS NULL" in where_clause
     assert "`sr`.`is_search_active` = 1" in where_clause
     assert params == ["1"]
 

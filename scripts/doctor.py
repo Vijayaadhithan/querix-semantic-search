@@ -234,7 +234,7 @@ def check_production_security(profile=None) -> list[bool]:
         ),
         report(
             "8 GB tenant cache limit",
-            API_TENANT_ENGINE_CACHE_SIZE == 1,
+            API_TENANT_ENGINE_CACHE_SIZE <= 3,
             f"API_TENANT_ENGINE_CACHE_SIZE={API_TENANT_ENGINE_CACHE_SIZE}",
         ),
         report(

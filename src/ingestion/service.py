@@ -520,7 +520,15 @@ def rebuild_mysql_bm25_index(
     batch_size: int = MYSQL_BATCH_SIZE,
     primary_key_column: str | None = None,
     tenant: TenantProfile | None = None,
+    *,
+    inactive_generation: bool = False,
 ) -> None:
+    if not inactive_generation:
+        raise RuntimeError(
+            "BM25-only rebuild is blocked for active indexes. Use the shadow "
+            "ingestion workflow so the inactive generation is validated and "
+            "atomically promoted."
+        )
     if batch_size <= 0:
         raise RuntimeError("--mysql-batch-size must be greater than zero.")
     if limit is not None and limit <= 0:
