@@ -27,7 +27,13 @@ from analytics_service.dashboard_filters import (
     DashboardFilters,
     build_dashboard_overview,
 )
-from analytics_service.domain import process_part_a, process_part_b
+from analytics_service.domain import (
+    build_company_business_insights,
+    process_part_a,
+    process_part_b,
+    process_part_c,
+    process_part_d,
+)
 from analytics_service.domain.search.records import build_query_records
 from analytics_service.metrics import (
     COMPANY_DEEP_METRICS,
@@ -287,6 +293,35 @@ def analytics_data() -> dict[str, pd.DataFrame]:
     }
 
 
+def test_company_supply_metrics_use_active_inventory_only():
+    data = analytics_data()
+    inactive = data["ads"].iloc[0].copy()
+    inactive["id"] = 999
+    inactive["status"] = 4
+    inactive["created_at"] = "2026-01-01"
+    data["ads"] = pd.concat([data["ads"], pd.DataFrame([inactive])], ignore_index=True)
+    data["ads_attributes"] = pd.concat(
+        [
+            data["ads_attributes"],
+            pd.DataFrame([{"ads_id": 999, "attribute_id": 601, "value": 701}]),
+        ],
+        ignore_index=True,
+    )
+
+    deep = process_part_c({name: frame.copy() for name, frame in data.items()})
+    market = process_part_d({name: frame.copy() for name, frame in data.items()})
+    business = build_company_business_insights(data, [])
+
+    assert sum(deep["q47_supply_by_category"]["values"]) == 2
+    assert sum(deep["q62_ad_status"]["values"]) == 3
+    assert sum(deep["q73_attribute_completeness"]["values"]) == 1
+    assert sum(market["q76_geographic_heatmap"]["values"]) == 2
+    assert market["q80_active_listings"]["title"] == (
+        "Current Active Listings by Creation Month"
+    )
+    assert business["q96_demand_supply_gap"]["demand_window_days"] == 90
+
+
 class FakeSource:
     def __init__(self, data):
         self.data = data
@@ -479,7 +514,7 @@ def test_daily_refresh_publishes_both_audiences_and_queries(tmp_path):
     assert "search_intelligence" not in internal_dashboard
     assert "deep_analytics" not in internal_dashboard
     assert "market_intelligence" not in internal_dashboard
-    assert company_dashboard["metadata"]["schema_version"] == "3.0"
+    assert company_dashboard["metadata"]["schema_version"] == "3.1"
     assert company_dashboard["business_overview"] == {
         "scope": "Latest completed company snapshot",
         "total_users": 2,
@@ -564,6 +599,7 @@ def test_daily_refresh_publishes_both_audiences_and_queries(tmp_path):
             "session_storage_ms": None,
             "usage_recording_ms": None,
             "recent_search_ms": None,
+            "filter_diagnostics_ms": None,
         },
         "downstream_api_calls": 3,
         "attempt_count": 1,

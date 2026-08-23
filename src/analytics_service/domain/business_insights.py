@@ -7,6 +7,8 @@ from typing import Any
 
 import pandas as pd
 
+from .scope import active_ads, active_users
+
 
 def _is_present(value: Any) -> bool:
     if value is None:
@@ -17,18 +19,6 @@ def _is_present(value: Any) -> bool:
     except (TypeError, ValueError):
         pass
     return str(value).strip() != ""
-
-
-def _active_ads(ads: pd.DataFrame) -> pd.DataFrame:
-    active = ads[ads["deleted_at"].isna()].copy()
-    statuses = active["status"].fillna("").astype(str).str.strip()
-    return active[statuses.isin({"1", "8"})].copy()
-
-
-def _active_users(users: pd.DataFrame) -> pd.DataFrame:
-    active = users[users["deleted_at"].isna()].copy()
-    statuses = active["status"].fillna("").astype(str).str.strip()
-    return active[statuses.isin({"1", "8"})].copy()
 
 
 def _demand_label(record: dict[str, Any]) -> str:
@@ -42,6 +32,26 @@ def _demand_label(record: dict[str, Any]) -> str:
         if label and label != "Other / Uncategorized":
             return label
     return "Unclassified text"
+
+
+def _demand_identity(record: dict[str, Any]) -> tuple[str, str, int | None, int | None]:
+    filters = dict(record.get("filters") or {})
+    subcategory_id = filters.get("subcategory_id")
+    main_category_id = filters.get("main_category_id")
+    label = _demand_label(record)
+    try:
+        if subcategory_id is not None:
+            numeric_id = int(subcategory_id)
+            return f"subcategory:{numeric_id}", label, None, numeric_id
+    except (TypeError, ValueError):
+        pass
+    try:
+        if main_category_id is not None:
+            numeric_id = int(main_category_id)
+            return f"category:{numeric_id}", label, numeric_id, None
+    except (TypeError, ValueError):
+        pass
+    return f"label:{label.casefold()}", label, None, None
 
 
 def _city_label(record: dict[str, Any]) -> str:
@@ -69,18 +79,23 @@ def build_company_business_insights(
     used only when a historical request has no recorded structured category.
     """
     demand_records = _demand_records(records)
-    demand = Counter(_demand_label(record) for record in demand_records)
+    identities = {
+        key: (label, main_category_id, subcategory_id)
+        for record in demand_records
+        for key, label, main_category_id, subcategory_id in [_demand_identity(record)]
+    }
+    demand = Counter(_demand_identity(record)[0] for record in demand_records)
     ordered_demand = demand.most_common(20)
 
     gap_buckets: dict[str, Counter[str]] = defaultdict(Counter)
     unmet_buckets: dict[tuple[str, str], Counter[str]] = defaultdict(Counter)
     ad_types: dict[str, Counter[str]] = defaultdict(Counter)
     for record in demand_records:
-        category = _demand_label(record)
+        category_key, category, _, _ = _demand_identity(record)
         city = _city_label(record)
         outcome = str(record.get("outcome") or "telemetry_missing")
-        gap_buckets[category]["searches"] += 1
-        gap_buckets[category][outcome] += 1
+        gap_buckets[category_key]["searches"] += 1
+        gap_buckets[category_key][outcome] += 1
         unmet_buckets[(city, category)]["searches"] += 1
         unmet_buckets[(city, category)][outcome] += 1
         ad_type = str(
@@ -103,16 +118,15 @@ def build_company_business_insights(
                 "searches": searches,
                 "zero_results": zero,
                 "failures": failures,
-                "unmet_rate": round((zero + failures) / searches * 100, 1)
-                if searches
-                else 0,
+                "zero_result_rate": round(zero / searches * 100, 1) if searches else 0,
+                "failure_rate": round(failures / searches * 100, 1) if searches else 0,
             }
         )
     unmet_rows.sort(
         key=lambda item: (item["zero_results"], item["searches"]), reverse=True
     )
 
-    ads = _active_ads(data["ads"])
+    ads = active_ads(data["ads"])
     categories = data["categories"]
     subcategories = data["sub_categories"]
     category_names = categories.set_index("id")["name"].to_dict()
@@ -130,17 +144,25 @@ def build_company_business_insights(
         ).strip()
         if subcategory:
             supply[subcategory] += int(count)
+            supply[f"subcategory:{numeric_id}"] += int(count)
         if category:
             supply[category] += int(count)
+            parent_id = subcategory_parents.get(numeric_id)
+            if parent_id is not None:
+                supply[f"category:{int(parent_id)}"] += int(count)
 
     gap_rows = []
-    for category, counts in gap_buckets.items():
+    for category_key, counts in gap_buckets.items():
+        category, main_category_id, subcategory_id = identities[category_key]
         searches = int(counts["searches"])
         zero = int(counts["zero_result"])
-        available_supply = int(supply.get(category, 0))
+        available_supply = int(supply.get(category_key, supply.get(category, 0)))
         gap_rows.append(
             {
+                "category_key": category_key,
                 "category": category,
+                "main_category_id": main_category_id,
+                "subcategory_id": subcategory_id,
                 "searches": searches,
                 "available_listings": available_supply,
                 "zero_results": zero,
@@ -171,9 +193,17 @@ def build_company_business_insights(
             }
         )
 
+    unclassified_queries = Counter(
+        str(record.get("normalized_query") or record.get("query") or "").strip()
+        or "Catalogue browse"
+        for record in demand_records
+        if _demand_label(record) == "Unclassified text"
+    )
+    classified_count = len(demand_records) - sum(unclassified_queries.values())
+
     return {
         "q94_catalog_demand": {
-            "labels": [label for label, _ in ordered_demand],
+            "labels": [identities[key][0] for key, _ in ordered_demand],
             "values": [int(count) for _, count in ordered_demand],
             "title": "What are customers looking for?",
             "note": (
@@ -185,7 +215,10 @@ def build_company_business_insights(
         "q95_unmet_demand_by_city_category": {
             "data": unmet_rows[:40],
             "title": "Where are customers not finding results?",
-            "note": "City means the structured city filter selected by the client.",
+            "note": (
+                "Zero-result demand and failed requests are separate rates. City means "
+                "the structured city filter selected by the client."
+            ),
             "chart_type": "table",
         },
         "q96_demand_supply_gap": {
@@ -193,14 +226,35 @@ def build_company_business_insights(
             "title": "Where is demand stronger than available supply?",
             "note": (
                 "Available listings are non-deleted ads in active statuses 1 or 8 "
-                "at snapshot time."
+                "at snapshot time. Demand uses a rolling 90-day search window; "
+                "structured catalogue IDs are used when captured and older text-only "
+                "records fall back to labels."
             ),
+            "demand_window_days": 90,
+            "supply_scope": "active_inventory_at_snapshot_time",
             "chart_type": "table",
         },
         "q97_ad_type_demand": {
             "data": ad_type_rows,
             "title": "Are customers looking for offers or wanted listings?",
             "chart_type": "table",
+        },
+        "q98_demand_classification_coverage": {
+            "title": "How much recorded demand has a reliable category?",
+            "chart_type": "table",
+            "classified": int(classified_count),
+            "unclassified": int(sum(unclassified_queries.values())),
+            "coverage_rate": round(classified_count / len(demand_records) * 100, 1)
+            if demand_records
+            else 0,
+            "top_unclassified": [
+                {"query": query, "searches": int(count)}
+                for query, count in unclassified_queries.most_common(20)
+            ],
+            "note": (
+                "Structured catalogue filters are authoritative. Historical text is "
+                "left visibly unclassified when no reliable category was captured."
+            ),
         },
     }
 
@@ -211,19 +265,19 @@ def build_company_overview(
 ) -> dict[str, Any]:
     ads = data["ads"]
     users = data["users"]
-    active_ads = _active_ads(ads)
-    active_users = _active_users(users)
+    current_ads = active_ads(ads)
+    current_users = active_users(users)
     demand_records = _demand_records(records)
     outcomes = Counter(str(record.get("outcome") or "") for record in demand_records)
     completed = outcomes["fulfilled"] + outcomes["zero_result"]
     return {
         "scope": "Latest completed company snapshot",
         "total_users": int(len(users)),
-        "active_users": int(len(active_users)),
+        "active_users": int(len(current_users)),
         "total_listings": int(len(ads)),
-        "active_listings": int(len(active_ads)),
-        "active_sellers": int(active_ads["user_id"].nunique()),
-        "cities_with_active_supply": int(active_ads["city_id"].nunique()),
+        "active_listings": int(len(current_ads)),
+        "active_sellers": int(current_ads["user_id"].nunique()),
+        "cities_with_active_supply": int(current_ads["city_id"].nunique()),
         "recorded_demand": int(len(demand_records)),
         "fulfilled_demand": int(outcomes["fulfilled"]),
         "zero_result_demand": int(outcomes["zero_result"]),

@@ -47,11 +47,13 @@ SEARCH_ANALYTICS_TIMING_FIELDS = frozenset(
         "session_storage_ms",
         "usage_recording_ms",
         "recent_search_ms",
+        "filter_diagnostics_ms",
     }
 )
 SEARCH_ANALYTICS_CONTEXT_FIELDS = frozenset(
     {
         "main_category",
+        "main_category_id",
         "subcategory_id",
         "subcategory",
         "state",
@@ -137,6 +139,25 @@ def sanitize_search_analytics_context(value: Any) -> dict[str, Any]:
         names = [str(name).strip()[:64] for name in ignored[:32] if str(name).strip()]
         if names:
             sanitized["ignored_filter_names"] = names
+    attribution = value.get("filter_diagnostics")
+    if isinstance(attribution, dict):
+        counts = {
+            str(name).strip()[:64]: max(int(count), 0)
+            for name, count in dict(
+                attribution.get("counterfactual_counts") or {}
+            ).items()
+            if str(name).strip() and isinstance(count, (int, float))
+        }
+        sanitized["filter_diagnostics"] = {
+            "evidence_complete": bool(attribution.get("evidence_complete")),
+            "diagnosis": str(attribution.get("diagnosis") or "")[:128],
+            "counterfactual_counts": counts,
+            "blocking_filters": [
+                str(name).strip()[:64]
+                for name in attribution.get("blocking_filters") or ()
+                if str(name).strip()
+            ][:16],
+        }
     return sanitized
 
 

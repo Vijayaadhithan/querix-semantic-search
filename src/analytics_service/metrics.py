@@ -31,6 +31,7 @@ COMPANY_SEARCH_METRICS = (
     "q95_unmet_demand_by_city_category",
     "q96_demand_supply_gap",
     "q97_ad_type_demand",
+    "q98_demand_classification_coverage",
 )
 
 COMPANY_DEEP_METRICS = (
@@ -133,6 +134,7 @@ AVAILABLE_METRICS = {
         "q95_unmet_demand_by_city_category",
         "q96_demand_supply_gap",
         "q97_ad_type_demand",
+        "q98_demand_classification_coverage",
     ),
     "api_performance": (
         "q21_success_rate",

@@ -66,6 +66,7 @@ TIMING_FIELDS = (
     "session_storage_ms",
     "usage_recording_ms",
     "recent_search_ms",
+    "filter_diagnostics_ms",
 )
 
 _BROWSE_FILTER_FIELDS = (
@@ -137,6 +138,7 @@ def _sanitize_filter_context(value: Any) -> dict[str, Any]:
         return {}
     allowed = (
         "main_category",
+        "main_category_id",
         "subcategory_id",
         "subcategory",
         "state",
@@ -224,6 +226,33 @@ def _diagnostics(
         value = _json_value(context.get(name))
         if isinstance(value, (int, float)) and value >= 0:
             funnel[name] = int(value)
+    raw_attribution = context.get("filter_diagnostics")
+    attribution = (
+        raw_attribution
+        if isinstance(raw_attribution, dict)
+        else {
+            "evidence_complete": False,
+            "diagnosis": "not_captured",
+            "counterfactual_counts": {},
+            "blocking_filters": [],
+        }
+    )
+    blocking_filters = [
+        str(value)
+        for value in attribution.get("blocking_filters") or ()
+        if isinstance(value, (str, int, float))
+    ]
+    counts = {
+        str(name): int(value)
+        for name, value in dict(attribution.get("counterfactual_counts") or {}).items()
+        if isinstance(value, (int, float)) and value >= 0
+    }
+    if blocking_filters:
+        explanation = (
+            "Removing the following filter groups recovered eligible candidates: "
+            + ", ".join(blocking_filters)
+            + "."
+        )
     return {
         "code": code,
         "explanation": explanation,
@@ -236,7 +265,14 @@ def _diagnostics(
             if isinstance(value, (str, int, float))
         ],
         "candidate_funnel": funnel,
-        "evidence_complete": bool(funnel),
+        "filter_attribution": {
+            "evidence_complete": bool(attribution.get("evidence_complete")),
+            "diagnosis": str(attribution.get("diagnosis") or "not_captured"),
+            "counterfactual_counts": counts,
+            "blocking_filters": blocking_filters,
+        },
+        "evidence_complete": bool(funnel)
+        and (outcome != "zero_result" or bool(attribution.get("evidence_complete"))),
     }
 
 

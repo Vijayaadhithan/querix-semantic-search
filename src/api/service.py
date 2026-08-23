@@ -931,6 +931,7 @@ class ProductSearchService:
         context = {}
         for source, target in (
             ("main_category_name", "main_category"),
+            ("main_category_id", "main_category_id"),
             ("subcategory_id", "subcategory_id"),
             ("subcategory_name", "subcategory"),
             ("state_name", "state"),
@@ -978,6 +979,25 @@ class ProductSearchService:
         ignored = result.get("_analytics_ignored_filter_names")
         if isinstance(ignored, (list, tuple)) and ignored:
             context["ignored_filter_names"] = list(ignored)
+        filter_diagnostics = result.get("_analytics_filter_diagnostics")
+        if isinstance(filter_diagnostics, dict):
+            counts = {
+                str(name): max(int(value), 0)
+                for name, value in dict(
+                    filter_diagnostics.get("counterfactual_counts") or {}
+                ).items()
+                if isinstance(value, (int, float))
+            }
+            context["filter_diagnostics"] = {
+                "evidence_complete": bool(filter_diagnostics.get("evidence_complete")),
+                "diagnosis": str(filter_diagnostics.get("diagnosis") or ""),
+                "counterfactual_counts": counts,
+                "blocking_filters": [
+                    str(value)
+                    for value in filter_diagnostics.get("blocking_filters") or ()
+                    if isinstance(value, (str, int, float))
+                ],
+            }
         return context
 
     @classmethod

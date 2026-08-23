@@ -444,6 +444,42 @@ class GainrDatabaseRepository:
         self._attach_attributes(rows)
         return rows, total
 
+    def count_filter_variants(
+        self,
+        variants: dict[str, tuple[dict, GainrSearchFilter, set[str] | None]],
+        *,
+        product_ids: list[Any] | None = None,
+        fallback_term: str = "",
+    ) -> dict[str, int]:
+        """Count zero-result counterfactuals without changing source data."""
+        if not variants:
+            return {}
+        join = (
+            f"FROM {self.search_table} AS sr "
+            if self.serves_cards_from_search_ready
+            else (
+                f"FROM {self.search_table} AS sr "
+                f"JOIN {self.result_table} AS a ON a.id = sr.id "
+            )
+        )
+        counts: dict[str, int] = {}
+        with self.connection() as connection, connection.cursor() as cursor:
+            for label, (resolved, request_filter, allowed_types) in variants.items():
+                where_clause, params = self._where_clause(
+                    resolved,
+                    request_filter,
+                    product_ids=product_ids,
+                    fallback_term=fallback_term,
+                    allowed_ad_types=allowed_types,
+                )
+                cursor.execute(
+                    f"SELECT COUNT(DISTINCT sr.id) AS total "
+                    f"{join} WHERE {where_clause}",
+                    params,
+                )
+                counts[label] = int(cursor.fetchone()["total"])
+        return counts
+
     def hydrate_filtered(
         self,
         product_ids: list[Any],

@@ -162,7 +162,7 @@ class AnalyticsRefreshService:
                 query_pairs.append((company_record, internal_record))
 
             metadata = {
-                "schema_version": "3.0",
+                "schema_version": "3.1",
                 "company_id": company.company_id,
                 "generated_at": generated_at,
                 "refresh_schedule": REFRESH_SCHEDULE,

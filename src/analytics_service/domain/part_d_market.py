@@ -3,6 +3,8 @@ from collections import Counter
 
 import pandas as pd
 
+from .scope import active_ads
+
 LOGGER = logging.getLogger(__name__)
 
 
@@ -10,7 +12,8 @@ def process_part_d(data):
     LOGGER.info("Processing Part D: Customer-Facing Market Intelligence")
     results = {}
 
-    ads = data["ads"]
+    all_ads = data["ads"]
+    ads = active_ads(all_ads)
     cats = data["categories"]
     subcats = data["sub_categories"]
     location = data["location"]
@@ -128,9 +131,13 @@ def process_part_d(data):
 
     # Q79: Temporal listing patterns
     LOGGER.debug("Processing temporal patterns")
+    all_ads["created_at_parsed"] = pd.to_datetime(
+        all_ads["created_at"], errors="coerce"
+    )
+    all_ads["listing_month"] = all_ads["created_at_parsed"].dt.to_period("M")
     ads["created_at_parsed"] = pd.to_datetime(ads["created_at"], errors="coerce")
     ads["listing_month"] = ads["created_at_parsed"].dt.to_period("M")
-    monthly_ads = ads.groupby("listing_month").size()
+    monthly_ads = all_ads.groupby("listing_month").size()
     monthly_ads = monthly_ads.tail(36)
     results["q79_temporal_patterns"] = {
         "labels": [str(m) for m in monthly_ads.index],
@@ -139,15 +146,14 @@ def process_part_d(data):
         "chart_type": "line",
     }
 
-    # Q80: Monthly active listings
-    # Approximate: ads created and not deleted
-    active_monthly = (
-        ads[ads["deleted_at"].isna()].groupby("listing_month").size().tail(36)
-    )
+    # This is the creation cohort of inventory that is active at snapshot time;
+    # it is not a reconstruction of historical active status.
+    active_monthly = ads.groupby("listing_month").size().tail(36)
     results["q80_active_listings"] = {
         "labels": [str(m) for m in active_monthly.index],
         "values": [int(v) for v in active_monthly.values],
-        "title": "Monthly Active Listings Trend",
+        "title": "Current Active Listings by Creation Month",
+        "note": "Active at snapshot time, grouped by original listing creation month.",
         "chart_type": "line",
     }
 
@@ -202,7 +208,7 @@ def process_part_d(data):
 
     # Q83: Registration to first ad time (simplified)
     # Join first ad created_at with user registration
-    first_ad = ads.groupby("user_id")["created_at_parsed"].min().reset_index()
+    first_ad = all_ads.groupby("user_id")["created_at_parsed"].min().reset_index()
     first_ad.columns = ["user_id", "first_ad_date"]
     if "created_at_parsed" not in users.columns:
         users["created_at_parsed"] = pd.to_datetime(

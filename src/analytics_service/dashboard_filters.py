@@ -218,6 +218,98 @@ def _sorted_values(values: Iterable[Any]) -> list[str]:
     return sorted(normalized, key=str.casefold)
 
 
+def _filtered_company_insights(records: list[dict[str, Any]]) -> dict[str, Any]:
+    demand = Counter()
+    unmet = defaultdict(Counter)
+    ad_types = defaultdict(Counter)
+    for record in records:
+        applied = dict(record.get("filters") or {})
+        category = str(
+            applied.get("subcategory")
+            or applied.get("main_category")
+            or next(
+                (
+                    value
+                    for value in record.get("categories") or ()
+                    if value != "Other / Uncategorized"
+                ),
+                "Unclassified text",
+            )
+        )
+        city = str(
+            applied.get("city")
+            or (
+                f"City #{applied['city_id']}"
+                if applied.get("city_id") is not None
+                else "No city selected"
+            )
+        )
+        outcome = str(record.get("outcome") or "telemetry_missing")
+        ad_type = str(applied.get("target_ad_type") or "not recorded")
+        demand[category] += 1
+        unmet[(city, category)][outcome] += 1
+        unmet[(city, category)]["searches"] += 1
+        ad_types[ad_type][outcome] += 1
+        ad_types[ad_type]["searches"] += 1
+    unmet_rows = []
+    for (city, category), counts in unmet.items():
+        searches = int(counts["searches"])
+        zero = int(counts["zero_result"])
+        failures = int(counts["failure"])
+        if not zero and not failures:
+            continue
+        unmet_rows.append(
+            {
+                "city": city,
+                "category": category,
+                "searches": searches,
+                "zero_results": zero,
+                "failures": failures,
+                "zero_result_rate": round(zero / searches * 100, 1),
+                "failure_rate": round(failures / searches * 100, 1),
+            }
+        )
+    unmet_rows.sort(
+        key=lambda row: (
+            -row["zero_results"],
+            -row["searches"],
+            row["city"].casefold(),
+            row["category"].casefold(),
+        )
+    )
+    ordered_demand = sorted(
+        demand.items(), key=lambda item: (-item[1], item[0].casefold())
+    )[:20]
+    return {
+        "filtered_catalog_demand": {
+            "title": "What did customers look for in this filtered scope?",
+            "chart_type": "bar",
+            "labels": [label for label, _ in ordered_demand],
+            "values": [int(value) for _, value in ordered_demand],
+        },
+        "filtered_unmet_demand": {
+            "title": "Where did filtered demand return no results?",
+            "chart_type": "table",
+            "data": unmet_rows[:40],
+            "note": "Zero-result demand and request failures are reported separately.",
+        },
+        "filtered_ad_type_demand": {
+            "title": "Offer or wanted demand in this filtered scope",
+            "chart_type": "table",
+            "data": [
+                {
+                    "ad_type": ad_type,
+                    "searches": int(counts["searches"]),
+                    "fulfilled": int(counts["fulfilled"]),
+                    "zero_results": int(counts["zero_result"]),
+                    "failures": int(counts["failure"]),
+                }
+                for ad_type, counts in sorted(ad_types.items())
+            ],
+        },
+    }
+
+
 def _available_filters(
     records: list[dict[str, Any]], *, internal: bool
 ) -> dict[str, Any]:
@@ -702,4 +794,9 @@ def build_dashboard_overview(
             "total_records": len(records),
         },
         "filtered_overview": overview,
+        **(
+            {"filtered_insights": _filtered_company_insights(filtered)}
+            if not internal
+            else {}
+        ),
     }

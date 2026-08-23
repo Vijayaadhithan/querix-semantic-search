@@ -18,6 +18,7 @@ _COMPANY_GROUPS = {
         "q94_catalog_demand",
         "q95_unmet_demand_by_city_category",
         "q97_ad_type_demand",
+        "q98_demand_classification_coverage",
     },
     "demand_supply": {
         "q49_search_to_listing",
@@ -92,6 +93,7 @@ _QUESTIONS = {
     "q82_engagement": "Which listings receive the strongest engagement?",
     "q83_activation": "How quickly do users create their first listing?",
     "q84_seller_concentration": "How concentrated is supply among sellers?",
+    "q98_demand_classification_coverage": "How much demand has a reliable category?",
 }
 
 _SOURCES = {

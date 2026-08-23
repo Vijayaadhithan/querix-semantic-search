@@ -110,6 +110,7 @@ class FakeRepository:
         self.filter_ids_call = None
         self.hydrate_call = None
         self.ranked_page_call = None
+        self.filter_variant_call = None
 
     def suggestions(self, term, limit):
         return ["Bike", "Bike Cargo Rider"][:limit]
@@ -135,6 +136,10 @@ class FakeRepository:
             ],
             41,
         )
+
+    def count_filter_variants(self, variants, **kwargs):
+        self.filter_variant_call = (variants, kwargs)
+        return {name: 7 if name == "without_location" else 0 for name in variants}
 
     def hydrate_filtered(
         self,
@@ -540,6 +545,46 @@ def test_chat_location_is_discarded_without_a_structured_location(tmp_path):
     }
     assert meta["ignored_auto_filters"] == {
         "city_name": "Chennai",
+    }
+
+
+def test_zero_result_diagnostics_identify_location_blocker(tmp_path):
+    adapter, _engine, repository = service(tmp_path)
+    request = adapter.parse_filter_result(
+        {
+            "searchTerm": "bike",
+            "filter": {"city_id": 81, "subcategory_id": 313},
+            "page": 1,
+        }
+    )
+    diagnostics = adapter._zero_result_filter_diagnostics(
+        request,
+        {
+            "categorical": {
+                "city_id": 81,
+                "subcategory_id": 313,
+            }
+        },
+        {"1"},
+        product_ids=[10, 11],
+    )
+
+    variants, kwargs = repository.filter_variant_call
+    assert set(variants) == {
+        "without_category",
+        "without_location",
+        "without_ad_type",
+    }
+    assert kwargs == {"product_ids": [10, 11], "fallback_term": ""}
+    assert diagnostics == {
+        "evidence_complete": True,
+        "diagnosis": "filter_blocked_candidates",
+        "counterfactual_counts": {
+            "without_category": 0,
+            "without_location": 7,
+            "without_ad_type": 0,
+        },
+        "blocking_filters": ["location"],
     }
 
 

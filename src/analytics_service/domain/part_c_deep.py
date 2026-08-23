@@ -3,6 +3,8 @@ from collections import Counter, defaultdict
 
 import pandas as pd
 
+from .scope import active_ads
+
 LOGGER = logging.getLogger(__name__)
 
 
@@ -10,7 +12,8 @@ def process_part_c(data):
     LOGGER.info("Processing Part C: Cross-CSV Deep Analytics")
     results = {}
 
-    ads = data["ads"]
+    all_ads = data["ads"]
+    ads = active_ads(all_ads)
     users = data["users"]
     cats = data["categories"]
     subcats = data["sub_categories"]
@@ -286,7 +289,7 @@ def process_part_c(data):
     }
 
     # Q62: Ad status distribution
-    status_dist = ads["status"].value_counts().to_dict()
+    status_dist = all_ads["status"].value_counts().to_dict()
     status_map = {
         "1": "Active",
         "8": "Active",
@@ -501,7 +504,10 @@ def process_part_c(data):
     # Q73: Most/least filled attributes
     LOGGER.debug("Processing attribute completeness")
     attr_names = attrs.set_index("id")["name"].to_dict()
-    attr_usage = ads_attrs.groupby("attribute_id").size().sort_values(ascending=False)
+    scoped_attrs = ads_attrs[ads_attrs["ads_id"].isin(set(ads["id"]))]
+    attr_usage = (
+        scoped_attrs.groupby("attribute_id").size().sort_values(ascending=False)
+    )
     top_attrs = {}
     for aid, count in attr_usage.head(15).items():
         name = attr_names.get(aid, f"Attr {aid}")
@@ -517,7 +523,7 @@ def process_part_c(data):
     # Q74: Most common attribute values
     LOGGER.debug("Processing common attribute values")
     val_names = attr_vals.set_index("id")["value"].to_dict()
-    top_val_ids = ads_attrs["value"].value_counts().head(20)
+    top_val_ids = scoped_attrs["value"].value_counts().head(20)
     top_vals = {}
     for vid, count in top_val_ids.items():
         try:
