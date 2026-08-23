@@ -27,6 +27,10 @@ COMPANY_SEARCH_METRICS = (
     "q87_unfulfilled_duration",
     "q88_repeat_demand",
     "q89_category_fulfillment",
+    "q94_catalog_demand",
+    "q95_unmet_demand_by_city_category",
+    "q96_demand_supply_gap",
+    "q97_ad_type_demand",
 )
 
 COMPANY_DEEP_METRICS = (
@@ -125,6 +129,10 @@ AVAILABLE_METRICS = {
         "q90_complexity_performance",
         "q91_path_outcomes",
         "q92_provider_reliability",
+        "q94_catalog_demand",
+        "q95_unmet_demand_by_city_category",
+        "q96_demand_supply_gap",
+        "q97_ad_type_demand",
     ),
     "api_performance": (
         "q21_success_rate",

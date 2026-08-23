@@ -65,6 +65,7 @@ class AnalyticsSnapshotStore:
         self._activity_cache: dict[
             tuple[str, str, bool], tuple[dict[str, Any], ...]
         ] = {}
+        self._facet_cache: dict[tuple[str, str, bool], dict[str, Any]] = {}
         self._initialize()
 
     @staticmethod
@@ -146,6 +147,11 @@ class AnalyticsSnapshotStore:
             for attempt in payload.get("attempts") or ()
             if isinstance(attempt, dict)
         ]
+        diagnostics = dict(payload.get("diagnostics") or {})
+        record["diagnostics"] = {
+            "code": diagnostics.get("code"),
+            "evidence_complete": diagnostics.get("evidence_complete"),
+        }
         return record
 
     @contextmanager
@@ -393,6 +399,11 @@ class AnalyticsSnapshotStore:
                 for key, value in self._activity_cache.items()
                 if key[0] != company_id
             }
+            self._facet_cache = {
+                key: value
+                for key, value in self._facet_cache.items()
+                if key[0] != company_id
+            }
         return version
 
     def dashboard(
@@ -479,6 +490,12 @@ class AnalyticsSnapshotStore:
         created_from: str | None = None,
         created_to: str | None = None,
         include_filtered_results: bool = False,
+        request_kind: str | None = None,
+        city_id: int | None = None,
+        subcategory_id: int | None = None,
+        ad_type: str | None = None,
+        diagnostic_code: str | None = None,
+        has_filters: bool | None = None,
     ) -> dict[str, Any]:
         field = "internal_json" if internal else "company_json"
         clauses = [
@@ -536,6 +553,26 @@ class AnalyticsSnapshotStore:
         if language:
             clauses.append("records.language = ?")
             values.append(language)
+        for json_path, expected in (
+            ("$.request_kind", request_kind),
+            ("$.filters.city_id", city_id),
+            ("$.filters.subcategory_id", subcategory_id),
+            ("$.filters.target_ad_type", ad_type),
+        ):
+            if expected is not None and expected != "":
+                clauses.append(f"json_extract(records.{field}, '{json_path}') = ?")
+                values.append(expected)
+        if diagnostic_code and internal:
+            clauses.append(
+                "json_extract(records.internal_json, '$.diagnostics.code') = ?"
+            )
+            values.append(diagnostic_code)
+        if has_filters is not None:
+            operator = "!=" if has_filters else "="
+            clauses.append(
+                f"COALESCE(json_extract(records.{field}, '$.filters'), '{{}}') "
+                f"{operator} '{{}}'"
+            )
         if created_from:
             clauses.append("records.created_at >= ?")
             values.append(created_from)
@@ -575,7 +612,81 @@ class AnalyticsSnapshotStore:
             "returned": len(visible),
             "has_more": has_more,
             "next_cursor": next_cursor,
+            "facets": self.query_facets(company_id, internal=internal),
         }
+
+    def query_facets(self, company_id: str, *, internal: bool) -> dict[str, Any]:
+        """Return snapshot-wide Query Explorer choices, not page-local options."""
+        field = "internal_json" if internal else "company_json"
+        with self._connection() as connection:
+            snapshot = connection.execute(
+                "SELECT active_version FROM analytics_snapshots WHERE company_id = ?",
+                (company_id,),
+            ).fetchone()
+            if snapshot is None:
+                return {
+                    "request_kinds": [],
+                    "cities": [],
+                    "subcategories": [],
+                    "ad_types": [],
+                    "diagnostic_codes": [],
+                }
+            version = str(snapshot["active_version"])
+            cache_key = (company_id, version, internal)
+            with self._lock:
+                cached = self._facet_cache.get(cache_key)
+            if cached is not None:
+                return cached
+
+            def choices(path: str) -> list[str]:
+                rows = connection.execute(
+                    f"""
+                    SELECT DISTINCT json_extract(records.{field}, ?) AS value
+                    FROM analytics_query_records AS records
+                    WHERE records.company_id = ?
+                      AND records.snapshot_version = ?
+                      AND json_extract(records.{field}, ?) IS NOT NULL
+                    ORDER BY value COLLATE NOCASE
+                    """,
+                    (path, company_id, version, path),
+                ).fetchall()
+                return [str(row["value"]) for row in rows if str(row["value"] or "")]
+
+            def id_labels(id_path: str, label_path: str) -> list[dict[str, Any]]:
+                rows = connection.execute(
+                    f"""
+                    SELECT
+                        json_extract(records.{field}, ?) AS id,
+                        MAX(json_extract(records.{field}, ?)) AS label
+                    FROM analytics_query_records AS records
+                    WHERE records.company_id = ?
+                      AND records.snapshot_version = ?
+                      AND json_extract(records.{field}, ?) IS NOT NULL
+                    GROUP BY id
+                    ORDER BY label COLLATE NOCASE, id
+                    """,
+                    (id_path, label_path, company_id, version, id_path),
+                ).fetchall()
+                return [
+                    {
+                        "id": int(row["id"]),
+                        "label": str(row["label"] or f"ID {row['id']}"),
+                    }
+                    for row in rows
+                ]
+
+            facets = {
+                "request_kinds": choices("$.request_kind"),
+                "cities": id_labels("$.filters.city_id", "$.filters.city"),
+                "subcategories": id_labels(
+                    "$.filters.subcategory_id", "$.filters.subcategory"
+                ),
+                "ad_types": choices("$.filters.target_ad_type"),
+                "diagnostic_codes": (choices("$.diagnostics.code") if internal else []),
+            }
+        with self._lock:
+            self._facet_cache[cache_key] = facets
+        return facets
 
     def company_status(self, company_id: str) -> dict[str, Any]:
         with self._connection() as connection:

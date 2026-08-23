@@ -567,6 +567,27 @@ class GainrCompatibilityService:
             if allowed_ad_types == {"2"}
             else "offer_and_wanted"
         )
+        analytics_result["_analytics_explicit_filters"] = (
+            self.analytics_failure_context(request)["explicit_filters"]
+        )
+        analytics_result["_analytics_inferred_filters"] = (
+            self.product_search_service._analytics_filter_context(
+                {"resolved_filters": copy.deepcopy(meta["auto_filters"])}
+            )
+        )
+        analytics_result["_analytics_ignored_filter_names"] = sorted(
+            str(name) for name in meta["ignored_auto_filters"]
+        )
+        analytics_result["_analytics_candidate_counts"] = {
+            "retrieved_candidates": (
+                int(total)
+                if execution_path == "deterministic_filter"
+                else len(analytics_result.get("product_ids") or ())
+            ),
+            "eligible_candidates": int(total),
+            "hydrated_results": len(cards),
+            "returned_results": len(cards),
+        }
         self.product_search_service.record_search_analytics(
             request.searchTerm,
             analytics_result,
@@ -574,6 +595,7 @@ class GainrCompatibilityService:
             result_count=len(cards),
             total_results=total,
         )
+
         route_reason = planned["query_plan"].get("route_reason") or "none"
         query_words = len(re.findall(r"[^\W_]+", request.searchTerm, re.UNICODE))
         PERFORMANCE_LOGGER.info(
@@ -635,6 +657,28 @@ class GainrCompatibilityService:
                 ],
             )
         return response
+
+    @staticmethod
+    def analytics_failure_context(request: GainrFilterResultRequest) -> dict[str, Any]:
+        """Return safe explicit filters even when planning/search fails."""
+        explicit = request.filter
+        context: dict[str, Any] = {}
+        for source, target in (
+            ("category_id", "main_category_id"),
+            ("subcategory_id", "subcategory_id"),
+            ("city_id", "city_id"),
+            ("locality_id", "locality_id"),
+            ("rental_duration", "rental_duration"),
+            ("min_fee", "min_rental_fee"),
+            ("max_fee", "max_rental_fee"),
+            ("sort_by", "sort_by"),
+        ):
+            value = getattr(explicit, source)
+            if value not in (None, "", [], {}):
+                context[target] = value
+        if explicit.ad_type:
+            context["target_ad_type"] = list(explicit.ad_type)
+        return {"explicit_filters": context, **context}
 
     @staticmethod
     def _integer(value):

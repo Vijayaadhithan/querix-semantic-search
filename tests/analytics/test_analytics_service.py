@@ -479,7 +479,31 @@ def test_daily_refresh_publishes_both_audiences_and_queries(tmp_path):
     assert "search_intelligence" not in internal_dashboard
     assert "deep_analytics" not in internal_dashboard
     assert "market_intelligence" not in internal_dashboard
-    assert company_dashboard["metadata"]["schema_version"] == "2.0"
+    assert company_dashboard["metadata"]["schema_version"] == "3.0"
+    assert company_dashboard["business_overview"] == {
+        "scope": "Latest completed company snapshot",
+        "total_users": 2,
+        "active_users": 2,
+        "total_listings": 2,
+        "active_listings": 2,
+        "active_sellers": 2,
+        "cities_with_active_supply": 2,
+        "recorded_demand": 2,
+        "fulfilled_demand": 1,
+        "zero_result_demand": 1,
+        "failed_requests": 0,
+        "fulfillment_rate": 50.0,
+    }
+    assert (
+        company_dashboard["metadata"]["metric_definitions"]["q94_catalog_demand"][
+            "group"
+        ]
+        == "demand"
+    )
+    assert company_dashboard["search_intelligence"]["q94_catalog_demand"]["labels"] == [
+        "Vehicles",
+        "Electronics",
+    ]
 
     company_queries = store.query_records(
         "gainr",
@@ -555,6 +579,11 @@ def test_daily_refresh_publishes_both_audiences_and_queries(tmp_path):
     }
     assert detailed["api"]["duration_ms"] == 500.0
     assert detailed["attempts"][0]["duration_ms"] == 200
+    zero_result = next(
+        item for item in internal_queries["items"] if item["request_id"] == "req-2"
+    )
+    assert zero_result["diagnostics"]["code"] == ("no_results_for_applied_filters")
+    assert zero_result["filters"]["city"] == "Chennai"
     semantic_queries = store.query_records(
         "gainr",
         internal=True,
@@ -563,6 +592,16 @@ def test_daily_refresh_publishes_both_audiences_and_queries(tmp_path):
     )
     assert semantic_queries["returned"] == 1
     assert semantic_queries["items"][0]["performance"]["execution_path"] == "semantic"
+    city_queries = store.query_records(
+        "gainr",
+        internal=True,
+        limit=10,
+        city_id=301,
+        diagnostic_code="no_results_for_applied_filters",
+    )
+    assert [item["request_id"] for item in city_queries["items"]] == ["req-2"]
+    assert internal_queries["facets"]["cities"] == [{"id": 301, "label": "Chennai"}]
+    assert "text_search" in internal_queries["facets"]["request_kinds"]
     assert "performance" not in company_queries["items"][0]
     assert "token_usage" not in company_queries["items"][0]
 

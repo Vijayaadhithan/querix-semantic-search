@@ -8,12 +8,15 @@ import pandas as pd
 
 from .config import CompanyAnalyticsConfig
 from .domain import (
+    build_company_business_insights,
+    build_company_overview,
     process_part_a,
     process_part_b,
     process_part_c,
     process_part_d,
 )
 from .domain.search.records import build_query_records
+from .metric_catalog import build_metric_definitions
 from .metrics import (
     metric_counts,
     resolve_metric_profiles,
@@ -111,7 +114,11 @@ class AnalyticsRefreshService:
                 "Building search intelligence company=%s",
                 company.company_id,
             )
+            query_payload = build_query_records(_copy_data(data))
             search_intelligence = process_part_a(_copy_data(data))
+            search_intelligence.update(
+                build_company_business_insights(data, query_payload["queries"])
+            )
             LOGGER.info(
                 "Building API performance company=%s",
                 company.company_id,
@@ -127,8 +134,6 @@ class AnalyticsRefreshService:
                 company.company_id,
             )
             market_intelligence = process_part_d(_copy_data(data))
-            query_payload = build_query_records(_copy_data(data))
-
             reports = {
                 "search_intelligence": search_intelligence,
                 "api_performance": api_performance,
@@ -157,7 +162,7 @@ class AnalyticsRefreshService:
                 query_pairs.append((company_record, internal_record))
 
             metadata = {
-                "schema_version": "2.0",
+                "schema_version": "3.0",
                 "company_id": company.company_id,
                 "generated_at": generated_at,
                 "refresh_schedule": REFRESH_SCHEDULE,
@@ -170,7 +175,17 @@ class AnalyticsRefreshService:
                     "modules": _dashboard_modules(company_sections),
                     "metric_counts": metric_counts(company_profile),
                     "individual_query_count": len(query_pairs),
+                    "metric_definitions": build_metric_definitions(
+                        reports,
+                        company_profile,
+                        audience="company",
+                        source_rows=source_rows,
+                    ),
                 },
+                "business_overview": build_company_overview(
+                    data,
+                    query_payload["queries"],
+                ),
                 **company_sections,
             }
             internal_dashboard = {
@@ -180,6 +195,12 @@ class AnalyticsRefreshService:
                     "modules": _dashboard_modules(internal_sections),
                     "metric_counts": metric_counts(internal_profile),
                     "individual_query_count": len(query_pairs),
+                    "metric_definitions": build_metric_definitions(
+                        reports,
+                        internal_profile,
+                        audience="internal",
+                        source_rows=source_rows,
+                    ),
                 },
                 **internal_sections,
             }

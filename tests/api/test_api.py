@@ -1353,6 +1353,11 @@ def test_search_analytics_records_route_provider_calls_and_user_context():
         "city": "Chennai",
         "min_rental_fee": 500,
         "target_ad_type": "offer",
+        "route_reason": "llm_required:subjective_language",
+        "retrieved_candidates": 0,
+        "eligible_candidates": 80,
+        "hydrated_results": 20,
+        "returned_results": 20,
     }
     assert event.timings_ms == {
         "planning_ms": 200.0,

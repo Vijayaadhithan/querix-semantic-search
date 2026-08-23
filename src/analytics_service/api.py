@@ -381,6 +381,12 @@ def create_app(
         created_from: datetime | None,
         created_to: datetime | None,
         include_filtered_results: bool,
+        request_kind: str | None,
+        city_id: int | None,
+        subcategory_id: int | None,
+        ad_type: str | None,
+        diagnostic_code: str | None,
+        has_filters: bool | None,
     ) -> dict[str, Any]:
         if not active_store.company_status(company.company_id)["has_snapshot"]:
             raise HTTPException(
@@ -404,6 +410,12 @@ def create_app(
                 created_from=(created_from.isoformat() if created_from else None),
                 created_to=created_to.isoformat() if created_to else None,
                 include_filtered_results=include_filtered_results,
+                request_kind=request_kind,
+                city_id=city_id,
+                subcategory_id=subcategory_id,
+                ad_type=ad_type,
+                diagnostic_code=diagnostic_code if internal else None,
+                has_filters=has_filters,
             )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -760,6 +772,15 @@ def create_app(
         execution_path: str | None = Query(default=None, max_length=128),
         language: str | None = Query(default=None, max_length=64),
         include_filtered_results: bool = Query(default=False),
+        request_kind: str | None = Query(
+            default=None,
+            pattern="^(text_search|filtered_browse|catalogue_browse)$",
+        ),
+        city_id: int | None = Query(default=None, gt=0),
+        subcategory_id: int | None = Query(default=None, gt=0),
+        ad_type: str | None = Query(default=None, max_length=64),
+        diagnostic_code: str | None = Query(default=None, max_length=128),
+        has_filters: bool | None = Query(default=None),
         created_from: datetime | None = Query(default=None, alias="from"),
         created_to: datetime | None = Query(default=None, alias="to"),
         analytics_session: str | None = Cookie(
@@ -785,6 +806,12 @@ def create_app(
             created_from=created_from,
             created_to=created_to,
             include_filtered_results=include_filtered_results,
+            request_kind=request_kind,
+            city_id=city_id,
+            subcategory_id=subcategory_id,
+            ad_type=ad_type,
+            diagnostic_code=diagnostic_code,
+            has_filters=has_filters,
         )
 
     @application.get(
@@ -860,6 +887,14 @@ def create_app(
         category: str | None = Query(default=None, max_length=191),
         language: str | None = Query(default=None, max_length=64),
         include_filtered_results: bool = Query(default=False),
+        request_kind: str | None = Query(
+            default=None,
+            pattern="^(text_search|filtered_browse|catalogue_browse)$",
+        ),
+        city_id: int | None = Query(default=None, gt=0),
+        subcategory_id: int | None = Query(default=None, gt=0),
+        ad_type: str | None = Query(default=None, max_length=64),
+        has_filters: bool | None = Query(default=None),
         created_from: datetime | None = Query(default=None, alias="from"),
         created_to: datetime | None = Query(default=None, alias="to"),
         x_api_key: str | None = Header(default=None, alias="X-API-Key"),
@@ -888,6 +923,12 @@ def create_app(
                 created_from=created_from,
                 created_to=created_to,
                 include_filtered_results=include_filtered_results,
+                request_kind=request_kind,
+                city_id=city_id,
+                subcategory_id=subcategory_id,
+                ad_type=ad_type,
+                diagnostic_code=None,
+                has_filters=has_filters,
             )
         )
 

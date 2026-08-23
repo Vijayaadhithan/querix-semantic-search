@@ -722,17 +722,29 @@ def create_app(
                 user_id=x_user_id,
             )
         except RuntimeError as exc:
+            failure_context = getattr(
+                compatibility_service,
+                "analytics_failure_context",
+                lambda _request: {},
+            )(request)
             compatibility_service.product_search_service.record_search_failure(
                 request.searchTerm,
                 duration_ms=(time.perf_counter() - search_started) * 1000,
                 error_type=type(exc).__name__,
+                context=failure_context,
             )
             raise HTTPException(status_code=503, detail=str(exc)) from exc
         except Exception as exc:
+            failure_context = getattr(
+                compatibility_service,
+                "analytics_failure_context",
+                lambda _request: {},
+            )(request)
             compatibility_service.product_search_service.record_search_failure(
                 request.searchTerm,
                 duration_ms=(time.perf_counter() - search_started) * 1000,
                 error_type=type(exc).__name__,
+                context=failure_context,
             )
             raise
 

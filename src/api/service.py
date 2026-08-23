@@ -897,6 +897,15 @@ class ProductSearchService:
         if self.analytics_store is None:
             return False
         query_plan = result.get("query_plan") or {}
+        result.setdefault(
+            "_analytics_candidate_counts",
+            {
+                "retrieved_candidates": len(result.get("product_ids") or ()),
+                "eligible_candidates": max(int(total_results), 0),
+                "hydrated_results": max(int(result_count), 0),
+                "returned_results": max(int(result_count), 0),
+            },
+        )
         timings_ms = self._search_timings_ms(result, duration_ms)
         event = SearchAnalyticsEvent(
             company_id=self.company_id or "legacy",
@@ -945,6 +954,30 @@ class ProductSearchService:
             target_ad_type != ""
         ):
             context["target_ad_type"] = target_ad_type
+        query_plan = dict(result.get("query_plan") or {})
+        route_reason = str(query_plan.get("route_reason") or "").strip()
+        if route_reason:
+            context["route_reason"] = route_reason
+        for name, value in dict(
+            result.get("_analytics_candidate_counts") or {}
+        ).items():
+            if name in {
+                "retrieved_candidates",
+                "eligible_candidates",
+                "hydrated_results",
+                "returned_results",
+            } and isinstance(value, (int, float)):
+                context[name] = max(int(value), 0)
+        for target, source in (
+            ("explicit_filters", "_analytics_explicit_filters"),
+            ("inferred_filters", "_analytics_inferred_filters"),
+        ):
+            values = result.get(source)
+            if isinstance(values, dict) and values:
+                context[target] = values
+        ignored = result.get("_analytics_ignored_filter_names")
+        if isinstance(ignored, (list, tuple)) and ignored:
+            context["ignored_filter_names"] = list(ignored)
         return context
 
     @classmethod
@@ -1004,6 +1037,7 @@ class ProductSearchService:
         duration_ms: float,
         error_type: str,
         execution_path: str = "unknown",
+        context: dict[str, Any] | None = None,
     ) -> bool:
         """Durably record an authenticated search-processing failure.
 
@@ -1034,6 +1068,7 @@ class ProductSearchService:
                     failure_reason=normalized_error_type,
                 ),
             ),
+            context=dict(context or {}),
         )
         try:
             return self.analytics_store.submit(event)

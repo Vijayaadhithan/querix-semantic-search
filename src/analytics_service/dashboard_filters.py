@@ -473,6 +473,8 @@ def _internal_overview(
     plan_cache: Counter = Counter()
     result_cache: Counter = Counter()
     downstream_calls = 0
+    diagnostics: Counter = Counter()
+    outcomes: Counter = Counter()
 
     provider_filter = _normalized_choice(filters.provider)
     operation_filter = _normalized_choice(filters.operation)
@@ -483,6 +485,11 @@ def _internal_overview(
         paths[path] += 1
         status = str(api.get("status") or "unknown")
         statuses[status] += 1
+        diagnostic_code = str(
+            dict(record.get("diagnostics") or {}).get("code") or "not_recorded"
+        )
+        diagnostics[diagnostic_code] += 1
+        outcomes[str(record.get("outcome") or "telemetry_missing")] += 1
         duration = performance.get("total_server_duration_ms")
         if isinstance(duration, (int, float)):
             durations.append(float(duration))
@@ -569,6 +576,7 @@ def _internal_overview(
             "requests": total,
             "successful": int(successful),
             "failed": int(total - successful),
+            "zero_results": int(outcomes["zero_result"]),
             "success_rate": round(successful / total * 100, 1) if total else 0,
             "average_latency_ms": round(mean(durations), 1) if durations else 0,
             "p50_latency_ms": _percentile(durations, 0.50),
@@ -600,6 +608,9 @@ def _internal_overview(
             "providers": _counter_chart("Provider Attempts", providers),
             "operations": _counter_chart("Operations", operations),
             "statuses": _counter_chart("Request Statuses", statuses),
+            "diagnostic_reasons": _counter_chart(
+                "Observed Result Diagnoses", diagnostics
+            ),
         },
         "stage_latency": {
             "title": "Measured Stage Latency",

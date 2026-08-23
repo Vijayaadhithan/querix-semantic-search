@@ -63,6 +63,30 @@ SEARCH_ANALYTICS_CONTEXT_FIELDS = frozenset(
         "min_rental_fee",
         "max_rental_fee",
         "target_ad_type",
+        "route_reason",
+        "retrieved_candidates",
+        "eligible_candidates",
+        "hydrated_results",
+        "returned_results",
+    }
+)
+_NESTED_FILTER_FIELDS = frozenset(
+    {
+        "main_category",
+        "main_category_id",
+        "subcategory",
+        "subcategory_id",
+        "state",
+        "city",
+        "city_id",
+        "locality",
+        "locality_id",
+        "rental_duration",
+        "min_rental_fee",
+        "max_rental_fee",
+        "target_ad_type",
+        "fee",
+        "sort_by",
     }
 )
 
@@ -83,6 +107,36 @@ def sanitize_search_analytics_context(value: Any) -> dict[str, Any]:
             and math.isfinite(float(item))
         ):
             sanitized[name] = item
+    for container_name in ("explicit_filters", "inferred_filters"):
+        container = value.get(container_name)
+        if not isinstance(container, dict):
+            continue
+        nested = {}
+        for name in _NESTED_FILTER_FIELDS:
+            item = container.get(name)
+            if isinstance(item, str):
+                item = item.strip()[:191]
+                if item:
+                    nested[name] = item
+            elif isinstance(item, bool) or (
+                isinstance(item, (int, float)) and math.isfinite(float(item))
+            ):
+                nested[name] = item
+            elif isinstance(item, (list, tuple)):
+                safe_items = [
+                    entry
+                    for entry in item[:20]
+                    if isinstance(entry, (str, int, float, bool))
+                ]
+                if safe_items:
+                    nested[name] = safe_items
+        if nested:
+            sanitized[container_name] = nested
+    ignored = value.get("ignored_filter_names")
+    if isinstance(ignored, (list, tuple)):
+        names = [str(name).strip()[:64] for name in ignored[:32] if str(name).strip()]
+        if names:
+            sanitized["ignored_filter_names"] = names
     return sanitized
 
 

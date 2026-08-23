@@ -263,6 +263,77 @@ analytics:
   search_history_table: semantic_search_history
   api_usage_table: semantic_search_api_usage
   queue_capacity: 1000
+  # Gainr's company portal is a complete marketplace analytics workspace.
+  # Search demand is one business area alongside supply, customers, pricing,
+  # listing quality, geography, and engagement. Keep this selection tenant-owned
+  # so another marketplace can choose a different set without branching code.
+  metrics:
+    company:
+      search_intelligence:
+        - q94_catalog_demand
+        - q95_unmet_demand_by_city_category
+        - q96_demand_supply_gap
+        - q97_ad_type_demand
+        - q3_trending_terms
+        - q10_language
+        - q11_typos
+        - q12_query_length
+        - q15_search_volume
+        - q16_new_subcategories
+        - q88_repeat_demand
+        - q89_category_fulfillment
+      deep_analytics:
+        - q47_supply_by_category
+        - q48_supply_by_city
+        - q50_low_supply_categories
+        - q51_user_growth
+        - q52_users_by_state
+        - q54_platform
+        - q55_ads_per_user
+        - q56_verification
+        - q57_retention
+        - q58_products_vs_services
+        - q59_top_subcategories
+        - q60_rental_fee_distribution
+        - q61_negotiable
+        - q62_ad_status
+        - q63_top_ads
+        - q64_city_density
+        - q65_premium_adoption
+        - q68_premium_by_category
+        - q69_contact_views
+        - q70_photos
+        - q71_description_length
+        - q73_attribute_completeness
+      market_intelligence:
+        - q75_marketplace_overview
+        - q76_geographic_heatmap
+        - q77_top_listings
+        - q78_pricing_benchmark
+        - q79_temporal_patterns
+        - q80_active_listings
+        - q81_user_acquisition_by_state
+        - q82_engagement
+        - q83_activation
+        - q84_seller_concentration
+    internal:
+      api_performance:
+        - q21_success_rate
+        - q22_execution_paths
+        - q23_latency_stats
+        - q24_latency_by_path
+        - q26_token_consumption
+        - q29_provider_reliability
+        - q30_latency_per_operation
+        - q31_model_latency
+        - q32_reranking_fallback
+        - q33_failure_reasons
+        - q35_result_distribution
+        - q40_avg_api_calls
+        - q41_multi_attempt
+        - q45_embedding_latency
+        - q46_query_planning_bottleneck
+        - q93_operation_token_usage
   # The analytics image uses read-only SQL scans once per day. These explicit
   # names form Gainr's normalized analytics source contract.
   tables:

@@ -132,13 +132,8 @@ def _sanitize_attempts(value: Any) -> list[dict[str, Any]]:
 
 
 def _sanitize_filter_context(value: Any) -> dict[str, Any]:
-    normalized = _json_value(value, {})
-    if isinstance(normalized, str) and normalized.strip():
-        try:
-            normalized = json.loads(normalized)
-        except (TypeError, ValueError):
-            normalized = {}
-    if not isinstance(normalized, dict):
+    normalized = _parse_context(value)
+    if not normalized:
         return {}
     allowed = (
         "main_category",
@@ -164,6 +159,85 @@ def _sanitize_filter_context(value: Any) -> dict[str, Any]:
         ):
             sanitized[name] = item
     return sanitized
+
+
+def _parse_context(value: Any) -> dict[str, Any]:
+    normalized = _json_value(value, {})
+    if isinstance(normalized, str) and normalized.strip():
+        try:
+            normalized = json.loads(normalized)
+        except (TypeError, ValueError):
+            normalized = {}
+    if not isinstance(normalized, dict):
+        return {}
+    return normalized
+
+
+def _safe_filter_dict(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    return {
+        str(name): item
+        for name, item in value.items()
+        if item is not None
+        and item != ""
+        and isinstance(item, (str, int, float, bool, list))
+    }
+
+
+def _diagnostics(
+    row: pd.Series,
+    *,
+    filters: dict[str, Any],
+    request_kind: str,
+    outcome: str,
+    total_results: int,
+) -> dict[str, Any]:
+    context = _parse_context(row.get("context_json"))
+    execution_path = str(_json_value(row.get("execution_path"), "missing"))
+    if outcome == "failure":
+        code = "request_failed"
+        explanation = "The request failed before a successful result set was returned."
+    elif outcome == "telemetry_missing":
+        code = "telemetry_missing"
+        explanation = "Operational telemetry was not recorded for this request."
+    elif total_results > 0:
+        code = "results_returned"
+        explanation = "The request produced eligible results."
+    elif filters:
+        code = "no_results_for_applied_filters"
+        explanation = "No eligible result matched the complete applied filter set."
+    elif execution_path == "deterministic_filter" or request_kind != "text_search":
+        code = "no_catalog_match"
+        explanation = "The catalogue lookup returned no eligible result."
+    else:
+        code = "no_eligible_results"
+        explanation = "Retrieval completed without an eligible result."
+
+    funnel = {}
+    for name in (
+        "retrieved_candidates",
+        "eligible_candidates",
+        "hydrated_results",
+        "returned_results",
+    ):
+        value = _json_value(context.get(name))
+        if isinstance(value, (int, float)) and value >= 0:
+            funnel[name] = int(value)
+    return {
+        "code": code,
+        "explanation": explanation,
+        "route_reason": _json_value(context.get("route_reason")),
+        "explicit_filters": _safe_filter_dict(context.get("explicit_filters")),
+        "inferred_filters": _safe_filter_dict(context.get("inferred_filters")),
+        "ignored_filter_names": [
+            str(value)
+            for value in context.get("ignored_filter_names") or ()
+            if isinstance(value, (str, int, float))
+        ],
+        "candidate_funnel": funnel,
+        "evidence_complete": bool(funnel),
+    }
 
 
 def _cache_value(value: Any) -> bool | None:
@@ -276,6 +350,7 @@ def _build_record(
     attempts = _sanitize_attempts(row.get("attempts_json"))
     filter_context = _sanitize_filter_context(row.get("context_json"))
     request_kind = _request_kind(query, filter_context)
+    outcome = _outcome(row)
     stage_timings = _sanitize_timings(row.get("timings_json"), duration_ms)
     successful_attempts = sum(
         str(attempt.get("status") or "").casefold()
@@ -312,8 +387,15 @@ def _build_record(
             "is_uncategorized": categories == ["Other / Uncategorized"],
             "is_browse": request_kind != "text_search",
         },
-        "outcome": _outcome(row),
+        "outcome": outcome,
         "filters": filter_context,
+        "diagnostics": _diagnostics(
+            row,
+            filters=filter_context,
+            request_kind=request_kind,
+            outcome=outcome,
+            total_results=total_results,
+        ),
         # Stable, explicitly named internal projections. ``api`` below stays
         # available for the deployed frontend during the additive rollout.
         # The duration is measured with time.perf_counter around server-side
@@ -398,19 +480,19 @@ def build_query_records(
             for name, value in filters.items()
             if value is not None and value != ""
         }
+        for name in ("main_category", "subcategory"):
+            value = record["filters"].get(name)
+            if value and value not in record["categories"]:
+                record["categories"].append(str(value))
+        for name in ("state", "city", "locality"):
+            value = record["filters"].get(name)
+            if value and value not in record["locations"]:
+                record["locations"].append(str(value))
         if record["request_kind"] != "text_search":
             record["query"] = _browse_label(
                 record["filters"],
                 record["request_kind"],
             )
-            for name in ("main_category", "subcategory"):
-                value = record["filters"].get(name)
-                if value and value not in record["categories"]:
-                    record["categories"].append(str(value))
-            for name in ("state", "city", "locality"):
-                value = record["filters"].get(name)
-                if value and value not in record["locations"]:
-                    record["locations"].append(str(value))
     return {
         "metadata": {
             "schema_version": "2.0",
