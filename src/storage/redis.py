@@ -6,11 +6,14 @@ from typing import Any
 
 try:
     import redis
-    from redis.exceptions import RedisError
+    from redis.exceptions import RedisError, WatchError
 except ImportError:  # Allows diagnostics to explain a missing optional client.
     redis = None
 
     class RedisError(Exception):
+        pass
+
+    class WatchError(RedisError):
         pass
 
 
@@ -164,6 +167,73 @@ class RedisJsonCache:
         except (RedisError, OSError, TypeError) as exc:
             self._mark_failure("set", exc)
             return False
+
+    def prepend_unique_json_item(
+        self,
+        namespace: str,
+        key: str,
+        item: dict[str, Any],
+        ttl_seconds: int,
+        limit: int,
+        identity_field: str = "value",
+    ) -> dict[str, Any] | None:
+        """Atomically prepend and deduplicate an item across API workers."""
+        if not self._can_attempt() or ttl_seconds <= 0 or limit <= 0:
+            return None
+        redis_key = self._key(namespace, key)
+        for _attempt in range(16):
+            try:
+                with self._client.pipeline() as pipe:
+                    pipe.watch(redis_key)
+                    raw = pipe.get(redis_key)
+                    try:
+                        payload = json.loads(raw) if raw is not None else {}
+                    except (TypeError, json.JSONDecodeError):
+                        payload = {}
+                    raw_items = (
+                        payload.get("items", []) if isinstance(payload, dict) else []
+                    )
+                    items = [
+                        dict(existing)
+                        for existing in raw_items
+                        if isinstance(existing, dict)
+                    ]
+                    incoming = dict(item)
+                    identity = str(incoming.get(identity_field, "")).casefold()
+                    items = [
+                        existing
+                        for existing in items
+                        if str(existing.get(identity_field, "")).casefold() != identity
+                    ]
+                    existing_ids = {
+                        int(existing["id"])
+                        for existing in items
+                        if str(existing.get("id", "")).isdigit()
+                    }
+                    if str(incoming.get("id", "")).isdigit():
+                        while int(incoming["id"]) in existing_ids:
+                            incoming["id"] = int(incoming["id"]) + 1
+                    updated = {"items": [incoming, *items][:limit]}
+                    pipe.multi()
+                    pipe.set(
+                        redis_key,
+                        json.dumps(
+                            updated,
+                            separators=(",", ":"),
+                            ensure_ascii=False,
+                        ),
+                        ex=ttl_seconds,
+                    )
+                    pipe.execute()
+                self._mark_success()
+                return updated
+            except WatchError:
+                continue
+            except (RedisError, OSError, TypeError, ValueError) as exc:
+                self._mark_failure("prepend_unique", exc)
+                return None
+        LOGGER.warning("Redis atomic cache update remained contended after retries.")
+        return None
 
     def allow_rate_limit(
         self,

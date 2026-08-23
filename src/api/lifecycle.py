@@ -82,7 +82,6 @@ def _configure_runtime(
 
     application.state.usage_store = active_usage_store
     application.state.check_ollama_readiness = service is None
-    application.state.readiness_cache = None
     application.state.readiness_cache_lock = threading.Lock()
     tenant_mode = service is None and (tenant_registry is not None or API_AUTH_ENABLED)
     application.state.tenant_mode = tenant_mode

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import time
 from datetime import UTC, datetime
 from typing import Any
 
@@ -10,28 +9,12 @@ import requests
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 
-from core.settings import (
-    API_READINESS_CACHE_SECONDS,
-    EMBED_MODEL,
-    OLLAMA_BASE_URL,
-)
+from core.settings import EMBED_MODEL, OLLAMA_BASE_URL
 
 
 def readiness_response(application: FastAPI) -> JSONResponse:
-    """Return the private readiness result without exposing component details."""
-    now = time.monotonic()
+    """Return a fresh readiness result without exposing component details."""
     with application.state.readiness_cache_lock:
-        cached = application.state.readiness_cache
-        if (
-            cached is not None
-            and API_READINESS_CACHE_SECONDS > 0
-            and now - cached["created_monotonic"] < API_READINESS_CACHE_SECONDS
-        ):
-            return JSONResponse(
-                {**cached["payload"], "cached": True},
-                status_code=cached["status_code"],
-            )
-
         tenant_mode = bool(application.state.tenant_mode)
         registry = getattr(application.state, "tenant_registry", None)
         checks: dict[str, Any] = {}
@@ -59,16 +42,13 @@ def readiness_response(application: FastAPI) -> JSONResponse:
                 len(registry.profiles) if registry is not None else 1
             ),
             "checked_at_utc": datetime.now(UTC).isoformat(),
-            "cache_seconds": API_READINESS_CACHE_SECONDS,
+            # Preserve these response fields for compatibility. Readiness
+            # successes are never cached because routing must stop as soon as
+            # a critical dependency fails.
+            "cache_seconds": 0,
             "cached": False,
         }
         status_code = 200 if ready_now else 503
-        if ready_now and API_READINESS_CACHE_SECONDS > 0:
-            application.state.readiness_cache = {
-                "created_monotonic": now,
-                "status_code": status_code,
-                "payload": payload,
-            }
         return JSONResponse(payload, status_code=status_code)
 
 

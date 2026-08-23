@@ -126,6 +126,14 @@ class GainrCompatibilityService:
                 value,
                 ttl_seconds,
             )
+        self._set_memory_cached(key, value, ttl_seconds)
+
+    def _set_memory_cached(
+        self,
+        key: str,
+        value: dict[str, Any],
+        ttl_seconds: int,
+    ) -> None:
         with self._lock:
             self._memory_cache[key] = (
                 time.monotonic() + ttl_seconds,
@@ -769,34 +777,49 @@ class GainrCompatibilityService:
         if not value:
             return
         key = self._cache_key("recent", scope)
-        cached = self._get_cached(key)
-        items = list(cached.get("items", [])) if cached else []
-        items = [
-            item
-            for item in items
-            if str(item.get("value", "")).casefold() != value.casefold()
-        ]
-        item_id = int(time.time() * 1000)
-        existing_ids = {
-            int(item["id"]) for item in items if str(item.get("id", "")).isdigit()
+        ttl_seconds = self.profile.compatibility.recent_ttl_seconds
+        limit = self.profile.compatibility.recent_limit
+        item = {
+            "id": int(time.time() * 1000),
+            "value": value,
+            "is_prosper": int(bool(re.fullmatch(r"[A-Za-z]{2}\d+", value))),
         }
-        while item_id in existing_ids:
-            item_id += 1
-        items.insert(
-            0,
-            {
-                "id": item_id,
-                "value": value,
-                "is_prosper": int(bool(re.fullmatch(r"[A-Za-z]{2}\d+", value))),
-            },
+        atomic_prepend = getattr(
+            self.shared_cache,
+            "prepend_unique_json_item",
+            None,
         )
-        items = items[: self.profile.compatibility.recent_limit]
-        payload = {"items": items}
-        self._set_cached(
-            key,
-            payload,
-            self.profile.compatibility.recent_ttl_seconds,
-        )
+        if callable(atomic_prepend):
+            payload = atomic_prepend(
+                "gainr_compat",
+                key,
+                item,
+                ttl_seconds,
+                limit,
+            )
+            if payload is not None:
+                self._set_memory_cached(key, payload, ttl_seconds)
+                return
+
+        # The read-modify-write must be one critical section when Redis is
+        # disabled or unavailable, otherwise concurrent requests lose entries.
+        with self._lock:
+            cached = self._get_cached(key)
+            items = list(cached.get("items", [])) if cached else []
+            items = [
+                existing
+                for existing in items
+                if str(existing.get("value", "")).casefold() != value.casefold()
+            ]
+            existing_ids = {
+                int(existing["id"])
+                for existing in items
+                if str(existing.get("id", "")).isdigit()
+            }
+            while int(item["id"]) in existing_ids:
+                item["id"] = int(item["id"]) + 1
+            payload = {"items": [item, *items][:limit]}
+            self._set_cached(key, payload, ttl_seconds)
 
     def recent_searches(self, user_id: str | None) -> dict[str, Any]:
         scope = self._recent_scope(user_id)

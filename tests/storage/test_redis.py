@@ -4,6 +4,34 @@ from storage import redis as redis_cache
 from storage.redis import RedisJsonCache
 
 
+class FakePipeline:
+    def __init__(self, client):
+        self.client = client
+        self.pending = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+    def watch(self, _key):
+        return None
+
+    def get(self, key):
+        return self.client.get(key)
+
+    def multi(self):
+        return None
+
+    def set(self, key, value, ex):
+        self.pending = (key, value, ex)
+
+    def execute(self):
+        assert self.pending is not None
+        self.client.set(*self.pending)
+
+
 class FakeRedisClient:
     def __init__(self):
         self.values = {}
@@ -21,6 +49,9 @@ class FakeRedisClient:
 
     def close(self):
         self.closed = True
+
+    def pipeline(self):
+        return FakePipeline(self)
 
     def eval(self, script, number_of_keys, *args):
         self.eval_call = (script, number_of_keys, args)
@@ -43,6 +74,43 @@ def test_redis_json_cache_round_trip(monkeypatch):
 
     cache.close()
     assert client.closed is True
+
+
+def test_redis_json_cache_atomically_prepends_unique_items(monkeypatch):
+    client = FakeRedisClient()
+    monkeypatch.setattr(
+        redis_cache.redis.Redis,
+        "from_url",
+        lambda *_args, **_kwargs: client,
+    )
+    cache = RedisJsonCache("redis://localhost:6379/0", "test")
+
+    first = cache.prepend_unique_json_item(
+        "recent",
+        "user",
+        {"id": 100, "value": "bike"},
+        30,
+        10,
+    )
+    second = cache.prepend_unique_json_item(
+        "recent",
+        "user",
+        {"id": 100, "value": "camera"},
+        30,
+        10,
+    )
+    repeated = cache.prepend_unique_json_item(
+        "recent",
+        "user",
+        {"id": 100, "value": "BIKE"},
+        30,
+        10,
+    )
+
+    assert first == {"items": [{"id": 100, "value": "bike"}]}
+    assert [item["value"] for item in second["items"]] == ["camera", "bike"]
+    assert [item["value"] for item in repeated["items"]] == ["BIKE", "camera"]
+    assert len({item["id"] for item in repeated["items"]}) == 2
 
 
 def test_redis_failure_enters_cooldown_instead_of_raising(monkeypatch):

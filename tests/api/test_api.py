@@ -240,6 +240,58 @@ def test_tenant_pool_hot_promotes_generation_without_closing_active_service(
     assert new.closed is True
 
 
+def test_tenant_pool_eviction_waits_for_grace_and_active_searches(
+    tmp_path,
+    monkeypatch,
+):
+    profiles = {
+        company_id: tenant_profile(tmp_path, company_id)
+        for company_id in ("alpha", "beta")
+    }
+    registry = TenantRegistry(
+        profiles,
+        api_keys={"alpha": ["alpha-key"], "beta": ["beta-key"]},
+    )
+    pool = TenantServicePool(registry, max_services=1)
+    now = [100.0]
+
+    class EvictedService:
+        def __init__(self, company_id):
+            self.company_id = company_id
+            self.active = 0
+            self.closed = False
+
+        def monitor_status(self):
+            return {"active": self.active}
+
+        def close(self):
+            self.closed = True
+
+    services = {}
+
+    def build(profile, **_kwargs):
+        service = EvictedService(profile.company_id)
+        services[profile.company_id] = service
+        return service
+
+    monkeypatch.setattr("api.tenants.time.monotonic", lambda: now[0])
+    monkeypatch.setattr(pool, "_build_service", build)
+
+    alpha = pool.get("alpha")
+    pool.get("beta")
+    assert alpha.closed is False
+
+    now[0] += 301
+    alpha.active = 1
+    pool.get("beta")
+    assert alpha.closed is False
+
+    alpha.active = 0
+    pool.get("beta")
+    assert alpha.closed is True
+    pool.close()
+
+
 def test_candidate_build_does_not_block_requests_on_active_generation(
     tmp_path,
     monkeypatch,
@@ -461,9 +513,10 @@ def test_http_contract_and_validation():
 
     assert ready.status_code == 200
     assert ready.json()["cached"] is False
+    assert ready.json()["cache_seconds"] == 0
     assert cached_ready.status_code == 200
-    assert cached_ready.json()["cached"] is True
-    assert cached_ready.json()["checked_at_utc"] == ready.json()["checked_at_utc"]
+    assert cached_ready.json()["cached"] is False
+    assert cached_ready.json()["cache_seconds"] == 0
     assert set(ready.json()) == {
         "status",
         "tenant_mode",
@@ -514,6 +567,29 @@ def test_readiness_fails_when_a_critical_index_is_empty():
     assert "checks" not in response.json()
     assert recovered.status_code == 200
     assert recovered.json()["cached"] is False
+
+
+def test_readiness_rechecks_dependencies_after_a_success():
+    class MutableCollection:
+        indexed_products = 12
+
+        def count(self):
+            return self.indexed_products
+
+    engine = FakeEngine()
+    collection = MutableCollection()
+    engine.collection = collection
+    service = ProductSearchService(engine, max_results=20)
+
+    with TestClient(create_app(service=service)) as client:
+        ready = client.get("/api/v1/ready")
+        collection.indexed_products = 0
+        failed = client.get("/api/v1/ready")
+
+    assert ready.status_code == 200
+    assert failed.status_code == 503
+    assert failed.json()["status"] == "not_ready"
+    assert failed.json()["cached"] is False
 
 
 def test_repeated_query_result_cache_is_reported_by_api():

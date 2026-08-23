@@ -441,9 +441,8 @@ jq . /tmp/semantic-search-ready.json
 ```
 
 The container health check uses the cheap `/api/v1/live` endpoint every five
-minutes. `/api/v1/ready` performs deeper tenant dependency checks and caches
-successful results for `API_READINESS_CACHE_SECONDS` (300 seconds by default);
-failed results are immediately rechecked on the next request.
+minutes. `/api/v1/ready` performs fresh tenant dependency checks on every
+request so a critical failure immediately stops traffic routing.
 
 Run the infrastructure doctor:
 

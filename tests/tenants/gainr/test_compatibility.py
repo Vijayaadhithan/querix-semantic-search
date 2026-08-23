@@ -1213,6 +1213,39 @@ def test_recent_searches_are_isolated_by_user(tmp_path):
     assert adapter.recent_searches(None)["data"] == []
 
 
+def test_concurrent_recent_search_updates_do_not_lose_entries(tmp_path, monkeypatch):
+    adapter, _, _ = service(tmp_path)
+    original_get = adapter._get_cached
+    active_gets = 0
+    max_active_gets = 0
+    counter_lock = threading.Lock()
+
+    def slow_get(key):
+        nonlocal active_gets, max_active_gets
+        with counter_lock:
+            active_gets += 1
+            max_active_gets = max(max_active_gets, active_gets)
+        time.sleep(0.01)
+        try:
+            return original_get(key)
+        finally:
+            with counter_lock:
+                active_gets -= 1
+
+    monkeypatch.setattr(adapter, "_get_cached", slow_get)
+    values = [f"query-{number}" for number in range(8)]
+
+    with ThreadPoolExecutor(max_workers=len(values)) as executor:
+        list(
+            executor.map(lambda value: adapter.remember_search("user-a", value), values)
+        )
+
+    recent = adapter.recent_searches("user-a")["data"]
+    assert max_active_gets == 1
+    assert {item["value"] for item in recent} == set(values)
+    assert len({item["id"] for item in recent}) == len(values)
+
+
 def test_recent_search_response_matches_gainr_contract(tmp_path, monkeypatch):
     adapter, _, _ = service(tmp_path)
     monkeypatch.setattr("tenants.gainr.compatibility.time.time", lambda: 3951.953)

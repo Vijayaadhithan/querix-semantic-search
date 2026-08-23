@@ -41,11 +41,10 @@ Public serving-path readiness:
 GET /api/v1/ready
 ```
 
-Successful deep readiness results are cached for five minutes by default to
-avoid repeatedly querying pgvector, the source database, and Ollama when an
-external monitor polls frequently. `cached` in the response indicates whether
-the aggregate result was reused. Failed readiness results are never cached.
-For a cheap process-only liveness probe, use `GET /api/v1/live`.
+Deep readiness is evaluated on every request so a critical dependency failure
+immediately stops traffic routing. The compatibility fields report `cached` as
+false and `cache_seconds` as zero. For a cheap process-only liveness probe, use
+`GET /api/v1/live`.
 
 This endpoint returns `200` only when the configured tenant indexes, source
 database, and Ollama embedding model are available. It returns `503` when a

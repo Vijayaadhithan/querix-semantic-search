@@ -114,8 +114,7 @@ api:
   search_slot_timeout_seconds: 5
   # Use debug for library-level diagnostics; info shows the search flow.
   log_level: info
-  # Avoid repeating deep dependency checks for frequent external probes.
-  readiness_cache_seconds: 300
+  # Readiness is evaluated live; use /api/v1/live for cheap process probes.
   # Sanitized, in-memory entries retained for the admin log polling endpoint.
   admin_log_buffer_size: 1000
   # Validate and share the hosted provider chain when the API starts.

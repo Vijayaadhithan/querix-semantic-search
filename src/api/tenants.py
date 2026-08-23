@@ -30,6 +30,7 @@ from storage.vector import get_tenant_vector_collection
 from tenants.compatibility import build_compatibility_adapter
 
 LOGGER = logging.getLogger("uvicorn.error")
+SERVICE_RETIRE_GRACE_SECONDS = 300.0
 
 
 def _api_dependency(name: str, default):
@@ -170,9 +171,9 @@ class TenantServicePool:
         return results
 
     def get(self, company_id: str) -> ProductSearchService:
-        retired: list[ProductSearchService] = []
+        closable: list[ProductSearchService] = []
         with self._lock:
-            retired = self._collect_retired_locked()
+            closable = self._collect_retired_locked()
             existing = self._services.get(company_id)
             if existing is not None:
                 self._services.move_to_end(company_id)
@@ -187,10 +188,19 @@ class TenantServicePool:
                 self._services[company_id] = service
                 while len(self._services) > self.max_services:
                     _evicted_id, evicted = self._services.popitem(last=False)
-                    retired.append(evicted)
-        for item in retired:
+                    self._retire_locked(evicted)
+        for item in closable:
             item.close()
         return service
+
+    def _retire_locked(self, service: ProductSearchService) -> None:
+        # ``get`` returns before the request increments the service's active
+        # counter. Retiring through the same grace path used by generation
+        # swaps prevents another tenant's cache miss from closing that service
+        # in this hand-off window or while a long search is still running.
+        self._retired_services.append(
+            (time.monotonic() + SERVICE_RETIRE_GRACE_SECONDS, service)
+        )
 
     def _collect_retired_locked(self) -> list[ProductSearchService]:
         now = time.monotonic()
@@ -243,7 +253,7 @@ class TenantServicePool:
                     # A request can obtain the previous service immediately
                     # before the swap and increment its active counter just
                     # afterwards. A grace period avoids closing that lease.
-                    self._retired_services.append((time.monotonic() + 300.0, previous))
+                    self._retire_locked(previous)
             return {
                 "status": "reloaded",
                 "company_id": company_id,
@@ -301,7 +311,7 @@ class TenantServicePool:
                 self._services[company_id] = candidate
                 self._services.move_to_end(company_id)
                 if previous is not None:
-                    self._retired_services.append((time.monotonic() + 300.0, previous))
+                    self._retire_locked(previous)
             return {
                 "status": "promoted",
                 "company_id": company_id,
@@ -350,7 +360,7 @@ class TenantServicePool:
                 self._services[company_id] = replacement
                 self._services.move_to_end(company_id)
                 if current is not None:
-                    self._retired_services.append((time.monotonic() + 300.0, current))
+                    self._retire_locked(current)
             return {
                 "status": "rolled_back",
                 "company_id": company_id,
