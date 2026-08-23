@@ -274,6 +274,7 @@ analytics:
         - q95_unmet_demand_by_city_category
         - q96_demand_supply_gap
         - q97_ad_type_demand
+        - q98_demand_classification_coverage
         - q3_trending_terms
         - q10_language
         - q11_typos
