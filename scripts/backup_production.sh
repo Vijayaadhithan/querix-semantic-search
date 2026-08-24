@@ -47,33 +47,6 @@ docker compose exec -T pgvector sh -c \
 docker compose exec -T pgvector pg_restore --list \
   < "$work_dir/pgvector.dump" >/dev/null
 
-# The company source database is dumped through the analytics container, which
-# already owns the tenant-scoped read-only MySQL connection settings. The dump
-# uses a consistent transaction and never locks or writes source tables.
-docker compose exec -T analytics-api sh -eu -c '
-  dump_tool="$(command -v mariadb-dump || command -v mysqldump)"
-  : "${MYSQL_HOST:?MYSQL_HOST is required}"
-  : "${MYSQL_DATABASE:?MYSQL_DATABASE is required}"
-  : "${MYSQL_USER:?MYSQL_USER is required}"
-  : "${MYSQL_PASSWORD:?MYSQL_PASSWORD is required}"
-  export MYSQL_PWD="$MYSQL_PASSWORD"
-  exec "$dump_tool" \
-    --host="$MYSQL_HOST" \
-    --port="${MYSQL_PORT:-3306}" \
-    --user="$MYSQL_USER" \
-    --single-transaction \
-    --quick \
-    --skip-lock-tables \
-    --no-tablespaces \
-    --hex-blob \
-    --default-character-set=utf8mb4 \
-    "$MYSQL_DATABASE"
-' > "$work_dir/company-mysql.sql"
-if [[ ! -s "$work_dir/company-mysql.sql" ]]; then
-  echo "Company MySQL dump is empty" >&2
-  exit 1
-fi
-
 sqlite_root="$work_dir/sqlite"
 mkdir -p "$sqlite_root"
 while IFS= read -r -d '' source_path; do
@@ -111,7 +84,7 @@ done < <(
 tar -C "$sqlite_root" -czf "$work_dir/storage-sqlite.tar.gz" storage
 (
   cd "$work_dir"
-  sha256sum company-mysql.sql pgvector.dump storage-sqlite.tar.gz > SHA256SUMS
+  sha256sum pgvector.dump storage-sqlite.tar.gz > SHA256SUMS
 )
 
 chmod -R go-rwx "$work_dir"

@@ -576,7 +576,7 @@ completed snapshot.
 
 `scripts/backup_production.sh` backs up every SQLite database below
 `storage/` through SQLite's online backup API, the pgvector database through
-`pg_dump`, and the company MySQL source through a read-only consistent dump.
-The MySQL dump uses `--single-transaction`, `--quick`, and
-`--skip-lock-tables`; it reads company tables but never modifies them. The
-completed backup includes checksums for all three database artifacts.
+`pg_dump`, and the index-generation control files required to select the active
+search slot after recovery. The company MySQL source remains under company/ETL
+backup ownership and is intentionally excluded from this backend backup. The
+completed backup includes checksums for the pgvector and SQLite artifacts.
