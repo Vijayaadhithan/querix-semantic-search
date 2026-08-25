@@ -387,6 +387,8 @@ def create_app(
         ad_type: str | None,
         diagnostic_code: str | None,
         has_filters: bool | None,
+        sort_by: str,
+        sort_direction: str,
     ) -> dict[str, Any]:
         if not active_store.company_status(company.company_id)["has_snapshot"]:
             raise HTTPException(
@@ -416,6 +418,8 @@ def create_app(
                 ad_type=ad_type,
                 diagnostic_code=diagnostic_code if internal else None,
                 has_filters=has_filters,
+                sort_by=sort_by,
+                sort_direction=sort_direction,
             )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -707,6 +711,10 @@ def create_app(
             default="all",
             pattern="^(24h|7d|30d|90d|all|custom)$",
         ),
+        request_scope: str = Query(
+            default="all",
+            pattern="^(all|text_search|browse)$",
+        ),
         outcome: str | None = Query(
             default=None,
             pattern="^(fulfilled|zero_result|failure|telemetry_missing)$",
@@ -736,6 +744,7 @@ def create_app(
             internal=True,
             filters=DashboardFilters(
                 period=period,
+                request_scope=request_scope,
                 created_from=created_from,
                 created_to=created_to,
                 outcome=outcome,
@@ -763,6 +772,11 @@ def create_app(
             le=active_settings.query_max_page_size,
         ),
         cursor: str | None = Query(default=None, max_length=1024),
+        sort_by: str = Query(
+            default="created_at",
+            pattern="^(created_at|results|outcome|execution_path|duration|tokens)$",
+        ),
+        sort_direction: str = Query(default="desc", pattern="^(asc|desc)$"),
         query: str | None = Query(default=None, max_length=1000),
         outcome: str | None = Query(
             default=None,
@@ -812,6 +826,8 @@ def create_app(
             ad_type=ad_type,
             diagnostic_code=diagnostic_code,
             has_filters=has_filters,
+            sort_by=sort_by,
+            sort_direction=sort_direction,
         )
 
     @application.get(
@@ -824,6 +840,10 @@ def create_app(
         period: str = Query(
             default="all",
             pattern="^(24h|7d|30d|90d|all|custom)$",
+        ),
+        request_scope: str = Query(
+            default="all",
+            pattern="^(all|text_search|browse)$",
         ),
         outcome: str | None = Query(
             default=None,
@@ -854,6 +874,7 @@ def create_app(
                 internal=False,
                 filters=DashboardFilters(
                     period=period,
+                    request_scope=request_scope,
                     created_from=created_from,
                     created_to=created_to,
                     outcome=outcome,
@@ -879,6 +900,11 @@ def create_app(
             le=active_settings.query_max_page_size,
         ),
         cursor: str | None = Query(default=None, max_length=1024),
+        sort_by: str = Query(
+            default="created_at",
+            pattern="^(created_at|results|outcome)$",
+        ),
+        sort_direction: str = Query(default="desc", pattern="^(asc|desc)$"),
         query: str | None = Query(default=None, max_length=1000),
         outcome: str | None = Query(
             default=None,
@@ -929,6 +955,8 @@ def create_app(
                 ad_type=ad_type,
                 diagnostic_code=None,
                 has_filters=has_filters,
+                sort_by=sort_by,
+                sort_direction=sort_direction,
             )
         )
 

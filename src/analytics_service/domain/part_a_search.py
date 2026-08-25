@@ -273,6 +273,11 @@ def process_part_a(data):
         "labels": list(lang_counts.keys()),
         "values": list(lang_counts.values()),
         "title": "Search Language Distribution",
+        "note": (
+            "Likely Tamil (Latin script) means Tamil words typed with English "
+            "letters. It is a cautious text-pattern estimate, not a confirmed "
+            "language identity."
+        ),
         "chart_type": "doughnut",
     }
 

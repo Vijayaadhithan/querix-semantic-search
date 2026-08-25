@@ -514,7 +514,7 @@ def test_daily_refresh_publishes_both_audiences_and_queries(tmp_path):
     assert "search_intelligence" not in internal_dashboard
     assert "deep_analytics" not in internal_dashboard
     assert "market_intelligence" not in internal_dashboard
-    assert company_dashboard["metadata"]["schema_version"] == "3.1"
+    assert company_dashboard["metadata"]["schema_version"] == "3.2"
     assert company_dashboard["business_overview"] == {
         "scope": "Latest completed company snapshot",
         "total_users": 2,
@@ -558,6 +558,50 @@ def test_daily_refresh_publishes_both_audiences_and_queries(tmp_path):
         second_page["items"][0]["request_id"]
         != (company_queries["items"][0]["request_id"])
     )
+
+    result_sorted = store.query_records(
+        "gainr",
+        internal=False,
+        limit=1,
+        sort_by="results",
+        sort_direction="desc",
+    )
+    result_sorted_second_page = store.query_records(
+        "gainr",
+        internal=False,
+        limit=1,
+        cursor=result_sorted["next_cursor"],
+        sort_by="results",
+        sort_direction="desc",
+    )
+    assert result_sorted["sorting"] == {
+        "sort_by": "results",
+        "sort_direction": "desc",
+    }
+    assert (
+        result_sorted["items"][0]["search"]["result_count"]
+        >= result_sorted_second_page["items"][0]["search"]["result_count"]
+    )
+    assert (
+        result_sorted["items"][0]["request_id"]
+        != result_sorted_second_page["items"][0]["request_id"]
+    )
+    with pytest.raises(ValueError, match="cursor does not match sorting"):
+        store.query_records(
+            "gainr",
+            internal=False,
+            limit=1,
+            cursor=result_sorted["next_cursor"],
+            sort_by="outcome",
+            sort_direction="asc",
+        )
+    with pytest.raises(ValueError, match="sort field"):
+        store.query_records(
+            "gainr",
+            internal=False,
+            limit=10,
+            sort_by="duration",
+        )
 
     internal_queries = store.query_records(
         "gainr",

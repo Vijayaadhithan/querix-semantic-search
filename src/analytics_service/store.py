@@ -57,6 +57,63 @@ def decode_query_cursor(cursor: str) -> tuple[str, str]:
         raise ValueError("Invalid analytics query cursor") from exc
 
 
+def encode_query_sort_cursor(sort_by: str, sort_direction: str, offset: int) -> str:
+    payload = json_dumps(
+        {
+            "v": 2,
+            "sort_by": sort_by,
+            "sort_direction": sort_direction,
+            "offset": offset,
+        }
+    ).encode()
+    return base64.urlsafe_b64encode(payload).decode().rstrip("=")
+
+
+def decode_query_sort_cursor(cursor: str) -> tuple[str, str, int]:
+    try:
+        padding = "=" * (-len(cursor) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(cursor + padding).decode())
+        if payload.get("v") != 2:
+            raise ValueError("Unsupported cursor version")
+        sort_by = str(payload["sort_by"])
+        sort_direction = str(payload["sort_direction"])
+        offset = int(payload["offset"])
+        if not sort_by or sort_direction not in {"asc", "desc"} or offset < 0:
+            raise ValueError("Incomplete cursor")
+        return sort_by, sort_direction, offset
+    except Exception as exc:
+        raise ValueError("Invalid analytics query cursor") from exc
+
+
+def _query_sort_expression(sort_by: str, *, internal: bool) -> str:
+    common = {
+        "created_at": "records.created_at",
+        "outcome": "records.outcome",
+        "results": (
+            "json_extract(records.internal_json, '$.api.result_count')"
+            if internal
+            else "json_extract(records.company_json, '$.search.result_count')"
+        ),
+    }
+    internal_only = {
+        "execution_path": (
+            "NULLIF(json_extract(records.internal_json, "
+            "'$.performance.execution_path'), '')"
+        ),
+        "duration": (
+            "json_extract(records.internal_json, "
+            "'$.performance.total_server_duration_ms')"
+        ),
+        "tokens": "json_extract(records.internal_json, '$.token_usage.total_tokens')",
+    }
+    expressions = {**common, **(internal_only if internal else {})}
+    try:
+        return expressions[sort_by]
+    except KeyError as exc:
+        allowed = ", ".join(expressions)
+        raise ValueError(f"Query sort field must be one of: {allowed}") from exc
+
+
 class AnalyticsSnapshotStore:
     def __init__(self, path: str | Path):
         self.path = Path(path)
@@ -496,8 +553,19 @@ class AnalyticsSnapshotStore:
         ad_type: str | None = None,
         diagnostic_code: str | None = None,
         has_filters: bool | None = None,
+        sort_by: str = "created_at",
+        sort_direction: str = "desc",
     ) -> dict[str, Any]:
         field = "internal_json" if internal else "company_json"
+        normalized_sort = str(sort_by or "created_at").strip().casefold()
+        normalized_direction = str(sort_direction or "desc").strip().casefold()
+        if normalized_direction not in {"asc", "desc"}:
+            raise ValueError("Query sort direction must be asc or desc")
+        sort_expression = _query_sort_expression(normalized_sort, internal=internal)
+        uses_default_cursor = (
+            normalized_sort == "created_at" and normalized_direction == "desc"
+        )
+        offset = 0
         clauses = [
             "records.company_id = ?",
             "records.snapshot_version = snapshots.active_version",
@@ -515,7 +583,7 @@ class AnalyticsSnapshotStore:
                 "OR records.outcome = 'failure'"
                 ")"
             )
-        if cursor:
+        if cursor and uses_default_cursor:
             cursor_created, cursor_request = decode_query_cursor(cursor)
             clauses.append(
                 """
@@ -529,6 +597,13 @@ class AnalyticsSnapshotStore:
                 """
             )
             values.extend([cursor_created, cursor_created, cursor_request])
+        elif cursor:
+            cursor_sort, cursor_direction, offset = decode_query_sort_cursor(cursor)
+            if (cursor_sort, cursor_direction) != (
+                normalized_sort,
+                normalized_direction,
+            ):
+                raise ValueError("Analytics query cursor does not match sorting")
         if query:
             clauses.append("LOWER(records.query_text) LIKE ? ESCAPE '\\'")
             escaped = (
@@ -579,7 +654,18 @@ class AnalyticsSnapshotStore:
         if created_to:
             clauses.append("records.created_at <= ?")
             values.append(created_to)
+        order_clause = (
+            "records.created_at DESC, records.request_id DESC"
+            if uses_default_cursor
+            else (
+                f"({sort_expression} IS NULL) ASC, "
+                f"{sort_expression} {normalized_direction.upper()}, "
+                "records.created_at DESC, records.request_id DESC"
+            )
+        )
         values.append(limit + 1)
+        if not uses_default_cursor:
+            values.append(offset)
         with self._connection() as connection:
             rows = connection.execute(
                 f"""
@@ -591,27 +677,38 @@ class AnalyticsSnapshotStore:
                 INNER JOIN analytics_snapshots AS snapshots
                     ON snapshots.company_id = records.company_id
                 WHERE {" AND ".join(clauses)}
-                ORDER BY records.created_at DESC, records.request_id DESC
+                ORDER BY {order_clause}
                 LIMIT ?
+                {"OFFSET ?" if not uses_default_cursor else ""}
                 """,
                 tuple(values),
             ).fetchall()
         has_more = len(rows) > limit
         visible = rows[:limit]
-        next_cursor = (
-            encode_query_cursor(
-                visible[-1]["created_at"],
-                visible[-1]["request_id"],
+        next_cursor = None
+        if has_more and visible:
+            next_cursor = (
+                encode_query_cursor(
+                    visible[-1]["created_at"],
+                    visible[-1]["request_id"],
+                )
+                if uses_default_cursor
+                else encode_query_sort_cursor(
+                    normalized_sort,
+                    normalized_direction,
+                    offset + len(visible),
+                )
             )
-            if has_more and visible
-            else None
-        )
         return {
             "company_id": company_id,
             "items": [json.loads(row["payload_json"]) for row in visible],
             "returned": len(visible),
             "has_more": has_more,
             "next_cursor": next_cursor,
+            "sorting": {
+                "sort_by": normalized_sort,
+                "sort_direction": normalized_direction,
+            },
             "facets": self.query_facets(company_id, internal=internal),
         }
 

@@ -6,6 +6,7 @@ from analytics_service.dashboard_filters import (
     DashboardFilters,
     build_dashboard_overview,
 )
+from analytics_service.domain.search.classification import detect_language
 
 
 def _record(
@@ -102,6 +103,50 @@ def test_company_overview_separates_text_searches_from_catalogue_browsing():
     assert series["Catalogue/filter browse"] == [1]
 
 
+@pytest.mark.parametrize(
+    ("request_scope", "searches", "browse_requests"),
+    (("text_search", 1, 0), ("browse", 0, 1)),
+)
+def test_dashboard_request_scope_selects_text_or_browse_activity(
+    request_scope,
+    searches,
+    browse_requests,
+):
+    records = [
+        _record("text", "2026-08-07T10:00:00+00:00"),
+        _record(
+            "browse",
+            "2026-08-07T10:01:00+00:00",
+            request_kind="catalogue_browse",
+        ),
+    ]
+
+    payload = build_dashboard_overview(
+        records,
+        internal=False,
+        filters=DashboardFilters(request_scope=request_scope),
+        timezone_name="UTC",
+    )
+
+    assert payload["filtering"]["applied"]["request_scope"] == request_scope
+    assert payload["filtering"]["matched_records"] == 1
+    assert payload["filtered_overview"]["summary"]["searches"] == searches
+    assert (
+        payload["filtered_overview"]["summary"]["browse_requests"]
+        == browse_requests
+    )
+
+
+def test_dashboard_rejects_unknown_request_scope():
+    with pytest.raises(ValueError, match="request scope"):
+        build_dashboard_overview(
+            [],
+            internal=False,
+            filters=DashboardFilters(request_scope="unknown"),
+            timezone_name="UTC",
+        )
+
+
 def test_internal_dashboard_splits_llm_and_reranker_tokens():
     records = [
         _record(
@@ -149,3 +194,8 @@ def test_custom_period_requires_boundary():
             filters=DashboardFilters(period="custom"),
             timezone_name="UTC",
         )
+
+
+def test_language_detection_uses_cautious_latin_tamil_label():
+    assert detect_language("enakku bike venum") == "Likely Tamil (Latin script)"
+    assert detect_language("house in anna nagar") == "English"

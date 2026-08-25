@@ -259,6 +259,7 @@ Dashboard activity filters:
 
 ```text
 period (24h, 7d, 30d, 90d, all, or custom)
+request_scope (all, text_search, or browse)
 from / to (custom period boundaries)
 outcome
 category
@@ -272,7 +273,9 @@ operation (internal dashboard only)
 ```
 
 Dashboard filters apply to the `filtered_overview` search/API activity data,
-including its main time-series graph. Catalogue, user, supply, and market
+including its main time-series graph. `request_scope` makes the difference
+between typed text searches and catalogue/filter browsing explicit. Catalogue,
+user, supply, and market
 questions are snapshot metrics and are intentionally not rewritten by a
 search time filter. Graph buckets and naive custom boundaries use the tenant's
 configured `analytics.timezone` (for example, `Asia/Kolkata`). City and city ID
@@ -291,14 +294,29 @@ Individual-query filters:
 ```text
 limit
 cursor
+sort_by (`created_at`, `results`, or `outcome`; internal also supports
+`execution_path`, `duration`, and `tokens`)
+sort_direction (`asc` or `desc`)
 query
 outcome
 category
 execution_path (internal endpoint only)
 language
+request_kind
+city_id
+subcategory_id
+ad_type
+diagnostic_code (internal endpoint only)
+has_filters
+include_filtered_results
 from
 to
 ```
+
+Sorting is performed by the service before pagination, so “highest results” or
+“slowest duration” applies to the complete filtered result set rather than only
+the rows already loaded in the browser. A cursor is valid only for the sort
+field and direction that created it.
 
 The query endpoint uses a stable descending `(created_at, request_id)` cursor.
 It never uses offset pagination.

@@ -11,6 +11,7 @@ from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 PERIOD_OPTIONS = ("24h", "7d", "30d", "90d", "all", "custom")
+REQUEST_SCOPE_OPTIONS = ("all", "text_search", "browse")
 _PERIOD_DELTAS = {
     "24h": timedelta(hours=24),
     "7d": timedelta(days=7),
@@ -23,6 +24,7 @@ _SUCCESS_STATUSES = {"success", "successful", "ok", "cache_hit"}
 @dataclass(frozen=True, slots=True)
 class DashboardFilters:
     period: str = "all"
+    request_scope: str = "all"
     created_from: datetime | None = None
     created_to: datetime | None = None
     outcome: str | None = None
@@ -142,11 +144,21 @@ def _matches(
     created_from: datetime | None,
     created_to: datetime | None,
     internal: bool,
+    request_scope: str,
 ) -> bool:
     created_at = _record_datetime(record)
     if created_from is not None and (created_at is None or created_at < created_from):
         return False
     if created_to is not None and (created_at is None or created_at > created_to):
+        return False
+
+    request_kind = _record_request_kind(record)
+    if request_scope == "text_search" and request_kind != "text_search":
+        return False
+    if request_scope == "browse" and request_kind not in {
+        "filtered_browse",
+        "catalogue_browse",
+    }:
         return False
 
     for actual, expected in (
@@ -288,13 +300,16 @@ def _filtered_company_insights(records: list[dict[str, Any]]) -> dict[str, Any]:
             "values": [int(value) for _, value in ordered_demand],
         },
         "filtered_unmet_demand": {
-            "title": "Where did filtered demand return no results?",
+            "title": "No-result searches in this selection",
             "chart_type": "table",
             "data": unmet_rows[:40],
-            "note": "Zero-result demand and request failures are reported separately.",
+            "note": (
+                "No-result searches completed normally but found no eligible listing. "
+                "Technical request failures are reported separately."
+            ),
         },
         "filtered_ad_type_demand": {
-            "title": "Offer or wanted demand in this filtered scope",
+            "title": "Listing type customers searched for",
             "chart_type": "table",
             "data": [
                 {
@@ -306,6 +321,10 @@ def _filtered_company_insights(records: list[dict[str, Any]]) -> dict[str, Any]:
                 }
                 for ad_type, counts in sorted(ad_types.items())
             ],
+            "note": (
+                "Offer listings are available products or services. Wanted listings "
+                "are requests from people looking for something."
+            ),
         },
     }
 
@@ -338,6 +357,7 @@ def _available_filters(
                 operations.append(attempt.get("operation"))
     available = {
         "periods": list(PERIOD_OPTIONS),
+        "request_scopes": list(REQUEST_SCOPE_OPTIONS),
         "outcomes": _sorted_values(record.get("outcome") for record in records),
         "categories": _sorted_values(categories),
         "languages": _sorted_values(record.get("language") for record in records),
@@ -722,6 +742,12 @@ def build_dashboard_overview(
     now: datetime | None = None,
 ) -> dict[str, Any]:
     timezone = ZoneInfo(validate_timezone(timezone_name))
+    request_scope = str(filters.request_scope or "all").strip().casefold()
+    if request_scope not in REQUEST_SCOPE_OPTIONS:
+        raise ValueError(
+            "Dashboard request scope must be one of: "
+            + ", ".join(REQUEST_SCOPE_OPTIONS)
+        )
     period, created_from, created_to = _resolve_window(
         filters,
         timezone=timezone,
@@ -736,6 +762,7 @@ def build_dashboard_overview(
             created_from=created_from,
             created_to=created_to,
             internal=internal,
+            request_scope=request_scope,
         )
     ]
     dated_records = [
@@ -759,6 +786,7 @@ def build_dashboard_overview(
         "filtering": {
             "applied": {
                 "period": period,
+                "request_scope": request_scope,
                 "from": created_from.isoformat() if created_from else None,
                 "to": created_to.isoformat() if created_to else None,
                 "timezone": timezone_name,
@@ -780,7 +808,11 @@ def build_dashboard_overview(
             },
             "available": _available_filters(records, internal=internal),
             "scope": {
-                "filtered_overview": "search_and_api_activity_records",
+                "filtered_overview": (
+                    "All search activity includes text searches and structured "
+                    "catalogue/filter browsing. Select a narrower search scope to "
+                    "compare them consistently."
+                ),
                 "snapshot_modules": (
                     "Current catalogue, user, supply, and market questions are "
                     "snapshot metrics and are not rewritten by activity filters."

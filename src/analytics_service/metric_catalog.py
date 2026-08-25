@@ -93,7 +93,14 @@ _QUESTIONS = {
     "q82_engagement": "Which listings receive the strongest engagement?",
     "q83_activation": "How quickly do users create their first listing?",
     "q84_seller_concentration": "How concentrated is supply among sellers?",
-    "q98_demand_classification_coverage": "How much demand has a reliable category?",
+    "q89_category_fulfillment": (
+        "Which categories have the most no-result text searches?"
+    ),
+    "q95_unmet_demand_by_city_category": (
+        "Where do completed searches find no listings?"
+    ),
+    "q97_ad_type_demand": "Which listing type are customers searching for?",
+    "q98_demand_classification_coverage": "How many searches match a known category?",
 }
 
 _SOURCES = {

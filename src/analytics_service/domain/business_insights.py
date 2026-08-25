@@ -214,10 +214,12 @@ def build_company_business_insights(
         },
         "q95_unmet_demand_by_city_category": {
             "data": unmet_rows[:40],
-            "title": "Where are customers not finding results?",
+            "title": "No-result searches by city and category",
             "note": (
-                "Zero-result demand and failed requests are separate rates. City means "
-                "the structured city filter selected by the client."
+                "No-result searches completed normally but found no eligible listing. "
+                "Technical request failures are shown separately and are not counted "
+                "as unmet marketplace demand. City is the filter selected by the "
+                "client."
             ),
             "chart_type": "table",
         },
@@ -236,12 +238,17 @@ def build_company_business_insights(
         },
         "q97_ad_type_demand": {
             "data": ad_type_rows,
-            "title": "Are customers looking for offers or wanted listings?",
+            "title": "Listing type customers searched for",
+            "note": (
+                "Offer listings are products or services currently available. Wanted "
+                "listings are requests from people looking for something."
+            ),
             "chart_type": "table",
         },
         "q98_demand_classification_coverage": {
-            "title": "How much recorded demand has a reliable category?",
-            "chart_type": "table",
+            "title": "Searches matched to a known category",
+            "chart_type": "classification_coverage",
+            "total": int(len(demand_records)),
             "classified": int(classified_count),
             "unclassified": int(sum(unclassified_queries.values())),
             "coverage_rate": round(classified_count / len(demand_records) * 100, 1)
@@ -252,8 +259,9 @@ def build_company_business_insights(
                 for query, count in unclassified_queries.most_common(20)
             ],
             "note": (
-                "Structured catalogue filters are authoritative. Historical text is "
-                "left visibly unclassified when no reliable category was captured."
+                "A search is classified when a structured catalogue filter or another "
+                "reliable category was recorded. Unclassified searches are valid "
+                "search texts that need taxonomy, alias, or instrumentation review."
             ),
         },
     }

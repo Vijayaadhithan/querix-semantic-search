@@ -69,21 +69,31 @@ def _category_fulfillment(merged: pd.DataFrame) -> dict[str, Any]:
         rows.append(
             {
                 "category": category,
-                "searches": searches,
-                "zero_results": zero,
-                "zero_result_rate": round(zero / searches * 100, 1) if searches else 0,
+                "completed_searches": searches,
+                "no_result_searches": zero,
+                "no_result_rate": round(zero / searches * 100, 1) if searches else 0,
                 "avg_results": round(sum(result_values) / len(result_values), 1),
                 "avg_latency_ms": round(sum(latency_values) / len(latency_values), 1),
             }
         )
     rows.sort(
-        key=lambda item: (item["zero_result_rate"], item["searches"]), reverse=True
+        key=lambda item: (
+            item["no_result_searches"],
+            item["no_result_rate"],
+            item["completed_searches"],
+        ),
+        reverse=True,
     )
     return {
         "rows": rows,
         "labels": [row["category"] for row in rows],
-        "values": [row["zero_result_rate"] for row in rows],
-        "title": "Fulfillment Gaps by Search Category",
+        "values": [row["no_result_rate"] for row in rows],
+        "title": "Categories with the most no-result text searches",
+        "note": (
+            "Shows completed text searches only. No-result searches found no "
+            "eligible listings; technical request failures are excluded. Categories "
+            "are inferred from query text when no structured category was recorded."
+        ),
         "chart_type": "bar",
     }
 

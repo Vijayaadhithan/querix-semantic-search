@@ -146,20 +146,25 @@ def detect_language(query: Any) -> str:
     if re.search(r"[\u0900-\u097F]", text):
         return "Hindi"
     normalized = normalize_query(text)
-    transliterated_tamil = (
+    # Only use high-signal conversational Tamil terms here. Place-name suffixes
+    # such as "nagar" and "puram" also occur in ordinary English addresses and
+    # previously produced overconfident language labels.
+    latin_tamil_terms = (
+        "enaku",
+        "enakku",
+        "enga",
+        "enge",
+        "iruka",
+        "irukku",
+        "kidaikuma",
+        "pannunga",
+        "venum",
+        "vendaam",
         "vandi",
-        "thurai",
-        "palayam",
-        "nagar",
-        "puram",
-        "kudi",
-        "kottai",
-        "malai",
-        "oor",
-        "pattinam",
+        "veedu",
     )
-    if any(_contains(normalized, word) for word in transliterated_tamil):
-        return "Transliterated Tamil"
+    if any(_contains(normalized, word) for word in latin_tamil_terms):
+        return "Likely Tamil (Latin script)"
     return "English"
 
 
