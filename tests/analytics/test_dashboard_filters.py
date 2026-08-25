@@ -131,10 +131,7 @@ def test_dashboard_request_scope_selects_text_or_browse_activity(
     assert payload["filtering"]["applied"]["request_scope"] == request_scope
     assert payload["filtering"]["matched_records"] == 1
     assert payload["filtered_overview"]["summary"]["searches"] == searches
-    assert (
-        payload["filtered_overview"]["summary"]["browse_requests"]
-        == browse_requests
-    )
+    assert payload["filtered_overview"]["summary"]["browse_requests"] == browse_requests
 
 
 def test_dashboard_rejects_unknown_request_scope():
