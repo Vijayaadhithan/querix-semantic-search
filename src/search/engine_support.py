@@ -23,7 +23,7 @@ from core.settings import (
     VOYAGE_RERANK_LITE_MODEL,
     VOYAGE_RERANK_MODEL,
 )
-from providers.gemini import last_gemini_metrics
+from providers.gemini import last_query_model_metrics
 from providers.ollama import embed_text, last_ollama_embedding_metrics
 from search.helpers import active_filter_names
 from search.planner import (
@@ -558,8 +558,8 @@ class SearchEngineSupportMixin:
         )
         query_metrics = (
             _engine_dependency(
-                "last_gemini_metrics",
-                last_gemini_metrics,
+                "last_query_model_metrics",
+                last_query_model_metrics,
             )()
             if self.query_provider is None
             and self.planner_enabled

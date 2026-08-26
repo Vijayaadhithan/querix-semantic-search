@@ -5,12 +5,12 @@ ollama:
 
 query_extraction:
   # Try the next model only when the current model is rate-limited or
-  # temporarily unavailable.
-  # Prefix Groq model IDs with `groq:`. Groq is the validated low-latency
-  # primary; Gemini Flash Lite handles overflow and temporary Groq failures.
+  # temporarily unavailable. Prefix model IDs with `groq:` or `google:`.
+  # Groq is the low-latency primary; Gemini Flash Lite handles overflow and
+  # temporary Groq failures.
   models:
     - groq:openai/gpt-oss-20b
-    - gemini-3.1-flash-lite
+    - google:gemini-3.1-flash-lite
   # Groq is the low-latency primary. Its 11th request in any rolling minute
   # skips directly to Gemini instead of waiting for an upstream 429.
   groq_requests_per_minute: 10
@@ -20,9 +20,10 @@ query_extraction:
   # reasoning at its lowest supported level to control cost and tail latency.
   max_output_tokens: 384
   gemini_thinking_level: minimal
-  # Per-model deadline. Timeouts advance once from Groq to Gemini; if both
-  # hosted planners are unavailable, planning falls back safely.
+  # Per-provider-attempt timeout. The total deadline bounds the complete
+  # fallback chain, so a slow primary cannot consume the whole search budget.
   timeout_seconds: 3
+  total_timeout_seconds: 5
   deterministic_fast_path: true
   # Skip hosted planning only for short, objective, explicitly catalogued
   # phrases with no location, price, duration, wanted-ad, multilingual, or

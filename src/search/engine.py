@@ -26,7 +26,7 @@ from core.settings import (
     VECTOR_CANDIDATE_K,
     VECTOR_TOP_K,
 )
-from providers.gemini import last_gemini_metrics
+from providers.gemini import last_gemini_metrics, last_query_model_metrics
 from providers.ollama import embed_text, last_ollama_embedding_metrics
 from search.bm25 import PersistentBM25Index
 from search.engine_support import (
@@ -81,6 +81,7 @@ __all__ = (
     "fetch_product_types_by_ids",
     "fetch_products_by_ids",
     "last_gemini_metrics",
+    "last_query_model_metrics",
     "query_analysis",
     "resolve_query_filters",
 )

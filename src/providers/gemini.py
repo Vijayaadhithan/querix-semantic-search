@@ -1,4 +1,6 @@
 import contextlib
+import contextvars
+import json
 import logging
 import threading
 import time
@@ -20,14 +22,20 @@ from core.settings import (
     QUERY_EXTRACT_MAX_OUTPUT_TOKENS,
     QUERY_EXTRACT_MODELS,
     QUERY_EXTRACT_TIMEOUT_SECONDS,
+    QUERY_EXTRACT_TOTAL_TIMEOUT_SECONDS,
     REDIS_ENABLED,
     REDIS_KEY_PREFIX,
     REDIS_URL,
 )
 from storage.redis import RedisJsonCache
 
-FALLBACK_HTTP_STATUSES = {408, 429, 500, 502, 503, 504}
+FALLBACK_HTTP_STATUSES = {404, 408, 429, 500, 502, 503, 504}
 LOGGER = logging.getLogger("uvicorn.error")
+
+_QUERY_DEADLINE: contextvars.ContextVar[float | None] = contextvars.ContextVar(
+    "query_provider_deadline",
+    default=None,
+)
 
 
 def _provider_rate_limit_cache():
@@ -45,22 +53,46 @@ QUERY_MODEL_LIMITERS: dict[str, RequestWindowLimiter] = {}
 QUERY_MODEL_LIMITERS_LOCK = threading.Lock()
 
 
+def query_model_route(model: str) -> tuple[str, str]:
+    """Return the provider and provider-local model ID for a configured model."""
+    normalized = str(model).strip()
+    if normalized.startswith("groq:"):
+        provider, provider_model = "groq", normalized.split(":", 1)[1]
+    elif normalized.startswith("google:"):
+        provider, provider_model = "google", normalized.split(":", 1)[1]
+    elif ":" in normalized:
+        raise ValueError(
+            f"Unsupported query model provider prefix in {normalized!r}. "
+            "Use groq: or google:."
+        )
+    else:
+        # Keep unprefixed Gemini/Gemma IDs backwards-compatible. They are all
+        # Google models and must share Google's request budget.
+        provider, provider_model = "google", normalized
+    if not provider_model:
+        raise ValueError(f"Query model {normalized!r} has no model ID.")
+    return provider, provider_model
+
+
 def query_model_limiter(model: str) -> RequestWindowLimiter | None:
-    if model.startswith("groq:"):
+    provider, _provider_model = query_model_route(model)
+    if provider == "groq":
         requests_per_minute = GROQ_QUERY_RPM
-    elif model.startswith("gemini-"):
+    elif provider == "google":
         requests_per_minute = GEMINI_QUERY_RPM
     else:
         return None
     with QUERY_MODEL_LIMITERS_LOCK:
-        limiter = QUERY_MODEL_LIMITERS.get(model)
+        # Quotas are configured per provider, so every model routed to the
+        # same provider must consume the same local/Redis request budget.
+        limiter = QUERY_MODEL_LIMITERS.get(provider)
         if limiter is None:
             limiter = RequestWindowLimiter(
                 requests_per_minute,
                 redis_cache=QUERY_PROVIDER_RATE_LIMIT_CACHE,
-                scope=f"query:{model}",
+                scope=f"query:{provider}",
             )
-            QUERY_MODEL_LIMITERS[model] = limiter
+            QUERY_MODEL_LIMITERS[provider] = limiter
         return limiter
 
 
@@ -70,7 +102,9 @@ def pooled_http_adapter() -> HTTPAdapter:
         pool_connections=16,
         pool_maxsize=16,
         max_retries=0,
-        pool_block=True,
+        # A provider call has its own deadline. Waiting indefinitely for a
+        # connection would bypass that deadline.
+        pool_block=False,
     )
 
 
@@ -89,21 +123,117 @@ def thread_http_session(
     return session
 
 
-class GeminiModelUnavailableError(RuntimeError):
+class QueryModelUnavailableError(RuntimeError):
     def __init__(
         self,
         model: str,
         status_code: int | None = None,
         reason: str | None = None,
+        provider: str | None = None,
     ):
         self.model = model
+        self.provider = provider
         self.status_code = status_code
         self.reason = reason or (
             f"http_{status_code}" if status_code is not None else "unavailable"
         )
-        super().__init__(
-            f"Query model '{model}' is temporarily unavailable ({self.reason})."
+        super().__init__(f"Query model '{model}' is unavailable ({self.reason}).")
+
+
+# Backwards-compatible name for callers that imported the original exception.
+GeminiModelUnavailableError = QueryModelUnavailableError
+
+
+def _effective_timeout(default_seconds: float, model: str) -> float:
+    deadline = _QUERY_DEADLINE.get()
+    if deadline is None:
+        return default_seconds
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise QueryModelUnavailableError(
+            model,
+            reason="total_deadline",
         )
+    return min(default_seconds, remaining)
+
+
+def _http_status_error(
+    model: str,
+    provider: str,
+    exc: requests.HTTPError,
+) -> QueryModelUnavailableError | RuntimeError:
+    response = exc.response
+    status_code = response.status_code if response is not None else 0
+    if status_code in FALLBACK_HTTP_STATUSES:
+        return QueryModelUnavailableError(
+            model,
+            provider=provider,
+            status_code=status_code,
+        )
+    return RuntimeError(
+        f"Cannot extract a structured query with {provider} model "
+        f"'{model}' (HTTP {status_code})."
+    )
+
+
+def _structured_json_text(
+    text: str,
+    *,
+    model: str,
+    provider: str,
+) -> str:
+    cleaned = strip_json_fence(text)
+    try:
+        parsed = json.loads(cleaned)
+    except (TypeError, ValueError) as exc:
+        raise QueryModelUnavailableError(
+            model,
+            provider=provider,
+            reason="invalid_json",
+        ) from exc
+    if not isinstance(parsed, dict):
+        raise QueryModelUnavailableError(
+            model,
+            provider=provider,
+            reason="invalid_response_shape",
+        )
+    return cleaned
+
+
+def _response_payload(
+    response: requests.Response,
+    *,
+    model: str,
+    provider: str,
+) -> dict:
+    try:
+        payload = response.json()
+    except (requests.RequestException, TypeError, ValueError) as exc:
+        raise QueryModelUnavailableError(
+            model,
+            provider=provider,
+            reason="invalid_response_json",
+        ) from exc
+    if not isinstance(payload, dict):
+        raise QueryModelUnavailableError(
+            model,
+            provider=provider,
+            reason="invalid_response_shape",
+        )
+    return payload
+
+
+def _metric_int(value: object) -> int:
+    with contextlib.suppress(TypeError, ValueError):
+        return int(value or 0)
+    return 0
+
+
+def _timeout_reason() -> str:
+    deadline = _QUERY_DEADLINE.get()
+    if deadline is not None and time.monotonic() >= deadline:
+        return "total_deadline"
+    return "timeout"
 
 
 class GeminiProvider:
@@ -141,17 +271,20 @@ class GeminiProvider:
         schema: dict,
         temperature: float = 0,
     ) -> str:
-        if not self.api_key:
-            raise RuntimeError(
-                "GEMINI_API_KEY is not configured. Add it to the project .env file."
-            )
-
         started = time.perf_counter()
         metrics: dict[str, float | int | str | list] = {
             "load_ms": 0.0,
             "model": model,
+            "provider": "google",
         }
         try:
+            if not self.api_key:
+                raise QueryModelUnavailableError(
+                    model,
+                    provider="google",
+                    reason="missing_api_key",
+                )
+            timeout_seconds = _effective_timeout(self.timeout_seconds, model)
             response = self._post(
                 (f"{self.base_url}/models/{quote(model, safe='.-')}:generateContent"),
                 headers={
@@ -171,58 +304,114 @@ class GeminiProvider:
                     "generationConfig": {
                         "temperature": temperature,
                         "maxOutputTokens": QUERY_EXTRACT_MAX_OUTPUT_TOKENS,
-                        "responseMimeType": "application/json",
-                        "responseJsonSchema": schema,
+                        "responseFormat": {
+                            "text": {
+                                "mimeType": "APPLICATION_JSON",
+                                "schema": schema,
+                            }
+                        },
                         "thinkingConfig": {
                             "thinkingLevel": GEMINI_THINKING_LEVEL,
                         },
                     },
                 },
-                timeout=self.timeout_seconds,
+                timeout=timeout_seconds,
             )
             response.raise_for_status()
-            payload = response.json()
+            payload = _response_payload(
+                response,
+                model=model,
+                provider="google",
+            )
             usage = payload.get("usageMetadata") or {}
+            if not isinstance(usage, dict):
+                usage = {}
             metrics.update(
                 {
-                    "input_tokens": int(usage.get("promptTokenCount", 0) or 0),
-                    "output_tokens": int(usage.get("candidatesTokenCount", 0) or 0),
-                    "thought_tokens": int(usage.get("thoughtsTokenCount", 0) or 0),
-                    "total_tokens": int(usage.get("totalTokenCount", 0) or 0),
+                    "input_tokens": _metric_int(usage.get("promptTokenCount")),
+                    "output_tokens": _metric_int(usage.get("candidatesTokenCount")),
+                    "thought_tokens": _metric_int(usage.get("thoughtsTokenCount")),
+                    "total_tokens": _metric_int(usage.get("totalTokenCount")),
                 }
             )
-            content = payload["candidates"][0]["content"]
+            candidates = payload.get("candidates")
+            if not isinstance(candidates, list) or not candidates:
+                prompt_feedback = payload.get("promptFeedback") or {}
+                block_reason = (
+                    prompt_feedback.get("blockReason")
+                    if isinstance(prompt_feedback, dict)
+                    else None
+                )
+                reason = (
+                    f"blocked_{str(block_reason).casefold()}"
+                    if block_reason
+                    else "empty_candidates"
+                )
+                raise QueryModelUnavailableError(
+                    model,
+                    provider="google",
+                    reason=reason,
+                )
+            candidate = candidates[0]
+            if not isinstance(candidate, dict):
+                raise QueryModelUnavailableError(
+                    model,
+                    provider="google",
+                    reason="invalid_candidate",
+                )
+            finish_reason = str(candidate.get("finishReason") or "").upper()
+            if finish_reason and finish_reason not in {"STOP", "UNSPECIFIED"}:
+                metrics["finish_reason"] = finish_reason
+                raise QueryModelUnavailableError(
+                    model,
+                    provider="google",
+                    reason=f"finish_{finish_reason.casefold()}",
+                )
+            content = candidate.get("content")
+            if not isinstance(content, dict):
+                raise QueryModelUnavailableError(
+                    model,
+                    provider="google",
+                    reason="invalid_candidate_content",
+                )
+            parts = content.get("parts") or []
             text = "".join(
-                part.get("text", "") for part in content.get("parts", [])
+                str(part.get("text", ""))
+                for part in parts
+                if isinstance(part, dict)
+                and not part.get("thought")
+                and part.get("text") is not None
             ).strip()
             if not text:
-                raise ValueError("Gemini returned an empty response.")
-            return strip_json_fence(text)
-        except requests.HTTPError as exc:
-            status_code = exc.response.status_code if exc.response is not None else 0
-            if status_code in FALLBACK_HTTP_STATUSES:
-                raise GeminiModelUnavailableError(
+                raise QueryModelUnavailableError(
                     model,
-                    status_code=status_code,
-                ) from exc
-            raise RuntimeError(
-                f"Cannot extract a structured query with Google model "
-                f"'{model}' (HTTP {status_code})."
-            ) from exc
+                    provider="google",
+                    reason="empty_response",
+                )
+            return _structured_json_text(
+                text,
+                model=model,
+                provider="google",
+            )
+        except requests.HTTPError as exc:
+            error = _http_status_error(model, "google", exc)
+            raise error from exc
+        except QueryModelUnavailableError:
+            raise
         except requests.Timeout as exc:
-            raise GeminiModelUnavailableError(
+            raise QueryModelUnavailableError(
                 model,
-                reason="timeout",
+                provider="google",
+                reason=_timeout_reason(),
             ) from exc
         except requests.ConnectionError as exc:
-            raise GeminiModelUnavailableError(
+            raise QueryModelUnavailableError(
                 model,
+                provider="google",
                 reason="connection_error",
             ) from exc
         except (
             requests.RequestException,
-            KeyError,
-            IndexError,
             TypeError,
             ValueError,
         ) as exc:
@@ -271,7 +460,11 @@ class GroqProvider:
             return direct.strip()
         parts = []
         for item in payload.get("output") or []:
+            if not isinstance(item, dict):
+                continue
             for content in item.get("content") or []:
+                if not isinstance(content, dict):
+                    continue
                 if content.get("type") == "output_text":
                     parts.append(str(content.get("text", "")))
         text = "".join(parts).strip()
@@ -287,12 +480,6 @@ class GroqProvider:
         schema: dict,
         temperature: float = 0,
     ) -> str:
-        if not self.api_key:
-            raise GeminiModelUnavailableError(
-                model,
-                reason="missing_api_key",
-            )
-
         started = time.perf_counter()
         metrics: dict[str, float | int | str | list] = {
             "load_ms": 0.0,
@@ -318,6 +505,13 @@ class GroqProvider:
         elif temperature > 0:
             request_body["temperature"] = temperature
         try:
+            if not self.api_key:
+                raise QueryModelUnavailableError(
+                    model,
+                    provider="groq",
+                    reason="missing_api_key",
+                )
+            timeout_seconds = _effective_timeout(self.timeout_seconds, model)
             response = self._post(
                 f"{self.base_url}/responses",
                 headers={
@@ -326,42 +520,70 @@ class GroqProvider:
                     "Groq-Beta": "inference-metrics",
                 },
                 json=request_body,
-                timeout=self.timeout_seconds,
+                timeout=timeout_seconds,
             )
             response.raise_for_status()
-            payload = response.json()
+            payload = _response_payload(
+                response,
+                model=model,
+                provider="groq",
+            )
             usage = payload.get("usage") or {}
+            if not isinstance(usage, dict):
+                usage = {}
             metrics.update(
                 {
-                    "input_tokens": int(usage.get("input_tokens", 0) or 0),
-                    "output_tokens": int(usage.get("output_tokens", 0) or 0),
-                    "total_tokens": int(usage.get("total_tokens", 0) or 0),
+                    "input_tokens": _metric_int(usage.get("input_tokens")),
+                    "output_tokens": _metric_int(usage.get("output_tokens")),
+                    "total_tokens": _metric_int(usage.get("total_tokens")),
                 }
             )
-            for key, value in (payload.get("metadata") or {}).items():
+            metadata = payload.get("metadata") or {}
+            if not isinstance(metadata, dict):
+                metadata = {}
+            for key, value in metadata.items():
                 if key.endswith("_time"):
                     with contextlib.suppress(TypeError, ValueError):
                         metrics[f"groq_{key}_ms"] = float(value) * 1000
-            return strip_json_fence(self._output_text(payload))
+            status = str(payload.get("status") or "").casefold()
+            if status and status != "completed":
+                raise QueryModelUnavailableError(
+                    model,
+                    provider="groq",
+                    reason=f"status_{status}",
+                )
+            try:
+                text = self._output_text(payload)
+            except ValueError as exc:
+                raise QueryModelUnavailableError(
+                    model,
+                    provider="groq",
+                    reason="empty_response",
+                ) from exc
+            return _structured_json_text(
+                text,
+                model=model,
+                provider="groq",
+            )
         except requests.HTTPError as exc:
-            status_code = exc.response.status_code if exc.response is not None else 0
-            raise GeminiModelUnavailableError(
-                model,
-                status_code=status_code,
-            ) from exc
+            error = _http_status_error(model, "groq", exc)
+            raise error from exc
+        except QueryModelUnavailableError:
+            raise
         except requests.Timeout as exc:
-            raise GeminiModelUnavailableError(
+            raise QueryModelUnavailableError(
                 model,
-                reason="timeout",
+                provider="groq",
+                reason=_timeout_reason(),
             ) from exc
         except requests.ConnectionError as exc:
-            raise GeminiModelUnavailableError(
+            raise QueryModelUnavailableError(
                 model,
+                provider="groq",
                 reason="connection_error",
             ) from exc
         except (
             requests.RequestException,
-            KeyError,
             TypeError,
             ValueError,
         ) as exc:
@@ -394,127 +616,176 @@ def structured_chat(
     schema: dict,
     temperature: float = 0,
 ) -> str:
+    if not QUERY_EXTRACT_MODELS:
+        raise RuntimeError("No query extraction models are configured.")
     models = QUERY_EXTRACT_MODELS if model == QUERY_EXTRACT_MODELS[0] else (model,)
-    attempted_models = []
-    attempts = []
+    attempted_models: list[str] = []
+    attempts: list[dict[str, object]] = []
     started = time.perf_counter()
-    last_error = None
-    for position, candidate_model in enumerate(models, start=1):
-        attempted_models.append(candidate_model)
-        is_groq = candidate_model.startswith("groq:")
-        provider = DEFAULT_GROQ_PROVIDER if is_groq else DEFAULT_GEMINI_PROVIDER
-        provider_model = (
-            candidate_model.split(":", 1)[1] if is_groq else candidate_model
+    deadline = time.monotonic() + QUERY_EXTRACT_TOTAL_TIMEOUT_SECONDS
+    last_error: QueryModelUnavailableError | None = None
+    deadline_token = _QUERY_DEADLINE.set(deadline)
+
+    def publish_metrics(
+        current_attempt: dict[str, object] | None = None,
+        *,
+        failure_reason: str | None = None,
+    ) -> None:
+        aggregate = dict(current_attempt or {})
+        aggregate.update(
+            {
+                "total_ms": (time.perf_counter() - started) * 1000,
+                "attempted_models": list(attempted_models),
+                "attempts": [dict(attempt) for attempt in attempts],
+            }
         )
-        LOGGER.debug(
-            "step=query_model status=attempt model=%s position=%d/%d",
-            candidate_model,
-            position,
-            len(models),
-        )
-        limiter = query_model_limiter(candidate_model)
-        if limiter is not None:
-            allowed, retry_after = limiter.allow()
-            if not allowed:
-                last_error = GeminiModelUnavailableError(
+        if failure_reason:
+            aggregate["failure_reason"] = failure_reason
+        DEFAULT_GEMINI_PROVIDER.last_chat_metrics = aggregate
+
+    try:
+        for position, candidate_model in enumerate(models, start=1):
+            attempted_models.append(candidate_model)
+            provider_name, provider_model = query_model_route(candidate_model)
+            provider = (
+                DEFAULT_GROQ_PROVIDER
+                if provider_name == "groq"
+                else DEFAULT_GEMINI_PROVIDER
+            )
+            LOGGER.debug(
+                "step=query_model status=attempt model=%s provider=%s position=%d/%d",
+                candidate_model,
+                provider_name,
+                position,
+                len(models),
+            )
+            if time.monotonic() >= deadline:
+                last_error = QueryModelUnavailableError(
                     candidate_model,
-                    reason="local_rate_limit",
+                    provider=provider_name,
+                    reason="total_deadline",
                 )
                 attempt_metrics = {
                     "load_ms": 0.0,
                     "total_ms": 0.0,
                     "model": candidate_model,
+                    "provider": provider_name,
                     "status": "fallback",
                     "reason": last_error.reason,
-                    "retry_after_seconds": retry_after,
                 }
                 attempts.append(attempt_metrics)
-                DEFAULT_GEMINI_PROVIDER.last_chat_metrics = {
-                    **attempt_metrics,
-                    "total_ms": (time.perf_counter() - started) * 1000,
-                    "attempted_models": list(attempted_models),
-                    "attempts": list(attempts),
-                    "failure_reason": last_error.reason,
-                }
-                LOGGER.info(
-                    "step=query_model status=fallback model=%s reason=%s "
-                    "retry_after=%.1fs next_model=%s",
-                    candidate_model,
-                    last_error.reason,
-                    retry_after,
-                    models[position] if position < len(models) else "none",
+                publish_metrics(attempt_metrics, failure_reason=last_error.reason)
+                break
+
+            limiter = query_model_limiter(candidate_model)
+            if limiter is not None:
+                allowed, retry_after = limiter.allow()
+                if not allowed:
+                    last_error = QueryModelUnavailableError(
+                        candidate_model,
+                        provider=provider_name,
+                        reason="local_rate_limit",
+                    )
+                    attempt_metrics = {
+                        "load_ms": 0.0,
+                        "total_ms": 0.0,
+                        "model": candidate_model,
+                        "provider": provider_name,
+                        "status": "fallback",
+                        "reason": last_error.reason,
+                        "retry_after_seconds": retry_after,
+                    }
+                    attempts.append(attempt_metrics)
+                    publish_metrics(
+                        attempt_metrics,
+                        failure_reason=last_error.reason,
+                    )
+                    LOGGER.info(
+                        "step=query_model status=fallback model=%s reason=%s "
+                        "retry_after=%.1fs next_model=%s",
+                        candidate_model,
+                        last_error.reason,
+                        retry_after,
+                        models[position] if position < len(models) else "none",
+                    )
+                    continue
+            try:
+                content = provider.structured_chat(
+                    provider_model,
+                    system_prompt,
+                    user_prompt,
+                    schema,
+                    temperature,
                 )
-                continue
-        try:
-            content = provider.structured_chat(
-                provider_model,
-                system_prompt,
-                user_prompt,
-                schema,
-                temperature,
-            )
-            attempt_metrics = {
-                **provider.last_chat_metrics,
-                "model": candidate_model,
-            }
-            DEFAULT_GEMINI_PROVIDER.last_chat_metrics = attempt_metrics
-            DEFAULT_GEMINI_PROVIDER.last_chat_metrics.update(
-                {
-                    "total_ms": (time.perf_counter() - started) * 1000,
-                    "attempted_models": attempted_models,
-                    "attempts": attempts
-                    + [
-                        {
-                            **DEFAULT_GEMINI_PROVIDER.last_chat_metrics,
-                            "status": "success",
-                        }
-                    ],
+                attempt_metrics = {
+                    **provider.last_chat_metrics,
+                    "model": candidate_model,
+                    "provider": provider_name,
+                    "status": "success",
+                    "attempt_number": position,
                 }
-            )
-            LOGGER.debug(
-                "step=query_model status=success model=%s duration_ms=%.0f",
-                candidate_model,
-                DEFAULT_GEMINI_PROVIDER.last_chat_metrics["total_ms"],
-            )
-            return content
-        except GeminiModelUnavailableError as exc:
-            last_error = exc
-            attempt_metrics = {
-                **provider.last_chat_metrics,
-                "model": candidate_model,
-            }
-            DEFAULT_GEMINI_PROVIDER.last_chat_metrics = attempt_metrics
-            attempts.append(
-                {
-                    **attempt_metrics,
+                attempts.append(attempt_metrics)
+                publish_metrics(attempt_metrics)
+                LOGGER.debug(
+                    "step=query_model status=success model=%s duration_ms=%.0f",
+                    candidate_model,
+                    DEFAULT_GEMINI_PROVIDER.last_chat_metrics["total_ms"],
+                )
+                return content
+            except QueryModelUnavailableError as exc:
+                last_error = exc
+                attempt_metrics = {
+                    **provider.last_chat_metrics,
+                    "model": candidate_model,
+                    "provider": exc.provider or provider_name,
                     "status": "fallback",
                     "reason": exc.reason,
+                    "attempt_number": position,
                 }
-            )
-            DEFAULT_GEMINI_PROVIDER.last_chat_metrics.update(
-                {
-                    "total_ms": (time.perf_counter() - started) * 1000,
-                    "attempted_models": list(attempted_models),
-                    "attempts": list(attempts),
-                    "failure_reason": exc.reason,
+                attempts.append(attempt_metrics)
+                publish_metrics(attempt_metrics, failure_reason=exc.reason)
+                LOGGER.warning(
+                    "step=query_model status=fallback model=%s reason=%s next_model=%s",
+                    candidate_model,
+                    exc.reason,
+                    (models[position] if position < len(models) else "none"),
+                )
+            except RuntimeError:
+                attempt_metrics = {
+                    **provider.last_chat_metrics,
+                    "model": candidate_model,
+                    "provider": provider_name,
+                    "status": "failed",
+                    "reason": "provider_error",
+                    "attempt_number": position,
                 }
-            )
-            LOGGER.warning(
-                "step=query_model status=fallback model=%s reason=%s next_model=%s",
-                candidate_model,
-                exc.reason,
-                (models[position] if position < len(models) else "none"),
-            )
-    LOGGER.error(
-        "step=query_model status=failed attempted_models=%s reason=%s",
-        ",".join(attempted_models),
-        last_error.reason if last_error is not None else "unknown",
-    )
-    raise RuntimeError(
-        "All configured query models are unavailable "
-        f"(last_reason={last_error.reason if last_error else 'unknown'})."
-    ) from last_error
+                attempts.append(attempt_metrics)
+                publish_metrics(
+                    attempt_metrics,
+                    failure_reason="provider_error",
+                )
+                LOGGER.exception(
+                    "step=query_model status=failed model=%s reason=provider_error",
+                    candidate_model,
+                )
+                raise
+        LOGGER.error(
+            "step=query_model status=failed attempted_models=%s reason=%s",
+            ",".join(attempted_models),
+            last_error.reason if last_error is not None else "unknown",
+        )
+        raise RuntimeError(
+            "All configured query models are unavailable "
+            f"(last_reason={last_error.reason if last_error else 'unknown'})."
+        ) from last_error
+    finally:
+        _QUERY_DEADLINE.reset(deadline_token)
+
+
+def last_query_model_metrics() -> dict[str, object]:
+    return dict(DEFAULT_GEMINI_PROVIDER.last_chat_metrics)
 
 
 def last_gemini_metrics() -> dict[str, object]:
-    return dict(DEFAULT_GEMINI_PROVIDER.last_chat_metrics)
+    """Backward-compatible alias for the provider-neutral metrics accessor."""
+    return last_query_model_metrics()

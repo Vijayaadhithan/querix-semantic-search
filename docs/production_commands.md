@@ -296,8 +296,10 @@ OLLAMA_KEEP_ALIVE=-1
 
 REDIS_URL=redis://redis:6379/0
 
-QUERY_EXTRACT_MODELS=groq:openai/gpt-oss-20b,gemini-3.1-flash-lite,gemma-4-26b-a4b-it
-GROQ_TIMEOUT_SECONDS=5
+QUERY_EXTRACT_MODELS=groq:openai/gpt-oss-20b,google:gemini-3.1-flash-lite,google:gemma-4-26b-a4b-it
+GEMINI_TIMEOUT_SECONDS=3
+GROQ_TIMEOUT_SECONDS=3
+QUERY_EXTRACT_TOTAL_TIMEOUT_SECONDS=5
 
 RERANK_PROVIDER_ORDER=voyage-2.5,openrouter-nemotron,voyage-2.5-lite
 RERANK_API_TIMEOUT_SECONDS=3
@@ -318,6 +320,7 @@ OLLAMA_QUERY_TIMEOUT_SECONDS=10
 Keep hosted-provider credentials in `.env.keys` or the production secret manager:
 
 ```dotenv
+GEMINI_API_KEY=<production-gemini-key>
 GROQ_API_KEY=<optional-production-groq-key>
 VOYAGE_API_KEY=<production-voyage-key>
 OPENROUTER_API_KEY=<production-openrouter-key>

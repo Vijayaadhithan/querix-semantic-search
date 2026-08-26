@@ -136,6 +136,15 @@ QUERY_EXTRACT_MODELS = tuple(
 )
 if not QUERY_EXTRACT_MODELS:
     raise ValueError("query_extraction.models must contain at least one model.")
+for _query_model in QUERY_EXTRACT_MODELS:
+    if ":" in _query_model and _query_model.split(":", 1)[0] not in {
+        "google",
+        "groq",
+    }:
+        raise ValueError(
+            f"Unsupported query model provider prefix in {_query_model!r}. "
+            "Use google: or groq:."
+        )
 QUERY_EXTRACT_MODEL = QUERY_EXTRACT_MODELS[0]
 QUERY_EXTRACT_TEMPERATURE = float(QUERY_EXTRACT_CONFIG.get("temperature", 0))
 QUERY_EXTRACT_MAX_OUTPUT_TOKENS = int(
@@ -158,6 +167,19 @@ QUERY_EXTRACT_TIMEOUT_SECONDS = float(
 )
 if QUERY_EXTRACT_TIMEOUT_SECONDS <= 0:
     raise ValueError("GEMINI_TIMEOUT_SECONDS must be greater than zero.")
+QUERY_EXTRACT_TOTAL_TIMEOUT_SECONDS = float(
+    os.getenv(
+        "QUERY_EXTRACT_TOTAL_TIMEOUT_SECONDS",
+        str(
+            QUERY_EXTRACT_CONFIG.get(
+                "total_timeout_seconds",
+                QUERY_EXTRACT_TIMEOUT_SECONDS * len(QUERY_EXTRACT_MODELS),
+            )
+        ),
+    )
+)
+if QUERY_EXTRACT_TOTAL_TIMEOUT_SECONDS <= 0:
+    raise ValueError("QUERY_EXTRACT_TOTAL_TIMEOUT_SECONDS must be greater than zero.")
 QUERY_DETERMINISTIC_FAST_PATH = bool(
     QUERY_EXTRACT_CONFIG.get("deterministic_fast_path", True)
 )

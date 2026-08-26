@@ -9,6 +9,9 @@ from providers.gemini import (
     GeminiModelUnavailableError,
     GeminiProvider,
     GroqProvider,
+    QueryModelUnavailableError,
+    query_model_limiter,
+    query_model_route,
     strip_json_fence,
 )
 
@@ -24,6 +27,22 @@ class FakeResponse:
         return self.payload
 
 
+class HttpErrorResponse(FakeResponse):
+    def __init__(self, payload, status_code):
+        super().__init__(payload)
+        self.status_code = status_code
+
+    def raise_for_status(self):
+        error = requests.HTTPError(f"HTTP {self.status_code}")
+        error.response = self
+        raise error
+
+
+class MalformedJsonResponse(FakeResponse):
+    def json(self):
+        raise requests.exceptions.JSONDecodeError("invalid", "<html>", 0)
+
+
 @pytest.fixture(autouse=True)
 def isolate_query_provider_rate_limits(monkeypatch):
     monkeypatch.setattr(
@@ -37,10 +56,36 @@ def isolate_query_provider_rate_limits(monkeypatch):
 
 
 def test_configured_query_model_fallback_order():
-    assert QUERY_EXTRACT_MODELS == (
-        "groq:openai/gpt-oss-20b",
+    assert QUERY_EXTRACT_MODELS
+    assert QUERY_EXTRACT_MODELS[0].startswith("groq:")
+    assert all(
+        model.split(":", 1)[0] in {"groq", "google"}
+        for model in QUERY_EXTRACT_MODELS
+        if ":" in model
+    )
+
+
+def test_query_model_route_and_google_family_limiter():
+    assert query_model_route("groq:openai/gpt-oss-20b") == (
+        "groq",
+        "openai/gpt-oss-20b",
+    )
+    assert query_model_route("google:gemini-3.1-flash-lite") == (
+        "google",
         "gemini-3.1-flash-lite",
     )
+    assert query_model_route("gemma-4-26b-a4b-it") == (
+        "google",
+        "gemma-4-26b-a4b-it",
+    )
+    google_limiter = query_model_limiter("gemma-4-26b-a4b-it")
+    assert google_limiter is not None
+    assert google_limiter is query_model_limiter("google:gemini-3.1-flash-lite")
+    assert google_limiter.scope == "query:google"
+    assert query_model_limiter("groq:openai/gpt-oss-20b") is not google_limiter
+
+    with pytest.raises(ValueError, match="Unsupported query model provider"):
+        query_model_route("unknown:model")
 
 
 def test_structured_chat_uses_generate_content_json_schema(monkeypatch):
@@ -80,6 +125,7 @@ def test_structured_chat_uses_generate_content_json_schema(monkeypatch):
     provider = GeminiProvider(
         api_key="test-key",
         base_url="https://generativelanguage.test/v1beta",
+        timeout_seconds=3,
     )
 
     content = provider.structured_chat(
@@ -97,8 +143,12 @@ def test_structured_chat_uses_generate_content_json_schema(monkeypatch):
     assert captured["json"]["generationConfig"] == {
         "temperature": 0,
         "maxOutputTokens": 384,
-        "responseMimeType": "application/json",
-        "responseJsonSchema": schema,
+        "responseFormat": {
+            "text": {
+                "mimeType": "APPLICATION_JSON",
+                "schema": schema,
+            }
+        },
         "thinkingConfig": {"thinkingLevel": "minimal"},
     }
     assert captured["timeout"] == 3
@@ -108,13 +158,15 @@ def test_structured_chat_uses_generate_content_json_schema(monkeypatch):
 def test_structured_chat_requires_api_key():
     provider = GeminiProvider(api_key="")
 
-    with pytest.raises(RuntimeError, match="GEMINI_API_KEY"):
+    with pytest.raises(QueryModelUnavailableError) as caught:
         provider.structured_chat(
             "gemma-4-26b-a4b-it",
             "system",
             "user",
             {"type": "object"},
         )
+    assert caught.value.reason == "missing_api_key"
+    assert provider.last_chat_metrics.get("total_tokens", 0) == 0
 
 
 def test_worker_sessions_share_the_provider_connection_pool(monkeypatch):
@@ -191,6 +243,7 @@ def test_groq_structured_chat_uses_responses_json_schema(monkeypatch):
     provider = GroqProvider(
         api_key="test-key",
         base_url="https://api.groq.test/openai/v1",
+        timeout_seconds=3,
     )
 
     content = provider.structured_chat(
@@ -272,6 +325,179 @@ def test_provider_captures_google_usage_metadata(monkeypatch):
     assert provider.last_chat_metrics["output_tokens"] == 30
     assert provider.last_chat_metrics["thought_tokens"] == 10
     assert provider.last_chat_metrics["total_tokens"] == 160
+
+
+def test_google_provider_ignores_thought_parts(monkeypatch):
+    monkeypatch.setattr(
+        GeminiProvider,
+        "_post",
+        lambda _self, *_args, **_kwargs: FakeResponse(
+            {
+                "candidates": [
+                    {
+                        "content": {
+                            "parts": [
+                                {"thought": True, "text": "internal reasoning"},
+                                {"text": '{"query":"camera"}'},
+                            ]
+                        }
+                    }
+                ]
+            }
+        ),
+    )
+    provider = GeminiProvider(api_key="test-key", timeout_seconds=3)
+
+    assert (
+        provider.structured_chat(
+            "gemini-3.1-flash-lite",
+            "system",
+            "user",
+            {"type": "object"},
+        )
+        == '{"query":"camera"}'
+    )
+
+
+def test_google_provider_falls_back_for_invalid_response_shapes(monkeypatch):
+    monkeypatch.setattr(
+        GeminiProvider,
+        "_post",
+        lambda _self, *_args, **_kwargs: FakeResponse([]),
+    )
+    provider = GeminiProvider(api_key="test-key", timeout_seconds=3)
+
+    with pytest.raises(QueryModelUnavailableError) as caught:
+        provider.structured_chat(
+            "gemini-3.1-flash-lite",
+            "system",
+            "user",
+            {"type": "object"},
+        )
+    assert caught.value.reason == "invalid_response_shape"
+
+
+@pytest.mark.parametrize("provider_class", [GeminiProvider, GroqProvider])
+def test_provider_falls_back_for_malformed_http_json(monkeypatch, provider_class):
+    monkeypatch.setattr(
+        provider_class,
+        "_post",
+        lambda _self, *_args, **_kwargs: MalformedJsonResponse(None),
+    )
+    provider = provider_class(api_key="test-key", timeout_seconds=3)
+
+    with pytest.raises(QueryModelUnavailableError) as caught:
+        provider.structured_chat(
+            "test-model",
+            "system",
+            "user",
+            {"type": "object"},
+        )
+    assert caught.value.reason == "invalid_response_json"
+
+
+def test_google_provider_ignores_malformed_usage_metadata(monkeypatch):
+    monkeypatch.setattr(
+        GeminiProvider,
+        "_post",
+        lambda _self, *_args, **_kwargs: FakeResponse(
+            {
+                "candidates": [
+                    {"content": {"parts": [{"text": '{"query":"camera"}'}]}}
+                ],
+                "usageMetadata": {
+                    "promptTokenCount": "unknown",
+                    "totalTokenCount": None,
+                },
+            }
+        ),
+    )
+    provider = GeminiProvider(api_key="test-key", timeout_seconds=3)
+
+    assert (
+        provider.structured_chat(
+            "gemini-3.1-flash-lite",
+            "system",
+            "user",
+            {"type": "object"},
+        )
+        == '{"query":"camera"}'
+    )
+    assert provider.last_chat_metrics["input_tokens"] == 0
+
+
+def test_groq_provider_falls_back_for_incomplete_response(monkeypatch):
+    monkeypatch.setattr(
+        GroqProvider,
+        "_post",
+        lambda _self, *_args, **_kwargs: FakeResponse(
+            {"status": "incomplete", "output_text": '{"query":"camera"}'}
+        ),
+    )
+    provider = GroqProvider(api_key="test-key", timeout_seconds=3)
+
+    with pytest.raises(QueryModelUnavailableError) as caught:
+        provider.structured_chat(
+            "openai/gpt-oss-20b",
+            "system",
+            "user",
+            {"type": "object"},
+        )
+    assert caught.value.reason == "status_incomplete"
+
+
+def test_google_provider_falls_back_for_empty_candidates(monkeypatch):
+    monkeypatch.setattr(
+        GeminiProvider,
+        "_post",
+        lambda _self, *_args, **_kwargs: FakeResponse(
+            {"candidates": [], "promptFeedback": {"blockReason": "SAFETY"}}
+        ),
+    )
+    provider = GeminiProvider(api_key="test-key", timeout_seconds=3)
+
+    with pytest.raises(QueryModelUnavailableError) as caught:
+        provider.structured_chat(
+            "gemini-3.1-flash-lite",
+            "system",
+            "user",
+            {"type": "object"},
+        )
+    assert caught.value.reason == "blocked_safety"
+
+
+def test_permanent_http_errors_do_not_advance_as_provider_fallback(monkeypatch):
+    monkeypatch.setattr(
+        GroqProvider,
+        "_post",
+        lambda _self, *_args, **_kwargs: HttpErrorResponse({}, 400),
+    )
+    provider = GroqProvider(api_key="test-key", timeout_seconds=3)
+
+    with pytest.raises(RuntimeError, match="HTTP 400"):
+        provider.structured_chat(
+            "openai/gpt-oss-20b",
+            "system",
+            "user",
+            {"type": "object"},
+        )
+
+
+def test_missing_key_resets_provider_metrics():
+    provider = GroqProvider(api_key="test-key", timeout_seconds=3)
+    provider.last_chat_metrics = {"total_tokens": 999}
+    provider.api_key = ""
+
+    with pytest.raises(QueryModelUnavailableError):
+        provider.structured_chat(
+            "openai/gpt-oss-20b",
+            "system",
+            "user",
+            {"type": "object"},
+        )
+
+    assert provider.last_chat_metrics["model"] == "openai/gpt-oss-20b"
+    assert provider.last_chat_metrics.get("total_tokens", 0) == 0
 
 
 def test_provider_metrics_are_thread_local():
@@ -382,6 +608,90 @@ def test_default_structured_chat_routes_prefixed_model_to_groq(monkeypatch):
     assert groq_provider.calls == ["openai/gpt-oss-20b"]
     assert gemini_client.last_gemini_metrics()["model"] == ("groq:openai/gpt-oss-20b")
     assert gemini_client.last_gemini_metrics()["provider"] == "groq"
+
+
+def test_missing_google_key_advances_to_a_later_google_fallback(monkeypatch):
+    class FakeGroqProvider:
+        last_chat_metrics = {}
+
+        def structured_chat(self, model, *_args):
+            raise QueryModelUnavailableError(
+                model,
+                reason="missing_api_key",
+                provider="groq",
+            )
+
+    class FakeGoogleProvider:
+        def __init__(self):
+            self.calls = []
+            self.last_chat_metrics = {}
+
+        def structured_chat(self, model, *_args):
+            self.calls.append(model)
+            if model == "gemini-3.1-flash-lite":
+                raise QueryModelUnavailableError(
+                    model,
+                    reason="missing_api_key",
+                    provider="google",
+                )
+            self.last_chat_metrics = {"model": model, "total_ms": 1.0}
+            return '{"query":"camera"}'
+
+    google_provider = FakeGoogleProvider()
+    monkeypatch.setattr(
+        gemini_client,
+        "QUERY_EXTRACT_MODELS",
+        (
+            "groq:openai/gpt-oss-20b",
+            "google:gemini-3.1-flash-lite",
+            "google:gemma-4-26b-a4b-it",
+        ),
+    )
+    monkeypatch.setattr(gemini_client, "DEFAULT_GROQ_PROVIDER", FakeGroqProvider())
+    monkeypatch.setattr(gemini_client, "DEFAULT_GEMINI_PROVIDER", google_provider)
+
+    assert (
+        gemini_client.structured_chat(
+            "groq:openai/gpt-oss-20b",
+            "system",
+            "user",
+            {"type": "object"},
+        )
+        == '{"query":"camera"}'
+    )
+    assert google_provider.calls == [
+        "gemini-3.1-flash-lite",
+        "gemma-4-26b-a4b-it",
+    ]
+
+
+def test_total_query_deadline_stops_the_fallback_chain(monkeypatch):
+    class UnexpectedProvider:
+        last_chat_metrics = {}
+
+        def structured_chat(self, *_args):
+            raise AssertionError("provider should not be called after deadline")
+
+    monkeypatch.setattr(gemini_client, "QUERY_EXTRACT_TOTAL_TIMEOUT_SECONDS", 0)
+    monkeypatch.setattr(
+        gemini_client,
+        "QUERY_EXTRACT_MODELS",
+        ("google:gemini-3.1-flash-lite",),
+    )
+    monkeypatch.setattr(
+        gemini_client,
+        "DEFAULT_GEMINI_PROVIDER",
+        UnexpectedProvider(),
+    )
+
+    with pytest.raises(RuntimeError, match="last_reason=total_deadline"):
+        gemini_client.structured_chat(
+            "google:gemini-3.1-flash-lite",
+            "system",
+            "user",
+            {"type": "object"},
+        )
+    assert gemini_client.last_gemini_metrics()["failure_reason"] == "total_deadline"
 
 
 def test_groq_local_budget_overflow_routes_directly_to_gemini(monkeypatch):
@@ -561,3 +871,42 @@ def test_all_failed_models_keep_attempted_metrics(monkeypatch):
         "model-b",
     ]
     assert provider.last_chat_metrics["failure_reason"] == "timeout"
+
+
+def test_permanent_provider_error_replaces_stale_aggregate_metrics(monkeypatch):
+    class PermanentFailureProvider:
+        def __init__(self):
+            self.last_chat_metrics = {"total_tokens": 999, "model": "stale"}
+
+        def structured_chat(self, model, *_args):
+            self.last_chat_metrics = {
+                "total_ms": 1.0,
+                "load_ms": 0.0,
+                "model": model,
+            }
+            raise RuntimeError("HTTP 400")
+
+    provider = PermanentFailureProvider()
+    monkeypatch.setattr(
+        gemini_client,
+        "QUERY_EXTRACT_MODELS",
+        ("google:model-a",),
+    )
+    monkeypatch.setattr(
+        gemini_client,
+        "DEFAULT_GEMINI_PROVIDER",
+        provider,
+    )
+
+    with pytest.raises(RuntimeError, match="HTTP 400"):
+        gemini_client.structured_chat(
+            "google:model-a",
+            "system",
+            "user",
+            {"type": "object"},
+        )
+
+    assert provider.last_chat_metrics["model"] == "google:model-a"
+    assert provider.last_chat_metrics["failure_reason"] == "provider_error"
+    assert provider.last_chat_metrics["attempted_models"] == ["google:model-a"]
+    assert provider.last_chat_metrics.get("total_tokens", 0) == 0
