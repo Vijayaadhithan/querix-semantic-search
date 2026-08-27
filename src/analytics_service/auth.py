@@ -286,10 +286,7 @@ class AnalyticsAuthStore:
             if not bool(index[2]) or bool(index[4]):
                 continue
             columns = tuple(
-                row[2]
-                for row in connection.execute(
-                    f"PRAGMA index_info({index[1]!r})"
-                )
+                row[2] for row in connection.execute(f"PRAGMA index_info({index[1]!r})")
             )
             if columns == ("username_normalized",):
                 legacy_unique_username = True
