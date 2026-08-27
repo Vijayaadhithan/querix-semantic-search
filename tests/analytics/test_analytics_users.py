@@ -132,11 +132,14 @@ def test_sync_credentials_hashes_password_and_revokes_prior_session(tmp_path):
         is not None
     )
 
-    wrong_binding = CredentialRecord(
+    second_company = CredentialRecord(
         username=initial.username,
-        password="test-only-wrong-binding-password",
+        password="test-only-second-company-password",
         role=COMPANY_USER,
         company_id="acme",
     )
-    with pytest.raises(ValueError, match="binding"):
-        _sync_credential_record(store, wrong_binding)
+    assert _sync_credential_record(store, second_company) == "created"
+    matching_users = [
+        user for user in store.list_users() if user["username"] == initial.username
+    ]
+    assert {user["company_id"] for user in matching_users} == {"gainr", "acme"}

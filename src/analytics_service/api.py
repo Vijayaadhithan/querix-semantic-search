@@ -181,34 +181,19 @@ def create_app(
             samesite="lax",
         )
 
-    def set_legacy_cookie(
-        response: Response,
-        *,
-        token: str,
-        principal: AnalyticsPrincipal,
-    ) -> None:
-        response.set_cookie(
-            key=active_settings.session_cookie_name,
-            value=token,
-            max_age=principal.session_max_age_seconds,
-            expires=datetime.fromisoformat(principal.session_expires_at),
-            httponly=True,
-            secure=active_settings.session_cookie_secure,
-            samesite="strict",
-            path="/api/v1",
-        )
-
     def authenticate(
         credentials: LoginRequest,
         request: Request,
         *,
         required_role: str | None,
+        required_company_id: str | None = None,
     ) -> AuthenticatedSession | None:
         try:
             return active_auth_store.authenticate(
                 username=credentials.username,
                 password=credentials.password.get_secret_value(),
                 required_role=required_role,
+                required_company_id=required_company_id,
                 remote_address=remote_address(request),
             )
         except Exception as exc:
@@ -499,12 +484,14 @@ def create_app(
         response: Response,
         *,
         required_role: str,
+        required_company_id: str | None = None,
     ) -> dict[str, Any]:
         validate_browser_origin(request)
         authenticated = authenticate(
             credentials,
             request,
             required_role=required_role,
+            required_company_id=required_company_id,
         )
         if authenticated is None:
             raise HTTPException(
@@ -519,19 +506,27 @@ def create_app(
         return session_payload(authenticated.principal)
 
     @application.post(
-        "/api/v1/analytics/company/auth/login",
+        "/api/v1/{company_endpoint}/analytics/auth/login",
         tags=["authentication"],
     )
     def company_login(
+        company_endpoint: str,
         credentials: LoginRequest,
         request: Request,
         response: Response,
     ) -> dict[str, Any]:
+        company = active_registry.resolve_endpoint(company_endpoint)
+        if company is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Unknown company analytics endpoint.",
+            )
         return role_login(
             credentials,
             request,
             response,
             required_role=COMPANY_USER,
+            required_company_id=company.company_id,
         )
 
     @application.get(
@@ -634,81 +629,6 @@ def create_app(
             portal_type=INTERNAL_PORTAL,
         )
         delete_portal_cookie(response, INTERNAL_PORTAL)
-        return {"logged_out": True}
-
-    # Deprecated compatibility endpoints. Remove only after both frontend
-    # portals have rolled out the role-specific authentication endpoints.
-    @application.post("/api/v1/analytics/auth/login", tags=["authentication"])
-    def login(
-        credentials: LoginRequest,
-        request: Request,
-        response: Response,
-    ) -> dict[str, Any]:
-        validate_browser_origin(request)
-        authenticated = authenticate(
-            credentials,
-            request,
-            required_role=None,
-        )
-        if authenticated is None:
-            raise HTTPException(
-                status_code=401,
-                detail="Invalid username or password.",
-            )
-        set_legacy_cookie(
-            response,
-            token=authenticated.token,
-            principal=authenticated.principal,
-        )
-        set_portal_cookie(
-            response,
-            token=authenticated.token,
-            principal=authenticated.principal,
-        )
-        return session_payload(authenticated.principal)
-
-    @application.get("/api/v1/analytics/auth/me", tags=["authentication"])
-    def current_user(
-        response: Response,
-        analytics_session: str | None = Cookie(
-            default=None,
-            alias=active_settings.session_cookie_name,
-        ),
-    ) -> dict[str, Any]:
-        principal = require_user(analytics_session)
-        set_legacy_cookie(
-            response,
-            token=analytics_session or "",
-            principal=principal,
-        )
-        set_portal_cookie(
-            response,
-            token=analytics_session or "",
-            principal=principal,
-        )
-        return session_payload(principal)
-
-    @application.post("/api/v1/analytics/auth/logout", tags=["authentication"])
-    def logout(
-        request: Request,
-        response: Response,
-        analytics_session: str | None = Cookie(
-            default=None,
-            alias=active_settings.session_cookie_name,
-        ),
-    ) -> dict[str, bool]:
-        validate_browser_origin(request)
-        principal = session_principal(analytics_session)
-        revoke_session(analytics_session, request)
-        response.delete_cookie(
-            key=active_settings.session_cookie_name,
-            path="/api/v1",
-            secure=active_settings.session_cookie_secure,
-            httponly=True,
-            samesite="strict",
-        )
-        if principal is not None:
-            delete_portal_cookie(response, principal.portal_type)
         return {"logged_out": True}
 
     @application.get(

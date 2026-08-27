@@ -843,6 +843,68 @@ def test_api_key_routes_to_isolated_company_service_and_binds_cursor(tmp_path):
     assert cross_tenant_cursor.status_code == 400
 
 
+def test_tenant_readiness_does_not_load_or_evict_inactive_engines(tmp_path):
+    profiles = {
+        company_id: tenant_profile(tmp_path, company_id)
+        for company_id in ("alpha", "beta", "gamma")
+    }
+    registry = TenantRegistry(
+        profiles,
+        api_keys={company_id: [f"{company_id}-key"] for company_id in profiles},
+    )
+    builds = []
+
+    def engine_factory(profile, _cache, _shared_reranker):
+        builds.append(profile.company_id)
+        return FakeEngine()
+
+    app = create_app(
+        tenant_registry=registry,
+        tenant_engine_factory=engine_factory,
+        preload_models=False,
+    )
+    with TestClient(app) as client:
+        client.app.state.check_ollama_readiness = False
+        client.app.state.tenant_service_pool.max_services = 1
+        first_ready = client.get("/api/v1/ready")
+        alpha = client.post(
+            "/api/v1/alpha/search",
+            headers={"X-API-Key": "alpha-key"},
+            json={"query": "camera"},
+        )
+        second_ready = client.get("/api/v1/ready")
+
+    assert first_ready.status_code == 200
+    assert alpha.status_code == 200
+    assert second_ready.status_code == 200
+    assert builds == ["alpha"]
+
+
+def test_expected_authentication_errors_are_not_logged_as_system_failures(
+    tmp_path,
+    caplog,
+):
+    profile = tenant_profile(tmp_path, "alpha")
+    registry = TenantRegistry(
+        {"alpha": profile},
+        api_keys={"alpha": ["alpha-key"]},
+    )
+    app = create_app(
+        tenant_registry=registry,
+        tenant_engine_factory=lambda *_args: FakeEngine(),
+        preload_models=False,
+    )
+
+    caplog.set_level("ERROR", logger="uvicorn.error")
+    with TestClient(app) as client:
+        response = client.post("/api/v1/alpha/search", json={"query": "camera"})
+
+    assert response.status_code == 401
+    assert not any(
+        "search_request status=failed" in item.message for item in caplog.records
+    )
+
+
 def test_company_endpoint_routes_and_normalizes_company_payload(tmp_path):
     alpha = tenant_profile(tmp_path, "alpha")
     beta = tenant_profile(

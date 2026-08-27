@@ -52,7 +52,7 @@ def analytics_company(tmp_path: Path, company_id: str = "gainr"):
         backend="mysql",
         host="db",
         port=3306,
-        database="catalog",
+        database=f"catalog_{company_id}",
         user="reader",
         password="secret",
         tls_mode="disable",
@@ -68,6 +68,19 @@ def analytics_company(tmp_path: Path, company_id: str = "gainr"):
         },
         config_path=tmp_path / f"{company_id}.yaml",
     )
+
+
+def test_analytics_registry_rejects_shared_dataset_tables(tmp_path):
+    gainr = analytics_company(tmp_path, "gainr")
+    acme = analytics_company(tmp_path, "acme")
+    acme = replace(
+        acme,
+        database=gainr.database,
+        telemetry_database=gainr.telemetry_database,
+    )
+
+    with pytest.raises(ValueError, match="share dataset table"):
+        AnalyticsRegistry({"gainr": gainr, "acme": acme})
 
 
 def analytics_data() -> dict[str, pd.DataFrame]:
@@ -1122,7 +1135,7 @@ def test_api_enforces_company_and_internal_field_boundaries(
         )
     with TestClient(app) as company_client:
         login = company_client.post(
-            "/api/v1/analytics/auth/login",
+            "/api/v1/gainr/analytics/auth/login",
             json={
                 "username": "gainr-owner",
                 "password": "company-password-2026",
@@ -1133,13 +1146,13 @@ def test_api_enforces_company_and_internal_field_boundaries(
         forbidden_internal = company_client.get(
             "/api/v1/admin/analytics/gainr/queries",
         )
-        me = company_client.get("/api/v1/analytics/auth/me")
-        logout = company_client.post("/api/v1/analytics/auth/logout")
+        me = company_client.get("/api/v1/analytics/company/auth/me")
+        logout = company_client.post("/api/v1/analytics/company/auth/logout")
         after_logout = company_client.get("/api/v1/gainr/analytics/dashboard")
 
     with TestClient(app) as internal_client:
         internal_login = internal_client.post(
-            "/api/v1/analytics/auth/login",
+            "/api/v1/analytics/internal/auth/login",
             json={
                 "username": "analytics-admin",
                 "password": "internal-password-2026",
@@ -1161,7 +1174,7 @@ def test_api_enforces_company_and_internal_field_boundaries(
     assert login.status_code == 200
     assert login.json()["user"]["company_id"] == "gainr"
     assert "HttpOnly" in login.headers["set-cookie"]
-    assert "SameSite=strict" in login.headers["set-cookie"]
+    assert "SameSite=lax" in login.headers["set-cookie"]
     assert session_company.status_code == 200
     assert forbidden_other_company.status_code == 403
     # Admin routes intentionally ignore the company cookie.
@@ -1287,6 +1300,50 @@ def test_analytics_auth_hashes_passwords_locks_and_revokes_sessions(
         auth_store.authenticate(
             username="company.user",
             password="safe-company-password",
+        )
+        is None
+    )
+
+
+def test_company_usernames_and_authentication_are_tenant_scoped(tmp_path):
+    auth_store = AnalyticsAuthStore(
+        tmp_path / "scoped-auth.sqlite3",
+        password_min_length=15,
+    )
+    auth_store.create_user(
+        username="owner",
+        password="gainr-owner-password",
+        role=COMPANY_USER,
+        company_id="gainr",
+    )
+    auth_store.create_user(
+        username="owner",
+        password="acme-owner-password",
+        role=COMPANY_USER,
+        company_id="acme",
+    )
+
+    gainr = auth_store.authenticate(
+        username="owner",
+        password="gainr-owner-password",
+        required_role=COMPANY_USER,
+        required_company_id="gainr",
+    )
+    wrong_company = auth_store.authenticate(
+        username="owner",
+        password="gainr-owner-password",
+        required_role=COMPANY_USER,
+        required_company_id="acme",
+    )
+
+    assert gainr is not None
+    assert gainr.principal.company_id == "gainr"
+    assert wrong_company is None
+    assert (
+        auth_store.authenticate(
+            username="owner",
+            password="gainr-owner-password",
+            required_role=COMPANY_USER,
         )
         is None
     )

@@ -102,15 +102,12 @@ analytics service.
 |---|---|---|---|
 | `GET` | `/api/v1/live` | none | Process liveness |
 | `GET` | `/api/v1/ready` | none | Snapshot readiness |
-| `POST` | `/api/v1/analytics/company/auth/login` | username/password | Start company session |
+| `POST` | `/api/v1/{company}/analytics/auth/login` | username/password | Start a tenant-bound company session |
 | `GET` | `/api/v1/analytics/company/auth/me` | company cookie | Read company principal |
 | `POST` | `/api/v1/analytics/company/auth/logout` | company cookie | Revoke company session only |
 | `POST` | `/api/v1/analytics/internal/auth/login` | username/password | Start internal session |
 | `GET` | `/api/v1/analytics/internal/auth/me` | internal cookie | Read internal principal |
 | `POST` | `/api/v1/analytics/internal/auth/logout` | internal cookie | Revoke internal session only |
-| `POST` | `/api/v1/analytics/auth/login` | username/password | Deprecated shared login |
-| `GET` | `/api/v1/analytics/auth/me` | legacy cookie | Deprecated shared principal |
-| `POST` | `/api/v1/analytics/auth/logout` | legacy cookie | Deprecated shared logout |
 | `GET` | `/api/v1/{company}/analytics/dashboard` | company cookie or API key | Company-safe dashboard |
 | `GET` | `/api/v1/{company}/analytics/queries` | company cookie or API key | Company-safe search history |
 | `GET` | `/api/v1/{company}/analytics/status` | company cookie or API key | Company snapshot status |
@@ -149,7 +146,7 @@ Response `503` uses the same shape with `"status": "not_ready"`.
 
 ### Role-specific login
 
-Company: `POST /api/v1/analytics/company/auth/login`
+Company: `POST /api/v1/{company}/analytics/auth/login`
 
 Internal: `POST /api/v1/analytics/internal/auth/login`
 
@@ -162,7 +159,8 @@ Request:
 }
 ```
 
-The company endpoint permits only `company_user`; the internal endpoint permits
+The company endpoint resolves the requested tenant before password verification
+and permits only a `company_user` bound to that company. The internal endpoint permits
 only `internal_admin`. A wrong-role credential receives the same generic `401`
 as any other invalid credential. Company identity always comes from the bound
 account.
@@ -224,22 +222,10 @@ Response `200`:
 The server revokes and expires only that portal's session. Logout is
 idempotent.
 
-### Deprecated shared authentication compatibility
+### Authentication boundary
 
-`/api/v1/analytics/auth/login`, `/me`, and `/logout` remain available only for
-the staged frontend rollout. Legacy login also sets the matching role-specific
-cookie, allowing company/admin data routes to consume only their expected
-cookie without breaking the currently deployed single-portal frontend.
-
-Rollout order:
-
-1. Deploy the additive backend endpoints and cookies.
-2. Verify the shared endpoints still work.
-3. Update company frontend calls to `/company/auth/*` and internal calls to
-   `/internal/auth/*`.
-4. Verify concurrent company and internal sessions in one browser profile.
-5. Remove the shared endpoints and cookie only in a later separately approved
-   change after frontend stability is confirmed.
+Shared `/api/v1/analytics/auth/*` routes are unavailable. Company login is
+tenant-bound, while internal login remains role-bound to `internal_admin`.
 
 ### `GET /api/v1/{company}/analytics/dashboard`
 
@@ -498,7 +484,7 @@ export ANALYTICS_COOKIE_JAR="/tmp/querix-company-analytics.cookies"
 curl -fsS -c "$ANALYTICS_COOKIE_JAR" \
   -H "Content-Type: application/json" \
   -d '{"username":"acme-analytics","password":"<password>"}' \
-  "$ANALYTICS_BASE_URL/api/v1/analytics/company/auth/login" | jq
+  "$ANALYTICS_BASE_URL/api/v1/$ANALYTICS_COMPANY/analytics/auth/login" | jq
 
 curl -fsS -b "$ANALYTICS_COOKIE_JAR" \
   "$ANALYTICS_BASE_URL/api/v1/analytics/company/auth/me" | jq

@@ -126,6 +126,8 @@ def _sync_credential_record(
             user
             for user in store.list_users()
             if str(user["username"]).casefold() == record.username.casefold()
+            and user["role"] == record.role
+            and user["company_id"] == record.company_id
         ),
         None,
     )
@@ -137,11 +139,11 @@ def _sync_credential_record(
             company_id=record.company_id,
         )
         return "created"
-    if existing["role"] != record.role or existing["company_id"] != record.company_id:
-        raise ValueError(
-            "Credential binding does not match the existing analytics user"
-        )
-    store.set_password(record.username, record.password)
+    store.set_password(
+        record.username,
+        record.password,
+        company_id=record.company_id,
+    )
     return "updated"
 
 
@@ -175,10 +177,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     password = commands.add_parser("set-password")
     password.add_argument("--username", required=True)
+    password.add_argument("--company")
     password.add_argument("--password-stdin", action="store_true")
 
     active = commands.add_parser("set-active")
     active.add_argument("--username", required=True)
+    active.add_argument("--company")
     active.add_argument(
         "--active",
         required=True,
@@ -266,7 +270,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             password_stdin=args.password_stdin,
         )
         try:
-            store.set_password(args.username, password)
+            store.set_password(
+                args.username,
+                password,
+                company_id=args.company,
+            )
         except ValueError as exc:
             raise SystemExit(str(exc)) from exc
         print(json.dumps({"username": args.username, "updated": True}))
@@ -276,6 +284,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             store.set_active(
                 args.username,
                 active=args.active == "true",
+                company_id=args.company,
             )
         except ValueError as exc:
             raise SystemExit(str(exc)) from exc
