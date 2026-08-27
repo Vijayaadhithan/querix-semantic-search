@@ -947,6 +947,118 @@ def test_search_ready_catalog_counts_without_materializing_full_rows(
     assert executions[1][1] == ("Car", "1", 20, 0)
 
 
+def test_search_ready_catalog_retries_one_transient_mysql_disconnect(
+    tmp_path,
+    monkeypatch,
+):
+    repository = GainrDatabaseRepository(
+        profile(tmp_path, serves_cards_from_search_ready=True)
+    )
+    connection_attempts = 0
+
+    class OperationalError(Exception):
+        pass
+
+    class Cursor:
+        def __init__(self, attempt):
+            self.attempt = attempt
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def execute(self, _sql, _params):
+            if self.attempt == 1:
+                raise OperationalError(2013, "Lost connection during query")
+
+        def fetchone(self):
+            return {"total": 1}
+
+        def fetchall(self):
+            return [{"id": 2, "ads_attributes_json": "[]"}]
+
+    class Connection:
+        def __init__(self, attempt):
+            self.attempt = attempt
+
+        def cursor(self):
+            return Cursor(self.attempt)
+
+    @contextmanager
+    def connection():
+        nonlocal connection_attempts
+        connection_attempts += 1
+        yield Connection(connection_attempts)
+
+    monkeypatch.setattr(repository, "connection", connection)
+
+    rows, total = repository.search_catalog(
+        {"categorical": {"subcategory_name": "Car"}},
+        GainrSearchFilter(),
+        search_term="car",
+        page=1,
+        page_size=20,
+        sort_order=None,
+        allowed_ad_types={"1"},
+    )
+
+    assert connection_attempts == 2
+    assert total == 1
+    assert [row["id"] for row in rows] == [2]
+
+
+def test_search_ready_catalog_parallelizes_count_and_page_with_pool(tmp_path):
+    query_barrier = threading.Barrier(2)
+    queries = []
+
+    class Cursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def execute(self, sql, _params):
+            queries.append(sql)
+            query_barrier.wait(timeout=1)
+
+        def fetchone(self):
+            return {"total": 1}
+
+        def fetchall(self):
+            return [{"id": 2, "ads_attributes_json": "[]"}]
+
+    class Connection:
+        def cursor(self):
+            return Cursor()
+
+    class Pool:
+        @contextmanager
+        def connection(self):
+            yield Connection()
+
+    repository = GainrDatabaseRepository(
+        profile(tmp_path, serves_cards_from_search_ready=True),
+        database_pool=Pool(),
+    )
+
+    rows, total = repository.search_catalog(
+        {"categorical": {"subcategory_name": "Car"}},
+        GainrSearchFilter(),
+        search_term="car",
+        page=1,
+        page_size=20,
+        sort_order=None,
+        allowed_ad_types={"1"},
+    )
+
+    assert len(queries) == 2
+    assert total == 1
+    assert [row["id"] for row in rows] == [2]
+
+
 def test_pooled_relation_hydration_runs_independent_queries_concurrently(
     tmp_path,
 ):
