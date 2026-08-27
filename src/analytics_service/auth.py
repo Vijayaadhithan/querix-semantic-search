@@ -201,7 +201,7 @@ class AnalyticsAuthStore:
                 CREATE TABLE IF NOT EXISTS analytics_users (
                     user_id TEXT PRIMARY KEY,
                     username TEXT NOT NULL,
-                    username_normalized TEXT NOT NULL UNIQUE,
+                    username_normalized TEXT NOT NULL,
                     password_hash TEXT NOT NULL,
                     role TEXT NOT NULL CHECK (
                         role IN ('internal_admin', 'company_user')
@@ -262,7 +262,88 @@ class AnalyticsAuthStore:
                 );
                 """
             )
+            self._migrate_user_identity_scope(connection)
             self._migrate_sessions(connection)
+
+    @staticmethod
+    def _create_user_identity_indexes(connection: sqlite3.Connection) -> None:
+        connection.executescript(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS uq_analytics_internal_username
+            ON analytics_users (username_normalized)
+            WHERE role = 'internal_admin';
+
+            CREATE UNIQUE INDEX IF NOT EXISTS uq_analytics_company_username
+            ON analytics_users (company_id, username_normalized)
+            WHERE role = 'company_user';
+            """
+        )
+
+    @classmethod
+    def _migrate_user_identity_scope(cls, connection: sqlite3.Connection) -> None:
+        legacy_unique_username = False
+        for index in connection.execute("PRAGMA index_list(analytics_users)"):
+            if not bool(index[2]) or bool(index[4]):
+                continue
+            columns = tuple(
+                row[2]
+                for row in connection.execute(
+                    f"PRAGMA index_info({index[1]!r})"
+                )
+            )
+            if columns == ("username_normalized",):
+                legacy_unique_username = True
+                break
+        if not legacy_unique_username:
+            cls._create_user_identity_indexes(connection)
+            return
+
+        connection.execute("PRAGMA foreign_keys=OFF")
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute(
+                """
+                CREATE TABLE analytics_users_scoped (
+                    user_id TEXT PRIMARY KEY,
+                    username TEXT NOT NULL,
+                    username_normalized TEXT NOT NULL,
+                    password_hash TEXT NOT NULL,
+                    role TEXT NOT NULL CHECK (
+                        role IN ('internal_admin', 'company_user')
+                    ),
+                    company_id TEXT,
+                    active INTEGER NOT NULL DEFAULT 1,
+                    failed_attempts INTEGER NOT NULL DEFAULT 0,
+                    locked_until TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    password_changed_at TEXT NOT NULL,
+                    last_login_at TEXT,
+                    CHECK (
+                        (role = 'internal_admin' AND company_id IS NULL)
+                        OR
+                        (role = 'company_user' AND company_id IS NOT NULL)
+                    )
+                )
+                """
+            )
+            connection.execute(
+                """
+                INSERT INTO analytics_users_scoped
+                SELECT * FROM analytics_users
+                """
+            )
+            connection.execute("DROP TABLE analytics_users")
+            connection.execute(
+                "ALTER TABLE analytics_users_scoped RENAME TO analytics_users"
+            )
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.execute("PRAGMA foreign_keys=ON")
+        cls._create_user_identity_indexes(connection)
 
     @staticmethod
     def _migrate_sessions(connection: sqlite3.Connection) -> None:
@@ -431,13 +512,55 @@ class AnalyticsAuthStore:
             "active": True,
         }
 
-    def set_password(self, username: str, password: str) -> None:
+    @staticmethod
+    def _resolve_user_id(
+        connection: sqlite3.Connection,
+        *,
+        username_normalized: str,
+        company_id: str | None,
+    ) -> str:
+        if company_id is None:
+            rows = connection.execute(
+                """
+                SELECT user_id
+                FROM analytics_users
+                WHERE username_normalized = ? AND role = 'internal_admin'
+                """,
+                (username_normalized,),
+            ).fetchall()
+        else:
+            rows = connection.execute(
+                """
+                SELECT user_id
+                FROM analytics_users
+                WHERE username_normalized = ? AND company_id = ?
+                """,
+                (username_normalized, company_id.strip().casefold()),
+            ).fetchall()
+        if not rows:
+            raise ValueError("Analytics user does not exist")
+        if len(rows) != 1:
+            raise ValueError("Analytics username is ambiguous; specify company_id")
+        return str(rows[0]["user_id"])
+
+    def set_password(
+        self,
+        username: str,
+        password: str,
+        *,
+        company_id: str | None = None,
+    ) -> None:
         normalized = _normalize_username(username)
         self._validate_password(password)
         now = _iso(self._now())
         password_hash = _password_hash(password)
         with self._lock, self._connection() as connection:
             connection.execute("BEGIN IMMEDIATE")
+            user_id = self._resolve_user_id(
+                connection,
+                username_normalized=normalized,
+                company_id=company_id,
+            )
             cursor = connection.execute(
                 """
                 UPDATE analytics_users
@@ -446,9 +569,9 @@ class AnalyticsAuthStore:
                     updated_at = ?,
                     failed_attempts = 0,
                     locked_until = NULL
-                WHERE username_normalized = ?
+                WHERE user_id = ?
                 """,
-                (password_hash, now, now, normalized),
+                (password_hash, now, now, user_id),
             )
             if cursor.rowcount != 1:
                 connection.rollback()
@@ -457,29 +580,36 @@ class AnalyticsAuthStore:
                 """
                 UPDATE analytics_sessions
                 SET revoked_at = ?
-                WHERE user_id = (
-                    SELECT user_id
-                    FROM analytics_users
-                    WHERE username_normalized = ?
-                )
+                WHERE user_id = ?
                   AND revoked_at IS NULL
                 """,
-                (now, normalized),
+                (now, user_id),
             )
             connection.commit()
 
-    def set_active(self, username: str, *, active: bool) -> None:
+    def set_active(
+        self,
+        username: str,
+        *,
+        active: bool,
+        company_id: str | None = None,
+    ) -> None:
         normalized = _normalize_username(username)
         now = _iso(self._now())
         with self._lock, self._connection() as connection:
             connection.execute("BEGIN IMMEDIATE")
+            user_id = self._resolve_user_id(
+                connection,
+                username_normalized=normalized,
+                company_id=company_id,
+            )
             cursor = connection.execute(
                 """
                 UPDATE analytics_users
                 SET active = ?, updated_at = ?
-                WHERE username_normalized = ?
+                WHERE user_id = ?
                 """,
-                (int(active), now, normalized),
+                (int(active), now, user_id),
             )
             if cursor.rowcount != 1:
                 connection.rollback()
@@ -489,14 +619,10 @@ class AnalyticsAuthStore:
                     """
                     UPDATE analytics_sessions
                     SET revoked_at = ?
-                    WHERE user_id = (
-                        SELECT user_id
-                        FROM analytics_users
-                        WHERE username_normalized = ?
-                    )
+                    WHERE user_id = ?
                       AND revoked_at IS NULL
                     """,
-                    (now, normalized),
+                    (now, user_id),
                 )
             connection.commit()
 
@@ -566,10 +692,16 @@ class AnalyticsAuthStore:
         username: str,
         password: str,
         required_role: str | None = None,
+        required_company_id: str | None = None,
         remote_address: str | None = None,
     ) -> AuthenticatedSession | None:
         if required_role is not None and required_role not in VALID_ROLES:
             raise ValueError("Unsupported required analytics role")
+        normalized_company = (
+            required_company_id.strip().casefold() if required_company_id else None
+        )
+        if normalized_company is not None and required_role != COMPANY_USER:
+            raise ValueError("Company-bound authentication requires company_user role")
         try:
             normalized = _normalize_username(username)
         except ValueError:
@@ -577,14 +709,19 @@ class AnalyticsAuthStore:
         now = self._now()
         with self._lock, self._connection() as connection:
             connection.execute("BEGIN IMMEDIATE")
-            row = connection.execute(
-                """
-                SELECT *
-                FROM analytics_users
-                WHERE username_normalized = ?
-                """,
-                (normalized,),
-            ).fetchone()
+            clauses = ["username_normalized = ?"]
+            values: list[str] = [normalized]
+            if required_role is not None:
+                clauses.append("role = ?")
+                values.append(required_role)
+            if normalized_company is not None:
+                clauses.append("company_id = ?")
+                values.append(normalized_company)
+            rows = connection.execute(
+                f"SELECT * FROM analytics_users WHERE {' AND '.join(clauses)}",
+                values,
+            ).fetchall()
+            row = rows[0] if len(rows) == 1 else None
             candidate_hash = (
                 row["password_hash"] if row is not None else self._dummy_password_hash
             )

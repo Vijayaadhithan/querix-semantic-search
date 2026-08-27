@@ -71,6 +71,7 @@ class TenantServicePool:
         self.embedding_warmup: dict[str, Any] = {}
         self._services: OrderedDict[str, ProductSearchService] = OrderedDict()
         self._retired_services: list[tuple[float, ProductSearchService]] = []
+        self._service_failures: dict[str, str] = {}
         self._lock = threading.Lock()
         self._reload_lock = threading.Lock()
 
@@ -185,12 +186,17 @@ class TenantServicePool:
                 self._services.move_to_end(company_id)
                 service = existing
             else:
-                resolved = resolve_generation(self.registry.get(company_id))
-                service = self._build_service(
-                    resolved.profile,
-                    generation=resolved.generation,
-                    generation_slot=resolved.slot,
-                )
+                try:
+                    resolved = resolve_generation(self.registry.get(company_id))
+                    service = self._build_service(
+                        resolved.profile,
+                        generation=resolved.generation,
+                        generation_slot=resolved.slot,
+                    )
+                except Exception as exc:
+                    self._service_failures[company_id] = type(exc).__name__
+                    raise
+                self._service_failures.pop(company_id, None)
                 self._services[company_id] = service
                 while len(self._services) > self.max_services:
                     _evicted_id, evicted = self._services.popitem(last=False)
@@ -198,6 +204,35 @@ class TenantServicePool:
         for item in closable:
             item.close()
         return service
+
+    def readiness_checks(self) -> dict[str, dict[str, Any]]:
+        """Check loaded tenants without turning readiness into an engine loader."""
+        with self._lock:
+            loaded = dict(self._services)
+            failures = dict(self._service_failures)
+        checks: dict[str, dict[str, Any]] = {}
+        for company_id in self.registry.profiles:
+            service = loaded.get(company_id)
+            if service is None:
+                error_type = failures.get(company_id)
+                checks[company_id] = {
+                    "ok": error_type is None,
+                    "loaded": False,
+                    **({"error_type": error_type} if error_type else {}),
+                }
+                continue
+            try:
+                checks[company_id] = {
+                    **service.readiness(),
+                    "loaded": True,
+                }
+            except Exception as exc:
+                checks[company_id] = {
+                    "ok": False,
+                    "loaded": True,
+                    "error_type": type(exc).__name__,
+                }
+        return checks
 
     def _retire_locked(self, service: ProductSearchService) -> None:
         # ``get`` returns before the request increments the service's active

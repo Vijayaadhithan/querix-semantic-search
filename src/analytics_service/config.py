@@ -51,7 +51,6 @@ class AnalyticsSettings:
     cors_origins: tuple[str, ...]
     query_page_size: int
     query_max_page_size: int
-    session_cookie_name: str = "querix_analytics_session"
     session_ttl_seconds: int = 28_800
     company_session_cookie_name: str = "__Host-querix_company_analytics"
     internal_session_cookie_name: str = "__Host-querix_internal_analytics"
@@ -104,10 +103,6 @@ class AnalyticsSettings:
                 "credentialed sessions are enabled"
             )
         cookie_names = {
-            "session_cookie_name": os.getenv(
-                "ANALYTICS_SESSION_COOKIE_NAME",
-                "querix_analytics_session",
-            ).strip(),
             "company_session_cookie_name": os.getenv(
                 "ANALYTICS_COMPANY_SESSION_COOKIE_NAME",
                 "__Host-querix_company_analytics",
@@ -122,7 +117,7 @@ class AnalyticsSettings:
                 raise ValueError(f"{field_name} is invalid")
         if len(set(cookie_names.values())) != len(cookie_names):
             raise ValueError(
-                "Analytics legacy, company, and internal cookie names must be distinct"
+                "Analytics company and internal cookie names must be distinct"
             )
         session_ttl = int(os.getenv("ANALYTICS_SESSION_TTL_SECONDS", "28800"))
         company_idle = int(
@@ -180,7 +175,6 @@ class AnalyticsSettings:
             cors_origins=cors_origins,
             query_page_size=page_size,
             query_max_page_size=max_page_size,
-            session_cookie_name=cookie_names["session_cookie_name"],
             session_ttl_seconds=session_ttl,
             company_session_cookie_name=cookie_names["company_session_cookie_name"],
             internal_session_cookie_name=cookie_names["internal_session_cookie_name"],
@@ -467,6 +461,7 @@ class AnalyticsRegistry:
         }
         if len(self._endpoints) != len(self._companies):
             raise ValueError("Analytics company endpoint slugs must be unique")
+        self._validate_dataset_isolation()
         self._key_owners: dict[str, str] = {}
         for company in self._companies.values():
             for env_name in company.api_key_envs:
@@ -481,6 +476,36 @@ class AnalyticsRegistry:
                         f"{company.company_id!r} share an analytics API key"
                     )
                 self._key_owners[digest] = company.company_id
+
+    @staticmethod
+    def _database_identity(target: DatabaseTarget) -> tuple[str, str, int, str, str]:
+        return (
+            target.backend,
+            target.host.casefold(),
+            target.port,
+            target.database,
+            target.schema if target.backend == "postgres" else "",
+        )
+
+    def _validate_dataset_isolation(self) -> None:
+        owners: dict[tuple[str, str, int, str, str, str], tuple[str, str]] = {}
+        for company in self._companies.values():
+            for dataset_name, mapping in company.datasets.items():
+                target = (
+                    company.telemetry_database
+                    if dataset_name == "api_usage"
+                    else company.database
+                )
+                identity = (*self._database_identity(target), mapping.table)
+                existing = owners.get(identity)
+                if existing is not None and existing[0] != company.company_id:
+                    raise ValueError(
+                        f"Analytics companies {existing[0]!r} and "
+                        f"{company.company_id!r} share dataset table "
+                        f"{mapping.table!r} ({existing[1]!r} and "
+                        f"{dataset_name!r})"
+                    )
+                owners[identity] = (company.company_id, dataset_name)
 
     @property
     def companies(self) -> dict[str, CompanyAnalyticsConfig]:

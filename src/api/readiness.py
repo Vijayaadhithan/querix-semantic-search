@@ -20,15 +20,7 @@ def readiness_response(application: FastAPI) -> JSONResponse:
         checks: dict[str, Any] = {}
         if tenant_mode:
             pool = application.state.tenant_service_pool
-            for company_id in registry.profiles:
-                try:
-                    checks[company_id] = pool.get(company_id).readiness()
-                except Exception as exc:
-                    checks[company_id] = {
-                        "ok": False,
-                        "components": {},
-                        "error_type": type(exc).__name__,
-                    }
+            checks.update(pool.readiness_checks())
         else:
             checks["legacy"] = application.state.search_service.readiness()
 

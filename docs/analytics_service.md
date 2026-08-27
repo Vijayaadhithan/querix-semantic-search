@@ -229,7 +229,7 @@ GET /api/v1/{company}/analytics/status
 Role-specific browser authentication endpoints:
 
 ```text
-POST /api/v1/analytics/company/auth/login
+POST /api/v1/{company}/analytics/auth/login
 GET  /api/v1/analytics/company/auth/me
 POST /api/v1/analytics/company/auth/logout
 
@@ -238,14 +238,9 @@ GET  /api/v1/analytics/internal/auth/me
 POST /api/v1/analytics/internal/auth/logout
 ```
 
-The following shared endpoints are deprecated but remain available during the
-frontend rollout:
-
-```text
-POST /api/v1/analytics/auth/login
-GET  /api/v1/analytics/auth/me
-POST /api/v1/analytics/auth/logout
-```
+Company login resolves the endpoint before password verification and accepts
+only a `company_user` bound to that company. Shared legacy authentication paths
+are intentionally unavailable.
 
 Internal endpoints require an `internal_admin` analytics session:
 
@@ -361,8 +356,12 @@ Change an analytics password through the hidden interactive prompt:
 ```console
 docker compose run --rm analytics-api \
   python -m analytics_service.users set-password \
-    --username <analytics-username>
+    --username <analytics-username> \
+    --company acme
 ```
+
+Use `--company` for company users when changing passwords or active status.
+Omit it only for an internal-admin account.
 
 The plaintext password is never stored in `.env` or `.env.keys`. Changing it
 updates the salted hash in `storage/analytics/snapshots.sqlite3` and revokes
@@ -452,7 +451,7 @@ Browser login example:
 curl -c /tmp/querix-analytics-cookies \
   -H "Content-Type: application/json" \
   -d '{"username":"acme-owner","password":"your password"}' \
-  http://127.0.0.1:8010/api/v1/analytics/company/auth/login
+  http://127.0.0.1:8010/api/v1/acme/analytics/auth/login
 
 curl -b /tmp/querix-analytics-cookies \
   http://127.0.0.1:8010/api/v1/acme/analytics/dashboard

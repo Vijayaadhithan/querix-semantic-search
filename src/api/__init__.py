@@ -326,6 +326,10 @@ def create_app(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except ExpiredCursorError as exc:
             raise HTTPException(status_code=410, detail=str(exc)) from exc
+        except HTTPException:
+            # Authentication, authorization, validation, and rate limits are
+            # expected client outcomes, not backend system failures.
+            raise
         except SearchCapacityError as exc:
             record_processing_failure(exc)
             raise HTTPException(

@@ -322,6 +322,27 @@ def test_tenant_profiles_reject_shared_company_search_table(
         discover_tenant_profiles(tmp_path)
 
 
+def test_tenant_profiles_reject_shared_company_result_table(
+    tmp_path,
+    monkeypatch,
+):
+    for company in ("alpha", "beta"):
+        write_profile(tmp_path, company)
+        set_database_environment(monkeypatch, company)
+    beta_path = tmp_path / "beta.yaml"
+    beta_path.write_text(
+        beta_path.read_text(encoding="utf-8").replace(
+            "search_ready_table: search_ready",
+            "search_ready_table: beta_search_ready",
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("BETA_DB_NAME", "db_alpha")
+
+    with pytest.raises(ValueError, match="share a company result-data table"):
+        discover_tenant_profiles(tmp_path)
+
+
 def test_postgres_company_profile_is_supported(tmp_path, monkeypatch):
     write_profile(
         tmp_path,

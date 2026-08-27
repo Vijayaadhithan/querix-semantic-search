@@ -110,7 +110,6 @@ def portal_app(tmp_path):
         cors_origins=(ALLOWED_ORIGIN,),
         query_page_size=50,
         query_max_page_size=200,
-        session_cookie_name=LEGACY_COOKIE,
         company_session_cookie_name=COMPANY_COOKIE,
         internal_session_cookie_name=INTERNAL_COOKIE,
         company_session_idle_seconds=86_400,
@@ -162,8 +161,13 @@ def login(
     username: str,
     password: str,
 ):
+    path = (
+        "/api/v1/gainr/analytics/auth/login"
+        if portal == "company"
+        else "/api/v1/analytics/internal/auth/login"
+    )
     return client.post(
-        f"/api/v1/analytics/{portal}/auth/login",
+        path,
         headers={"Origin": ALLOWED_ORIGIN},
         json={"username": username, "password": password},
     )
@@ -295,8 +299,16 @@ def test_role_mismatch_invalid_credentials_origin_and_preflight(portal_app):
             "test-company-user",
             COMPANY_PASSWORD,
         )
+        wrong_company = client.post(
+            "/api/v1/acme/analytics/auth/login",
+            headers={"Origin": ALLOWED_ORIGIN},
+            json={
+                "username": "test-company-user",
+                "password": COMPANY_PASSWORD,
+            },
+        )
         disallowed_origin = client.post(
-            "/api/v1/analytics/company/auth/login",
+            "/api/v1/gainr/analytics/auth/login",
             headers={"Origin": "https://untrusted.test"},
             json={
                 "username": "test-company-user",
@@ -304,7 +316,7 @@ def test_role_mismatch_invalid_credentials_origin_and_preflight(portal_app):
             },
         )
         preflight = client.options(
-            "/api/v1/analytics/company/auth/login",
+            "/api/v1/gainr/analytics/auth/login",
             headers={
                 "Origin": ALLOWED_ORIGIN,
                 "Access-Control-Request-Method": "POST",
@@ -324,6 +336,9 @@ def test_role_mismatch_invalid_credentials_origin_and_preflight(portal_app):
     assert wrong_role_company.json() == expected
     assert wrong_role_internal.status_code == 401
     assert wrong_role_internal.json() == expected
+    assert wrong_company.status_code == 401
+    assert wrong_company.json() == expected
+    assert COMPANY_COOKIE not in wrong_company.headers.get("set-cookie", "")
     assert disallowed_origin.status_code == 403
     assert preflight.status_code == 200
     assert preflight.headers["access-control-allow-origin"] == ALLOWED_ORIGIN
@@ -580,7 +595,10 @@ def test_existing_session_table_is_migrated_additively(tmp_path):
                 created_at TEXT NOT NULL,
                 expires_at TEXT NOT NULL,
                 last_seen_at TEXT NOT NULL,
-                revoked_at TEXT
+                revoked_at TEXT,
+                FOREIGN KEY (user_id)
+                    REFERENCES analytics_users(user_id)
+                    ON DELETE CASCADE
             );
             """
         )
@@ -627,6 +645,12 @@ def test_existing_session_table_is_migrated_additively(tmp_path):
             for row in connection.execute("PRAGMA table_info(analytics_sessions)")
         }
         row = connection.execute("SELECT * FROM analytics_sessions").fetchone()
+        user = connection.execute("SELECT * FROM analytics_users").fetchone()
+        indexes = {
+            item["name"]
+            for item in connection.execute("PRAGMA index_list(analytics_users)")
+        }
+        foreign_key_errors = connection.execute("PRAGMA foreign_key_check").fetchall()
     assert {
         "portal_type",
         "role",
@@ -640,6 +664,32 @@ def test_existing_session_table_is_migrated_additively(tmp_path):
     assert row["company_id"] == "gainr"
     assert row["idle_expires_at"] == row["expires_at"]
     assert row["absolute_expires_at"] == row["expires_at"]
+    assert user is not None
+    assert user["user_id"] == "legacy-user-id"
+    assert "uq_analytics_company_username" in indexes
+    assert "uq_analytics_internal_username" in indexes
+    assert foreign_key_errors == []
+
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            """
+            CREATE TRIGGER scoped_user_schema_marker
+            AFTER UPDATE ON analytics_users
+            BEGIN
+                SELECT 1;
+            END
+            """
+        )
+    AnalyticsAuthStore(path)
+    with sqlite3.connect(path) as connection:
+        marker = connection.execute(
+            """
+            SELECT name
+            FROM sqlite_master
+            WHERE type = 'trigger' AND name = 'scoped_user_schema_marker'
+            """
+        ).fetchone()
+    assert marker is not None
 
 
 def test_auth_store_failure_fails_closed(portal_app):
@@ -680,7 +730,7 @@ def test_auth_store_failure_fails_closed(portal_app):
     assert failed_resolution.status_code == 503
 
 
-def test_legacy_auth_endpoints_remain_compatible(portal_app):
+def test_shared_legacy_auth_endpoints_are_not_available(portal_app):
     app, _, _ = portal_app
     with TestClient(app, base_url="https://api.test") as client:
         legacy_login = client.post(
@@ -691,18 +741,7 @@ def test_legacy_auth_endpoints_remain_compatible(portal_app):
                 "password": COMPANY_PASSWORD,
             },
         )
-        cookies = legacy_login.headers.get_list("set-cookie")
-        assert legacy_login.status_code == 200
-        assert any(value.startswith(f"{LEGACY_COOKIE}=") for value in cookies)
-        assert any(value.startswith(f"{COMPANY_COOKIE}=") for value in cookies)
-        assert client.get("/api/v1/analytics/auth/me").status_code == 200
-        assert client.get("/api/v1/gainr/analytics/dashboard").status_code == 200
-        assert (
-            client.post(
-                "/api/v1/analytics/auth/logout",
-                headers={"Origin": ALLOWED_ORIGIN},
-            ).status_code
-            == 200
-        )
-        assert client.get("/api/v1/analytics/auth/me").status_code == 401
+        assert legacy_login.status_code == 404
+        assert client.get("/api/v1/analytics/auth/me").status_code == 404
+        assert client.post("/api/v1/analytics/auth/logout").status_code == 404
         assert client.get("/api/v1/gainr/analytics/dashboard").status_code == 401
