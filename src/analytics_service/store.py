@@ -119,9 +119,6 @@ class AnalyticsSnapshotStore:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
-        self._activity_cache: dict[
-            tuple[str, str, bool], tuple[dict[str, Any], ...]
-        ] = {}
         self._facet_cache: dict[tuple[str, str, bool], dict[str, Any]] = {}
         self._initialize()
 
@@ -134,11 +131,10 @@ class AnalyticsSnapshotStore:
         """Return only the fields used to calculate dashboard activity views.
 
         Query Explorer responses retain the complete, audience-specific payload in
-        SQLite.  Keeping those full decoded payloads in the dashboard cache is
-        disproportionately expensive: a large nested JSON document becomes many
-        Python objects for every historical request.  This compact projection
-        preserves the dashboard/filter contract without retaining query text,
-        enrichment, flags, or unused telemetry in the long-lived cache.
+        SQLite. A large nested JSON document becomes many Python objects, so this
+        short-lived projection preserves the dashboard/filter contract without
+        carrying query text, enrichment, flags, or unused telemetry through the
+        aggregation step.
         """
         payload = json.loads(payload_json)
         filters = dict(payload.get("filters") or {})
@@ -451,11 +447,6 @@ class AnalyticsSnapshotStore:
                 connection.rollback()
                 raise
         with self._lock:
-            self._activity_cache = {
-                key: value
-                for key, value in self._activity_cache.items()
-                if key[0] != company_id
-            }
             self._facet_cache = {
                 key: value
                 for key, value in self._facet_cache.items()
@@ -509,11 +500,6 @@ class AnalyticsSnapshotStore:
             if snapshot is None:
                 return ()
             version = str(snapshot["active_version"])
-            cache_key = (company_id, version, internal)
-            with self._lock:
-                cached = self._activity_cache.get(cache_key)
-            if cached is not None:
-                return cached
             rows = connection.execute(
                 f"""
                 SELECT records.{field} AS payload_json
@@ -523,14 +509,19 @@ class AnalyticsSnapshotStore:
                 ORDER BY records.created_at ASC, records.request_id ASC
                 """,
                 (company_id, version),
-            ).fetchall()
-        records = tuple(
-            self._dashboard_activity_record(row["payload_json"], internal=internal)
-            for row in rows
-        )
-        with self._lock:
-            self._activity_cache[cache_key] = records
-        return records
+            )
+            # Iterate the SQLite cursor instead of fetchall(). The internal
+            # payloads are much larger than the compact dashboard projection;
+            # retaining every JSON string while decoding every record causes a
+            # large transient allocation and pushes the constrained analytics
+            # container into swap.
+            return tuple(
+                self._dashboard_activity_record(
+                    row["payload_json"],
+                    internal=internal,
+                )
+                for row in rows
+            )
 
     def query_records(
         self,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
+from functools import lru_cache
 from typing import Any
 
 from fastapi import (
@@ -82,6 +83,30 @@ def create_app(
         )
         for company in active_registry.companies.values()
     }
+
+    @lru_cache(maxsize=32)
+    def cached_dashboard_activity(
+        company_id: str,
+        generated_at: str,
+        internal: bool,
+        filters: DashboardFilters,
+        timezone_name: str,
+        time_bucket: datetime | None,
+    ) -> dict[str, Any]:
+        del generated_at
+        return build_dashboard_overview(
+            list(
+                active_store.dashboard_activity_records(
+                    company_id,
+                    internal=internal,
+                )
+            ),
+            internal=internal,
+            filters=filters,
+            timezone_name=timezone_name,
+            now=time_bucket,
+        )
+
     application = FastAPI(
         title="Company Analytics API",
         version="1.0.0",
@@ -352,16 +377,26 @@ def create_app(
                 ),
             )
         try:
-            activity = build_dashboard_overview(
-                list(
-                    active_store.dashboard_activity_records(
-                        company.company_id,
-                        internal=internal,
-                    )
+            # Fixed rolling periods depend on the current time. A minute bucket
+            # keeps their boundary current while still coalescing repeated UI
+            # loads. Snapshot identity invalidates every cached result after a
+            # refresh without retaining decoded per-query records in memory.
+            time_bucket = (
+                datetime.now(UTC).replace(second=0, microsecond=0)
+                if filters.period in {"24h", "7d", "30d", "90d"}
+                else None
+            )
+            activity = cached_dashboard_activity(
+                company.company_id,
+                str(
+                    dict(dashboard.get("snapshot") or {}).get("generated_at")
+                    or dict(dashboard.get("metadata") or {}).get("generated_at")
+                    or "unknown"
                 ),
-                internal=internal,
-                filters=filters,
-                timezone_name=company.timezone,
+                internal,
+                filters,
+                company.timezone,
+                time_bucket,
             )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc

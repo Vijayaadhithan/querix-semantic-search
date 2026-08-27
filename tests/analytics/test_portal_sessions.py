@@ -44,6 +44,7 @@ class MutableClock:
 class StubSnapshotStore:
     def __init__(self):
         self.last_query_kwargs = None
+        self.dashboard_activity_calls = 0
 
     def company_status(self, company_id: str):
         return {
@@ -63,6 +64,7 @@ class StubSnapshotStore:
         }
 
     def dashboard_activity_records(self, company_id: str, *, internal: bool):
+        self.dashboard_activity_calls += 1
         return ()
 
     def query_records(self, company_id: str, **kwargs):
@@ -165,6 +167,26 @@ def login(
         headers={"Origin": ALLOWED_ORIGIN},
         json={"username": username, "password": password},
     )
+
+
+def test_repeated_dashboard_load_reuses_snapshot_activity(portal_app):
+    app, _, snapshot_store = portal_app
+    with TestClient(app, base_url="https://api.test") as client:
+        response = login(
+            client,
+            "company",
+            "test-company-user",
+            COMPANY_PASSWORD,
+        )
+        assert response.status_code == 200
+
+        first = client.get("/api/v1/gainr/analytics/dashboard")
+        second = client.get("/api/v1/gainr/analytics/dashboard")
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.json() == second.json()
+    assert snapshot_store.dashboard_activity_calls == 1
 
 
 def test_role_logins_set_only_their_secure_host_cookie(portal_app):
