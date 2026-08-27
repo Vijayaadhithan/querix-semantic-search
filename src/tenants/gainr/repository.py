@@ -1,8 +1,10 @@
 import json
 import logging
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
+from functools import wraps
 from typing import Any
 
 from core.tenant_config import TenantProfile
@@ -21,6 +23,37 @@ from tenants.gainr.models import (
 )
 
 logger = logging.getLogger("uvicorn.error")
+
+_TRANSIENT_MYSQL_READ_ERROR_CODES = {2006, 2013}
+
+
+def _transient_mysql_read_error_code(exc: Exception) -> int | None:
+    """Return a retryable disconnect code without hiding other SQL failures."""
+    if exc.__class__.__name__ != "OperationalError" or not exc.args:
+        return None
+    code = exc.args[0]
+    return code if code in _TRANSIENT_MYSQL_READ_ERROR_CODES else None
+
+
+def retry_transient_mysql_read(method):
+    """Retry one idempotent Gainr read after MySQL drops its socket mid-query."""
+
+    @wraps(method)
+    def wrapped(self, *args, **kwargs):
+        try:
+            return method(self, *args, **kwargs)
+        except Exception as exc:
+            error_code = _transient_mysql_read_error_code(exc)
+            if error_code is None:
+                raise
+            logger.warning(
+                "Gainr MySQL read retry operation=%s error_code=%s attempt=2/2",
+                method.__name__,
+                error_code,
+            )
+            return method(self, *args, **kwargs)
+
+    return wrapped
 
 
 class GainrDatabaseRepository:
@@ -58,6 +91,11 @@ class GainrDatabaseRepository:
         self.serves_cards_from_search_ready = (
             self.profile.compatibility.serves_cards_from_search_ready
         )
+        # Keep the extra count/page connection bounded under a request burst.
+        # Other searches fall back to one sequential connection immediately.
+        self._parallel_catalog_slots = threading.BoundedSemaphore(
+            min(2, max(1, self.config.pool_max_size // 2))
+        )
         self._users_table_available: bool | None = None
 
     @contextmanager
@@ -81,6 +119,7 @@ class GainrDatabaseRepository:
         with self.connection() as active_connection:
             yield active_connection
 
+    @retry_transient_mysql_read
     def suggestions(self, term: str, limit: int) -> list[str]:
         prefix = f"{term}%"
         if self.serves_cards_from_search_ready:
@@ -122,6 +161,7 @@ class GainrDatabaseRepository:
             )
             return [str(row["value"]) for row in cursor.fetchall() if row.get("value")]
 
+    @retry_transient_mysql_read
     def filter_data(self, city_id: int) -> tuple[list[str], list[dict]]:
         with self.connection() as connection, connection.cursor() as cursor:
             cursor.execute(
@@ -334,6 +374,7 @@ class GainrDatabaseRepository:
             params.extend((contains, contains))
         return " AND ".join(conditions), params
 
+    @retry_transient_mysql_read
     def search_catalog(
         self,
         resolved_filters: dict,
@@ -367,8 +408,8 @@ class GainrDatabaseRepository:
         }.get(sort_order, "sr.updated_at DESC, sr.id DESC")
         offset = (page - 1) * page_size
 
-        if self.serves_cards_from_search_ready:
-            with self.connection() as connection, connection.cursor() as cursor:
+        def fetch_search_ready_total(connection) -> int:
+            with connection.cursor() as cursor:
                 cursor.execute(
                     f"""
                     SELECT COUNT(*) AS total
@@ -377,7 +418,10 @@ class GainrDatabaseRepository:
                     """,
                     params,
                 )
-                total = int(cursor.fetchone()["total"])
+                return int(cursor.fetchone()["total"])
+
+        def fetch_search_ready_rows(connection) -> list[dict]:
+            with connection.cursor() as cursor:
                 cursor.execute(
                     f"""
                     SELECT sr.*,
@@ -390,7 +434,39 @@ class GainrDatabaseRepository:
                     """,
                     (*params, page_size, offset),
                 )
-                rows = list(cursor.fetchall())
+                return list(cursor.fetchall())
+
+        def run_with_connection(fetcher):
+            with self.connection() as connection:
+                return fetcher(connection)
+
+        if self.serves_cards_from_search_ready:
+            parallel = self.database_pool is not None and (
+                self._parallel_catalog_slots.acquire(blocking=False)
+            )
+            try:
+                if parallel:
+                    with ThreadPoolExecutor(
+                        max_workers=2,
+                        thread_name_prefix="gainr-catalog",
+                    ) as executor:
+                        total_future = executor.submit(
+                            run_with_connection,
+                            fetch_search_ready_total,
+                        )
+                        rows_future = executor.submit(
+                            run_with_connection,
+                            fetch_search_ready_rows,
+                        )
+                        total = total_future.result()
+                        rows = rows_future.result()
+                else:
+                    with self.connection() as connection:
+                        total = fetch_search_ready_total(connection)
+                        rows = fetch_search_ready_rows(connection)
+            finally:
+                if parallel:
+                    self._parallel_catalog_slots.release()
             self._attach_search_ready_relations(rows)
             return rows, total
 
@@ -418,10 +494,6 @@ class GainrDatabaseRepository:
                 )
                 return list(cursor.fetchall())
 
-        def run_with_connection(fetcher):
-            with self.connection() as connection:
-                return fetcher(connection)
-
         if self.database_pool is not None:
             with ThreadPoolExecutor(
                 max_workers=2,
@@ -444,6 +516,7 @@ class GainrDatabaseRepository:
         self._attach_attributes(rows)
         return rows, total
 
+    @retry_transient_mysql_read
     def count_filter_variants(
         self,
         variants: dict[str, tuple[dict, GainrSearchFilter, set[str] | None]],
@@ -480,6 +553,7 @@ class GainrDatabaseRepository:
                 counts[label] = int(cursor.fetchone()["total"])
         return counts
 
+    @retry_transient_mysql_read
     def hydrate_filtered(
         self,
         product_ids: list[Any],
@@ -535,6 +609,7 @@ class GainrDatabaseRepository:
                 self._attach_attributes(ordered, connection=connection)
         return ordered
 
+    @retry_transient_mysql_read
     def hydrate_ranked_page(
         self,
         product_ids: list[Any],
