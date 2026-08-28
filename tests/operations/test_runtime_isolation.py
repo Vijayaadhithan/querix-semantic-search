@@ -87,6 +87,8 @@ def test_service_envs_keep_secrets_inside_their_workloads(tmp_path):
     assert "GAINR_API_KEY" not in ingestion
 
     assert telemetry["MYSQL_PASSWORD"] == "telemetry-pass"
+    assert telemetry["PGVECTOR_DATABASE"] == "vectors"
+    assert telemetry["PGVECTOR_USER"] == "vector_search"
     assert set(telemetry).isdisjoint(
         {"API_ADMIN_KEY", "GAINR_API_KEY", "OPENROUTER_API_KEY", "PGVECTOR_PASSWORD"}
     )

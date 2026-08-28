@@ -240,6 +240,14 @@ def build_service_environments(
         prefixes=("MYSQL_", "SEARCH_ANALYTICS_", "GAINR_DB_TLS_"),
     )
     _copy(telemetry, values, "API_TENANT_CONFIG_DIR")
+    _copy(telemetry, values, "PGVECTOR_DATABASE")
+    _alias(
+        telemetry,
+        values,
+        "PGVECTOR_USER",
+        "PGVECTOR_SEARCH_USER",
+        "PGVECTOR_USER",
+    )
     _mysql_alias(
         telemetry,
         values,
