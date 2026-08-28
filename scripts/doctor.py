@@ -169,17 +169,7 @@ def check_bm25(profile=None) -> bool:
 def check_search_analytics(profile=None) -> bool:
     if profile is None or not profile.analytics.enabled:
         return report("Search analytics", True, "disabled")
-    try:
-        status = search_analytics_schema_status(
-            profile.database,
-            search_history_table=profile.analytics.search_history_table,
-            api_usage_table=profile.analytics.api_usage_table,
-        )
-    except Exception as exc:
-        return report("Search analytics", False, type(exc).__name__)
-    missing = [table for table, present in status.items() if not present]
-    detail = "history and API usage tables ready"
-    if not missing and SEARCH_ANALYTICS_DELIVERY_MODE == "daily_spool":
+    if SEARCH_ANALYTICS_DELIVERY_MODE == "daily_spool":
         try:
             spool = search_analytics_spool_status(
                 SEARCH_ANALYTICS_SPOOL_PATH,
@@ -191,12 +181,24 @@ def check_search_analytics(profile=None) -> bool:
                 False,
                 f"daily spool {type(exc).__name__}",
             )
-        detail += (
-            f"; delivery=daily_spool pending={spool['pending']} "
-            f"bytes={spool['spool_bytes']}"
+        return report(
+            "Search analytics",
+            True,
+            (
+                f"delivery=daily_spool pending={spool['pending']} "
+                f"bytes={spool['spool_bytes']}"
+            ),
         )
-    elif not missing:
-        detail += "; delivery=immediate"
+    try:
+        status = search_analytics_schema_status(
+            profile.database,
+            search_history_table=profile.analytics.search_history_table,
+            api_usage_table=profile.analytics.api_usage_table,
+        )
+    except Exception as exc:
+        return report("Search analytics", False, type(exc).__name__)
+    missing = [table for table, present in status.items() if not present]
+    detail = "history and API usage tables ready; delivery=immediate"
     return report(
         "Search analytics",
         not missing,

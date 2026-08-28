@@ -1,12 +1,11 @@
 services:
   api:
+    image: ${API_IMAGE_NAME:-personal-rag-api}:${API_IMAGE_TAG:-local}
     build:
       context: .
     env_file:
-      - path: .env
+      - path: .runtime/env/api.env
         required: true
-      - path: .env.keys
-        required: false
     environment:
       API_HOST: 0.0.0.0
       API_PORT: 8000
@@ -17,10 +16,13 @@ services:
       PGVECTOR_PORT: 5432
       API_TENANT_ENGINE_CACHE_SIZE: ${API_TENANT_ENGINE_CACHE_SIZE:-3}
       API_TENANT_MAX_CONCURRENT_SEARCHES: ${API_TENANT_MAX_CONCURRENT_SEARCHES:-1}
+      SEARCH_ANALYTICS_SPOOL_PATH: /app/storage/search-runtime/search_analytics_spool.sqlite3
+      USAGE_DB_PATH: /app/storage/search-runtime/usage.sqlite3
     ports:
       - "127.0.0.1:${API_PORT:-8000}:8000"
     volumes:
-      - ./storage:/app/storage
+      - ./storage/companies:/app/storage/companies
+      - ./storage/search-runtime:/app/storage/search-runtime
       - ./configs/tenants:/app/configs/tenants:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -46,10 +48,8 @@ services:
       context: .
       dockerfile: Dockerfile.analytics
     env_file:
-      - path: .env
+      - path: .runtime/env/analytics-api.env
         required: true
-      - path: .env.keys
-        required: false
     environment:
       ANALYTICS_API_HOST: 0.0.0.0
       ANALYTICS_API_PORT: 8010
@@ -59,7 +59,7 @@ services:
     ports:
       - "127.0.0.1:${ANALYTICS_API_PORT:-8010}:8010"
     volumes:
-      - ./storage:/app/storage
+      - ./storage/analytics:/app/storage/analytics
       - ./configs/tenants:/app/configs/tenants:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -84,10 +84,8 @@ services:
       - -c
       - effective_cache_size=5GB
     env_file:
-      - path: .env
+      - path: .runtime/env/pgvector.env
         required: true
-      - path: .env.keys
-        required: false
     environment:
       POSTGRES_DB: ${PGVECTOR_DATABASE:?set PGVECTOR_DATABASE}
     volumes:
@@ -109,6 +107,71 @@ services:
         max-size: 20m
         max-file: "5"
     restart: unless-stopped
+
+  ingestion:
+    image: ${API_IMAGE_NAME:-personal-rag-api}:${API_IMAGE_TAG:-local}
+    profiles:
+      - operations
+    env_file:
+      - path: .runtime/env/ingestion.env
+        required: true
+    environment:
+      OLLAMA_BASE_URL: ${DOCKER_OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      MYSQL_HOST: ${DOCKER_MYSQL_HOST:-host.docker.internal}
+      PGVECTOR_HOST: pgvector
+      PGVECTOR_PORT: 5432
+      SHADOW_INGEST_API_URL: http://api:8000
+    volumes:
+      - ./storage/companies:/app/storage/companies
+      - ./configs/tenants:/app/configs/tenants:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    mem_limit: 1g
+    pids_limit: 256
+    init: true
+    security_opt:
+      - no-new-privileges:true
+
+  telemetry-uploader:
+    image: ${API_IMAGE_NAME:-personal-rag-api}:${API_IMAGE_TAG:-local}
+    profiles:
+      - operations
+    env_file:
+      - path: .runtime/env/telemetry.env
+        required: true
+    environment:
+      MYSQL_HOST: ${DOCKER_MYSQL_HOST:-host.docker.internal}
+      SEARCH_ANALYTICS_SPOOL_PATH: /app/storage/search-runtime/search_analytics_spool.sqlite3
+    volumes:
+      - ./storage/search-runtime:/app/storage/search-runtime
+      - ./configs/tenants:/app/configs/tenants:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    mem_limit: 512m
+    pids_limit: 128
+    init: true
+    security_opt:
+      - no-new-privileges:true
+
+  database-admin:
+    image: ${API_IMAGE_NAME:-personal-rag-api}:${API_IMAGE_TAG:-local}
+    profiles:
+      - operations
+    env_file:
+      - path: .runtime/env/database-admin.env
+        required: true
+    environment:
+      MYSQL_HOST: ${DOCKER_MYSQL_HOST:-host.docker.internal}
+      PGVECTOR_HOST: pgvector
+      PGVECTOR_PORT: 5432
+    volumes:
+      - ./configs/tenants:/app/configs/tenants:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    pids_limit: 128
+    init: true
+    security_opt:
+      - no-new-privileges:true
 
   redis:
     image: redis:7.4.9-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99

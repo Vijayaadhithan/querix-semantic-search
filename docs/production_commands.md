@@ -11,6 +11,9 @@ The Docker services use `restart: unless-stopped`. When started with `docker com
 Use these commands on the production host from the repository root:
 
 ```bash
+# Refresh ignored per-workload env files after any environment change.
+python3 scripts/render_service_env.py --production
+
 # Start or restore both APIs, pgvector, Redis, and Docker-managed Ollama.
 docker compose --profile ollama up -d
 
@@ -189,13 +192,14 @@ git diff --check
 .venv/bin/ruff check src scripts tests
 .venv/bin/python scripts/check_markdown.py
 .venv/bin/pytest -q
+python3 scripts/render_service_env.py
 docker compose config --quiet
 ```
 
 Commit only after reviewing the files shown by `git status`:
 
 ```bash
-git add -A
+git add <reviewed-paths>
 git status --short
 git commit -m "Harden pgvector production search and deployment"
 git push origin main

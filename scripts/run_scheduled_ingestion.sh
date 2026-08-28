@@ -24,6 +24,7 @@ if ! [[ "$RETRIEVAL_OVERLAP_FLOOR" =~ ^(0(\.[0-9]+)?|1(\.0+)?)$ ]]; then
 fi
 
 cd "$PROJECT_DIR"
+python3 scripts/render_service_env.py --production --check
 # Ingestion has priority over the lightweight hourly job. If a warm-up is
 # already finishing, wait for it instead of treating the daily ingestion as a
 # duplicate and silently skipping the source scan.
@@ -53,7 +54,7 @@ fi
 trap cleanup_container EXIT TERM INT
 
 echo "Starting shadow ingestion for ${COMPANY_ID} at $(date --iso-8601=seconds)."
-docker compose run --rm --no-deps --name "$CONTAINER_NAME" api \
+docker compose run --rm --no-deps --name "$CONTAINER_NAME" ingestion \
   python scripts/run_shadow_ingestion.py \
   --company "$COMPANY_ID" \
   --mysql-batch-size "$MYSQL_BATCH_SIZE" \

@@ -19,6 +19,7 @@ __pycache__/
 # Generated local data at the repository root. Source/test packages named
 # ``storage`` remain tracked.
 /storage/
+/.runtime/
 
 # Private/source documents (keep the directory itself)
 data/raw_docs/*

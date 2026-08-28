@@ -55,4 +55,6 @@ jobs:
       - name: Validate Docker Compose
         run: |
           cp .env.example .env
+          cp .env.keys.example .env.keys
+          python scripts/render_service_env.py
           docker compose config --quiet

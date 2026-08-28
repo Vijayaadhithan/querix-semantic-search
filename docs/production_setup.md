@@ -264,6 +264,8 @@ Protect and verify the files:
 ```bash
 chmod 600 .env.keys
 git check-ignore -v .env .env.keys
+python3 scripts/ensure_service_credentials.py
+python3 scripts/render_service_env.py --production
 ```
 
 Never commit, log, screenshot, or paste populated secret files. Rotate a credential immediately if it is exposed. Changing `POSTGRES_PASSWORD` in the environment does not automatically change the password inside an already initialized PostgreSQL volume; coordinate that rotation inside PostgreSQL.
@@ -290,19 +292,20 @@ fused pgvector/BM25 order, and degraded responses are not cached.
 
 ## 7. Prepare persistent application storage
 
-The host `storage/` directory is mounted into a non-root API container. The image-level ownership does not apply to a host bind mount, so assign it once after building the API image:
+Search indexes, search-owned SQLite state, and analytics snapshots have separate
+bind mounts. The image-level ownership does not apply to host bind mounts, so
+assign each directory once after building the images:
 
 ```bash
-mkdir -p storage
-docker compose run --rm --no-deps --user root api \
-  sh -c 'chown -R app:app /app/storage && chmod -R u+rwX,go-rwx /app/storage'
+mkdir -p storage/companies storage/search-runtime storage/analytics
+python3 scripts/migrate_runtime_storage.py
 ```
 
-Verify the application user can write search and analytics snapshots:
+Verify each application user can write only its mounted storage:
 
 ```bash
 docker compose run --rm --no-deps api \
-  sh -c 'touch /app/storage/.write-test && rm /app/storage/.write-test && echo "Storage is writable"'
+  sh -c 'touch /app/storage/search-runtime/.write-test && rm /app/storage/search-runtime/.write-test && echo "Search storage is writable"'
 docker compose run --rm --no-deps analytics-api \
   sh -c 'mkdir -p /app/storage/analytics && touch /app/storage/analytics/.write-test && rm /app/storage/analytics/.write-test && echo "Analytics storage is writable"'
 ```

@@ -12,6 +12,7 @@ if ! [[ "$ANALYTICS_BATCH_SIZE" =~ ^[1-9][0-9]*$ ]]; then
 fi
 
 cd "$PROJECT_DIR"
+python3 scripts/render_service_env.py --production --check
 exec 9>"$LOCK_FILE"
 if ! flock -n 9; then
   echo "Scheduled analytics is already running for ${COMPANY_ID}."
@@ -19,7 +20,7 @@ if ! flock -n 9; then
 fi
 
 echo "Uploading pending search analytics for ${COMPANY_ID}."
-if ! docker compose run --rm --no-deps api \
+if ! docker compose run --rm --no-deps telemetry-uploader \
   python scripts/flush_search_analytics.py \
     --company "$COMPANY_ID" \
     --batch-size "$ANALYTICS_BATCH_SIZE"; then
