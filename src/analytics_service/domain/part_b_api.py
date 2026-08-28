@@ -240,10 +240,17 @@ def process_part_b(data):
     )
     failure_reasons = Counter()
     total_attempts_count = 0
-    requests_with_fallback = 0
+    any_provider_fallback_requests = 0
+    query_planner_fallback_requests = 0
+    reranker_fallback_requests = 0
+    total_reranking_requests = 0
+    voyage_to_nemotron_rescue_requests = 0
 
     for attempts in api["parsed_attempts"]:
-        has_fallback = False
+        fallback_groups = set()
+        has_reranking_attempt = False
+        voyage_fell_back = False
+        nemotron_rescued = False
         for attempt in attempts:
             if not isinstance(attempt, dict):
                 continue
@@ -252,6 +259,7 @@ def process_part_b(data):
             operation = attempt.get("operation", "unknown")
             model = attempt.get("model", "unknown")
             status = attempt.get("status", "unknown")
+            operation_group = _operation_group(operation)
             latency = attempt.get("duration_ms", 0)
             tokens = attempt.get("total_tokens", 0)
             reason = attempt.get("failure_reason", "")
@@ -263,9 +271,20 @@ def process_part_b(data):
                 provider_stats[provider]["success"] += 1
             elif status == "fallback":
                 provider_stats[provider]["fallback"] += 1
-                has_fallback = True
+                fallback_groups.add(operation_group)
             else:
                 provider_stats[provider]["failure"] += 1
+
+            if operation_group == "reranker":
+                has_reranking_attempt = True
+                if provider == "voyage-2.5" and status == "fallback":
+                    voyage_fell_back = True
+                elif (
+                    provider == "openrouter-nemotron"
+                    and status == "success"
+                    and voyage_fell_back
+                ):
+                    nemotron_rescued = True
 
             operation_stats[operation]["count"] += 1
             operation_stats[operation]["total_latency"] += latency
@@ -296,8 +315,16 @@ def process_part_b(data):
             if reason:
                 failure_reasons[reason] += 1
 
-        if has_fallback:
-            requests_with_fallback += 1
+        if fallback_groups:
+            any_provider_fallback_requests += 1
+        if "llm" in fallback_groups:
+            query_planner_fallback_requests += 1
+        if "reranker" in fallback_groups:
+            reranker_fallback_requests += 1
+        if has_reranking_attempt:
+            total_reranking_requests += 1
+        if nemotron_rescued:
+            voyage_to_nemotron_rescue_requests += 1
 
     # Q28: Provider usage distribution
     provider_usage = {k: v["count"] for k, v in provider_stats.items()}
@@ -328,6 +355,11 @@ def process_part_b(data):
         "success_values": [v["success"] for v in provider_reliability.values()],
         "failure_values": [v["failure"] for v in provider_reliability.values()],
         "fallback_values": [v["fallback"] for v in provider_reliability.values()],
+        "fallback_requests": {
+            "any_provider": any_provider_fallback_requests,
+            "query_planner": query_planner_fallback_requests,
+            "reranker": reranker_fallback_requests,
+        },
         "title": "Provider Reliability (Success/Failure/Fallback)",
         "chart_type": "stacked_bar",
     }
@@ -409,15 +441,23 @@ def process_part_b(data):
     # Q32: Reranking fallback frequency
     rerank_total = operation_stats.get("reranking", {}).get("count", 0)
     voyage_fallbacks = provider_stats.get("voyage-2.5", {}).get("fallback", 0)
-    nemotron_rescues = provider_stats.get("openrouter-nemotron", {}).get("success", 0)
     results["q32_reranking_fallback"] = {
         "total_reranking_calls": rerank_total,
+        "total_reranking_requests": total_reranking_requests,
         "voyage_fallbacks": voyage_fallbacks,
-        "nemotron_rescues": nemotron_rescues,
-        "fallback_rate": round(voyage_fallbacks / rerank_total * 100, 1)
-        if rerank_total > 0
+        "nemotron_rescues": voyage_to_nemotron_rescue_requests,
+        "fallback_rate": round(
+            reranker_fallback_requests / total_reranking_requests * 100,
+            1,
+        )
+        if total_reranking_requests > 0
         else 0,
-        "requests_with_fallback": requests_with_fallback,
+        # Backward-compatible field with corrected reranker-only semantics.
+        "requests_with_fallback": reranker_fallback_requests,
+        "any_provider_fallback_requests": any_provider_fallback_requests,
+        "query_planner_fallback_requests": query_planner_fallback_requests,
+        "reranker_fallback_requests": reranker_fallback_requests,
+        "voyage_to_nemotron_rescue_requests": (voyage_to_nemotron_rescue_requests),
         "title": "Reranking Fallback Analysis",
         "chart_type": "stat",
     }

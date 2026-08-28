@@ -327,6 +327,7 @@ def test_deployed_gainr_filter_payload_is_accepted_and_mapped(tmp_path):
         "rental_duration": ["Per Day"],
     }
     assert search_kwargs["planned_result"]["query_plan"]["sort_order"] == ("price_asc")
+    assert search_kwargs["hydrate_products"] is True
     assert repository.ranked_page_call is not None
     assert response["status"] is True
 
@@ -431,7 +432,7 @@ def test_filter_result_queues_minimized_durable_history(tmp_path):
     }
 
 
-def test_unfiltered_semantic_search_reuses_current_engine_rows(tmp_path):
+def test_unfiltered_semantic_search_defers_to_one_ranked_page_hydration(tmp_path):
     adapter, engine, repository = service(tmp_path)
 
     class RepositoryConfig:
@@ -462,11 +463,15 @@ def test_unfiltered_semantic_search_reuses_current_engine_rows(tmp_path):
             "query_plan": kwargs["planned_result"]["query_plan"],
             "resolved_filters": kwargs["resolved_filters"],
             "unresolved_filters": {},
-            "products": [
-                {"id": 1, "type": "1", "deleted_at": None},
-                {"id": 2, "type": "2", "deleted_at": None},
-                {"id": 3, "type": "1", "deleted_at": "2026-01-01"},
-            ],
+            "products": (
+                [
+                    {"id": 1, "type": "1", "deleted_at": None},
+                    {"id": 2, "type": "2", "deleted_at": None},
+                    {"id": 3, "type": "1", "deleted_at": "2026-01-01"},
+                ]
+                if kwargs["hydrate_products"]
+                else []
+            ),
             "product_ids": [1, 2, 3],
             "query_model_metrics": {},
             "reranker_attempts": [],
@@ -480,9 +485,10 @@ def test_unfiltered_semantic_search_reuses_current_engine_rows(tmp_path):
 
     adapter.filter_results(request)
 
-    assert engine.calls[0][2]["hydrate_products"] is True
+    assert engine.calls[0][2]["hydrate_products"] is False
     assert repository.filter_ids_call is None
-    assert repository.hydrate_call[0] == [1]
+    assert repository.ranked_page_call[0] == [1, 2, 3]
+    assert repository.hydrate_call[0] == [1, 2, 3]
 
 
 def test_explicit_ids_clear_conflicting_inferred_filter_hierarchy(tmp_path):

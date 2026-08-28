@@ -559,8 +559,11 @@ readiness wait, tenant doctor, container status, and log checks automatically.
 It stops on the first failed gate and prints API diagnostics after a readiness
 failure.
 
-Git does not update `.env` or `.env.keys`, and the script never edits them.
-Apply release-specific environment changes manually before running the command.
+Git does not update `.env` or `.env.keys`. The deployment preserves configured
+values but may atomically create missing generated workload credentials in the
+mode-0600 `.env.keys`; it then regenerates the private per-service files under
+`.runtime/env`. Apply release-specific non-secret `.env` changes manually
+before running the command.
 
 Do not run ingestion for every code deployment. Run it only when source rows, indexed text, the embedding model, filter metadata, or index schema changed.
 
@@ -579,10 +582,10 @@ Set the production-only analytics delivery mode in `.env`:
 
 ```bash
 SEARCH_ANALYTICS_DELIVERY_MODE=daily_spool
-SEARCH_ANALYTICS_SPOOL_PATH=storage/search_analytics_spool.sqlite3
+SEARCH_ANALYTICS_SPOOL_PATH=storage/search-runtime/search_analytics_spool.sqlite3
 ```
 
-The mounted `storage/` directory keeps pending rows durable across API
+The search-only runtime mount keeps pending rows durable across API
 restarts. The scheduled job deletes and vacuums only rows committed to the
 tenant's external MySQL database.
 

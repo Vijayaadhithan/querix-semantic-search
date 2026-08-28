@@ -180,6 +180,23 @@ def test_shared_mysql_mode_generates_only_pgvector_roles(tmp_path):
     assert "MYSQL_WORKLOAD_CREDENTIAL_MODE" in generated
 
 
+def test_service_credentials_generate_separate_analytics_api_keys(tmp_path):
+    keys_path = tmp_path / ".env.keys"
+    keys_path.write_text("GAINR_API_KEY=existing-search-key\n", encoding="utf-8")
+    os.chmod(keys_path, 0o600)
+
+    generated = ensure_credentials(
+        keys_path,
+        mysql_mode="shared",
+        service_api_keys=("GAINR_ANALYTICS_API_KEY",),
+    )
+    rendered = keys_path.read_text(encoding="utf-8")
+
+    assert "GAINR_ANALYTICS_API_KEY=" in rendered
+    assert "GAINR_ANALYTICS_API_KEY" in generated
+    assert "GAINR_API_KEY=existing-search-key" in rendered
+
+
 def test_runtime_storage_migration_moves_sqlite_sidecars(tmp_path):
     storage = tmp_path / "storage"
     (storage / "companies").mkdir(parents=True)

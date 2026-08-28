@@ -442,14 +442,13 @@ class GainrCompatibilityService:
                     else {}
                 ),
                 # The compatibility repository checks current eligibility and
-                # hydrates the requested 20-row page. Avoid fetching the full
-                # semantic result window first unless a price sort needs the
-                # engine's complete row set. Unfiltered searches retain the
-                # engine rows because they are cheaper than another remote-DB
-                # eligibility round trip and can be reused below.
+                # hydrates the requested 20-row page from the enriched
+                # search-ready projection. Avoid the engine's earlier generic
+                # MySQL hydration unless a price sort needs complete rows. This
+                # removes one remote database round trip from normal semantic
+                # searches without changing ranking or live-ad validation.
                 hydrate_products=(
-                    not database_only_filters
-                    or planned["query_plan"].get("sort_order")
+                    planned["query_plan"].get("sort_order")
                     in {"price_asc", "price_desc"}
                 ),
             )

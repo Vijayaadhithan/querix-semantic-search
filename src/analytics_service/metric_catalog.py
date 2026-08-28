@@ -128,6 +128,7 @@ def _group(metric_id: str, module: str, audience: str) -> str:
         "q29_provider_reliability",
         "q30_latency_per_operation",
         "q31_model_latency",
+        "q32_reranking_fallback",
         "q41_multi_attempt",
         "q93_operation_token_usage",
     }:

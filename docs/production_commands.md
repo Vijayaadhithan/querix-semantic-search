@@ -559,7 +559,20 @@ docker compose ps
 curl -fsS http://127.0.0.1:8000/api/v1/ready
 ```
 
-To verify reboot recovery during a maintenance window:
+For a package-maintenance window, verify a fresh application backup and review
+the proposed distribution upgrade before changing the host:
+
+```bash
+cd <production-repository-path>
+sudo scripts/backup_production.sh
+sudo apt-get update
+sudo apt-get --simulate dist-upgrade
+sudo env DEBIAN_FRONTEND=noninteractive apt-get dist-upgrade -y
+```
+
+Do not continue if the backup checks or simulated package transaction fail.
+Record container start times before the reboot so recovery can be distinguished
+from an unintended pre-maintenance restart. Then reboot:
 
 ```bash
 sudo reboot
@@ -572,9 +585,13 @@ cd <production-repository-path>
 systemctl is-active docker
 docker compose ps
 curl -fsS http://127.0.0.1:8000/api/v1/ready
+curl -fsS http://127.0.0.1:8010/api/v1/ready
+systemctl list-timers --all --no-pager | grep semantic-search
 ```
 
-Do not test reboot recovery during customer traffic without an approved maintenance window.
+Also run one authenticated tenant search and analytics-status request after the
+host returns. Do not perform package maintenance or reboot recovery testing
+during customer traffic without an approved maintenance window.
 
 ## 14. Future routine deployments
 

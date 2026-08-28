@@ -56,6 +56,7 @@ def ensure_credentials(
     *,
     mysql_mode: str = "dedicated",
     persist_mysql_mode: bool = False,
+    service_api_keys: tuple[str, ...] = (),
 ) -> list[str]:
     mysql_mode = mysql_mode.casefold()
     if mysql_mode not in MYSQL_WORKLOAD_CREDENTIAL_MODES:
@@ -81,6 +82,11 @@ def ensure_credentials(
     password_keys = tuple(name.replace("_USER", "_PASSWORD") for name in defaults)
 
     generated: dict[str, str] = {}
+    for name in service_api_keys:
+        if not re.fullmatch(r"[A-Z][A-Z0-9_]*_ANALYTICS_API_KEY", name):
+            raise RuntimeError(f"Unsafe analytics API key field: {name}")
+        if not _configured(raw_values.get(name, "")):
+            generated[name] = secrets.token_urlsafe(36)
     if (
         persist_mysql_mode
         and _configured_value(
@@ -127,6 +133,18 @@ def ensure_credentials(
     return sorted(generated)
 
 
+def _service_api_keys_from_example(root: Path) -> tuple[str, ...]:
+    path = root / ".env.keys.example"
+    if not path.is_file():
+        return ()
+    names = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        match = ASSIGNMENT_RE.match(line.strip())
+        if match and match.group(1).endswith("_ANALYTICS_API_KEY"):
+            names.append(match.group(1))
+    return tuple(sorted(set(names)))
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", type=Path, default=ROOT)
@@ -145,6 +163,7 @@ def main() -> None:
         root / ".env.keys",
         mysql_mode=mysql_mode or "dedicated",
         persist_mysql_mode=args.mysql_mode is not None,
+        service_api_keys=_service_api_keys_from_example(root),
     )
     if generated:
         print("Created missing workload credential fields: " + ", ".join(generated))

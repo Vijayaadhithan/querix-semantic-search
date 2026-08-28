@@ -279,10 +279,22 @@ are never inferred from query text. The response provides readable city options
 paired with their IDs. Records written before filter-context capture are
 excluded when a city is selected.
 
+During refresh, naive business-table timestamps are first interpreted in that
+tenant timezone and then normalized to UTC. Search-history and API-usage
+timestamps remain UTC because the search service writes them explicitly as
+UTC. Snapshot metadata exposes both `source_timezone` and
+`normalized_timezone`; `source_watermark` is therefore comparable with the UTC
+`generated_at` value and cannot appear in the future merely because the MySQL
+session uses a local timezone.
+
 The internal filtered overview reports provider/operation attempts, measured
 stage latency, and separate provider-reported token totals for LLM planning and
 reranking. A zero token total can mean either no usage or unavailable provider
 telemetry, so the response also includes attempt and API-call counts.
+Provider fallback metrics separately report any-provider, query-planner, and
+reranker fallback request counts. The reranking card's legacy
+`requests_with_fallback` field now means reranker fallback only, and the
+Voyage-to-Nemotron rescue count requires both events in the same request.
 
 Individual-query filters:
 

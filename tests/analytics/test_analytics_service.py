@@ -527,7 +527,7 @@ def test_daily_refresh_publishes_both_audiences_and_queries(tmp_path):
     assert "search_intelligence" not in internal_dashboard
     assert "deep_analytics" not in internal_dashboard
     assert "market_intelligence" not in internal_dashboard
-    assert company_dashboard["metadata"]["schema_version"] == "3.2"
+    assert company_dashboard["metadata"]["schema_version"] == "3.3"
     assert company_dashboard["business_overview"] == {
         "scope": "Latest completed company snapshot",
         "total_users": 2,
@@ -697,6 +697,74 @@ def test_daily_refresh_publishes_both_audiences_and_queries(tmp_path):
     assert "text_search" in internal_queries["facets"]["request_kinds"]
     assert "performance" not in company_queries["items"][0]
     assert "token_usage" not in company_queries["items"][0]
+
+
+def test_refresh_normalizes_business_timestamps_from_tenant_timezone(tmp_path):
+    company = replace(
+        analytics_company(tmp_path),
+        timezone="Asia/Kolkata",
+    )
+    data = analytics_data()
+    data["search_history"].loc[0, "created_at"] = "2026-08-28 12:59:00"
+    data["search_history"].loc[1, "created_at"] = "2026-08-28 12:58:00"
+    data["api_usage"].loc[0, "created_at"] = "2026-08-28 12:59:00"
+    data["api_usage"].loc[1, "created_at"] = "2026-08-28 12:58:00"
+    data["ads"].loc[0, "created_at"] = "2026-08-28 18:30:00"
+    data["ads"].loc[1, "created_at"] = "2026-08-28 18:00:00"
+    data["users"].loc[:, "created_at"] = "2026-08-28 17:30:00"
+    store = AnalyticsSnapshotStore(tmp_path / "snapshots.sqlite3")
+
+    result = AnalyticsRefreshService(FakeSource(data), store).refresh(company)
+
+    assert result["source_watermark"] == "2026-08-28T13:00:00+00:00"
+    dashboard = store.dashboard("gainr", internal=False)
+    assert dashboard["metadata"]["source_timezone"] == "Asia/Kolkata"
+    assert dashboard["metadata"]["normalized_timezone"] == "UTC"
+    queries = store.query_records("gainr", internal=True, limit=10)["items"]
+    assert queries[0]["created_at"] == "2026-08-28T12:59:00+00:00"
+
+
+def test_provider_fallback_metrics_are_separated_by_operation():
+    data = analytics_data()
+    data["api_usage"].loc[0, "attempts_json"] = (
+        '[{"provider":"groq","model":"planner-a",'
+        '"operation":"query_planning","status":"fallback"},'
+        '{"provider":"google","model":"planner-b",'
+        '"operation":"query_planning","status":"success"},'
+        '{"provider":"voyage-2.5","model":"rerank-2.5",'
+        '"operation":"reranking","status":"success"}]'
+    )
+    data["api_usage"].loc[1, "attempts_json"] = (
+        '[{"provider":"groq","model":"planner-a",'
+        '"operation":"query_planning","status":"success"},'
+        '{"provider":"voyage-2.5","model":"rerank-2.5",'
+        '"operation":"reranking","status":"fallback"},'
+        '{"provider":"openrouter-nemotron","model":"nemotron",'
+        '"operation":"reranking","status":"success"}]'
+    )
+
+    reports = process_part_b(data)
+    fallback = reports["q32_reranking_fallback"]
+
+    assert fallback == {
+        "total_reranking_calls": 3,
+        "total_reranking_requests": 2,
+        "voyage_fallbacks": 1,
+        "nemotron_rescues": 1,
+        "fallback_rate": 50.0,
+        "requests_with_fallback": 1,
+        "any_provider_fallback_requests": 2,
+        "query_planner_fallback_requests": 1,
+        "reranker_fallback_requests": 1,
+        "voyage_to_nemotron_rescue_requests": 1,
+        "title": "Reranking Fallback Analysis",
+        "chart_type": "stat",
+    }
+    assert reports["q29_provider_reliability"]["fallback_requests"] == {
+        "any_provider": 2,
+        "query_planner": 1,
+        "reranker": 1,
+    }
 
 
 def test_dashboard_activity_cache_uses_compact_records_without_changing_metrics(

@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from datetime import UTC, datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 
@@ -28,11 +29,56 @@ from .store import AnalyticsSnapshotStore
 
 LOGGER = logging.getLogger(__name__)
 
+# Search telemetry is written explicitly as naive UTC for MySQL portability.
+# Business tables use the tenant's configured timezone because provider-managed
+# MySQL sessions commonly return naive local timestamps.
+UTC_TIMESTAMP_DATASETS = frozenset({"search_history", "api_usage"})
+
 
 def _copy_data(data: dict[str, pd.DataFrame]) -> dict[str, pd.DataFrame]:
     # Pandas 3 uses copy-on-write. A shallow copy isolates columns added by
     # individual report modules without doubling every source table in memory.
     return {name: frame.copy(deep=False) for name, frame in data.items()}
+
+
+def _normalize_source_timestamps(
+    data: dict[str, pd.DataFrame],
+    *,
+    timezone_name: str,
+) -> dict[str, pd.DataFrame]:
+    """Convert naive source timestamps to naive UTC exactly once."""
+
+    normalized: dict[str, pd.DataFrame] = {}
+    tenant_timezone = ZoneInfo(timezone_name)
+    for name, original in data.items():
+        timestamp_columns = [
+            column for column in original.columns if str(column).endswith("_at")
+        ]
+        if not timestamp_columns:
+            normalized[name] = original
+            continue
+        frame = original.copy(deep=False)
+        assumed_timezone = UTC if name in UTC_TIMESTAMP_DATASETS else tenant_timezone
+        for column in timestamp_columns:
+            parsed = pd.to_datetime(
+                frame[column],
+                errors="coerce",
+                format="mixed",
+            )
+            if isinstance(parsed.dtype, pd.DatetimeTZDtype):
+                aware = parsed.dt.tz_convert(UTC)
+            else:
+                aware = parsed.dt.tz_localize(
+                    assumed_timezone,
+                    ambiguous="NaT",
+                    nonexistent="shift_forward",
+                ).dt.tz_convert(UTC)
+            # Existing report modules use naive datetime arithmetic. Keeping a
+            # canonical naive-UTC representation avoids mixed-aware failures
+            # while removing the source-session timezone ambiguity.
+            frame[column] = aware.dt.tz_localize(None)
+        normalized[name] = frame
+    return normalized
 
 
 def _normalize_created_at(value: Any) -> str:
@@ -106,7 +152,10 @@ class AnalyticsRefreshService:
         run_id = self.store.begin_refresh(company.company_id)
         source_rows: dict[str, int] = {}
         try:
-            data = self.source.load(company)
+            data = _normalize_source_timestamps(
+                self.source.load(company),
+                timezone_name=company.timezone,
+            )
             source_rows = {name: int(len(frame)) for name, frame in data.items()}
             generated_at = datetime.now(UTC).isoformat()
 
@@ -162,9 +211,11 @@ class AnalyticsRefreshService:
                 query_pairs.append((company_record, internal_record))
 
             metadata = {
-                "schema_version": "3.2",
+                "schema_version": "3.3",
                 "company_id": company.company_id,
                 "generated_at": generated_at,
+                "source_timezone": company.timezone,
+                "normalized_timezone": "UTC",
                 "refresh_schedule": REFRESH_SCHEDULE,
                 "source_rows": source_rows,
             }
