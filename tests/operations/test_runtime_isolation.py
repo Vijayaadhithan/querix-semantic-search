@@ -8,6 +8,7 @@ import yaml
 
 from scripts.ensure_service_credentials import ensure_credentials
 from scripts.migrate_runtime_storage import migrate_runtime_storage
+from scripts.provision_database_roles import _pgvector_table_candidates
 from scripts.render_service_env import (
     _validate_production_sources,
     build_service_environments,
@@ -205,6 +206,16 @@ def test_runtime_storage_migration_refuses_collisions(tmp_path):
 
     with pytest.raises(RuntimeError, match="Both legacy and isolated"):
         migrate_runtime_storage(storage, check=False)
+
+
+def test_pgvector_role_provisioning_covers_two_slot_table_names():
+    assert _pgvector_table_candidates("tenant_vectors") == {
+        "tenant_vectors",
+        "tenant_vectors_a",
+        "tenant_vectors_b",
+        "tenant_vectors__a",
+        "tenant_vectors__b",
+    }
 
 
 def test_compose_has_separate_env_and_storage_boundaries():

@@ -66,6 +66,16 @@ def _mysql_table(database: str, table: str) -> str:
     return f"{quote_mysql_identifier(database)}.{quote_mysql_identifier(table)}"
 
 
+def _pgvector_table_candidates(base_table: str) -> set[str]:
+    return {
+        base_table,
+        f"{base_table}_a",
+        f"{base_table}_b",
+        f"{base_table}__a",
+        f"{base_table}__b",
+    }
+
+
 def _mysql_grant(
     cursor,
     account: str,
@@ -330,11 +340,9 @@ def provision_postgres(profiles) -> None:
 
                 for profile in grouped_profiles:
                     config = profile.storage.pgvector_database
-                    candidates = {
-                        profile.storage.pgvector_table,
-                        f"{profile.storage.pgvector_table}_a",
-                        f"{profile.storage.pgvector_table}_b",
-                    }
+                    candidates = _pgvector_table_candidates(
+                        profile.storage.pgvector_table
+                    )
                     cursor.execute(
                         """
                         SELECT table_name
