@@ -54,6 +54,15 @@ docker compose run --rm analytics-api \
     --username acme-owner --role company_user --company acme
 ```
 
+For an approved provider-managed MySQL exception, persist shared mode once:
+
+```bash
+python3 scripts/ensure_service_credentials.py --mysql-mode shared
+```
+
+Shared mode skips only MySQL role provisioning. PostgreSQL workload-role
+provisioning and the remaining deployment safety checks stay enabled.
+
 For search-stage timings rather than only container output:
 
 ```bash

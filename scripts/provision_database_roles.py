@@ -13,9 +13,11 @@ from pathlib import Path
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "src"))
 
 from core.tenant_config import discover_tenant_profiles
+from scripts.render_service_env import MYSQL_WORKLOAD_CREDENTIAL_MODES
 from storage.mysql import (
     MySQLRuntimeConfig,
     mysql_connection,
@@ -389,9 +391,18 @@ def main() -> None:
     parser.add_argument("--skip-postgres", action="store_true")
     args = parser.parse_args()
     profiles = list(discover_tenant_profiles(args.tenant_config_dir).values())
-    if not args.skip_mysql:
+    mysql_mode = os.getenv("MYSQL_WORKLOAD_CREDENTIAL_MODE", "dedicated").casefold()
+    if mysql_mode not in MYSQL_WORKLOAD_CREDENTIAL_MODES:
+        expected = ", ".join(sorted(MYSQL_WORKLOAD_CREDENTIAL_MODES))
+        raise RuntimeError("MYSQL_WORKLOAD_CREDENTIAL_MODE must be one of: " + expected)
+    if not args.skip_mysql and mysql_mode == "dedicated":
         provision_mysql(profiles)
         print("MySQL workload roles are provisioned and verified.")
+    elif not args.skip_mysql:
+        print(
+            "MySQL workload role provisioning is skipped: the provider-managed "
+            "shared credential exception is active."
+        )
     if not args.skip_postgres:
         provision_postgres(profiles)
         print("PostgreSQL workload roles are provisioned and verified.")

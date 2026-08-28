@@ -55,6 +55,7 @@ PROVIDER_KEYS = {
     "OPENROUTER_API_KEY",
     "VOYAGE_API_KEY",
 }
+MYSQL_WORKLOAD_CREDENTIAL_MODES = {"dedicated", "shared"}
 
 
 def parse_env_file(path: Path, *, required: bool) -> dict[str, EnvValue]:
@@ -133,14 +134,41 @@ def _alias(
     preferred: str,
     fallback: str,
 ) -> None:
-    source = values.get(preferred) or values.get(fallback)
+    source = values.get(preferred)
+    if source is None or not source.configured:
+        source = values.get(fallback)
     if source is not None:
         selected[target] = EnvValue(target, source.raw_value)
+
+
+def mysql_workload_credential_mode(values: dict[str, EnvValue]) -> str:
+    configured = values.get("MYSQL_WORKLOAD_CREDENTIAL_MODE")
+    mode = configured.plain_value.casefold() if configured else "dedicated"
+    if mode not in MYSQL_WORKLOAD_CREDENTIAL_MODES:
+        expected = ", ".join(sorted(MYSQL_WORKLOAD_CREDENTIAL_MODES))
+        raise RuntimeError("MYSQL_WORKLOAD_CREDENTIAL_MODE must be one of: " + expected)
+    return mode
+
+
+def _mysql_alias(
+    selected: dict[str, EnvValue],
+    values: dict[str, EnvValue],
+    target: str,
+    dedicated: str,
+    mode: str,
+) -> None:
+    if mode == "shared":
+        source = values.get(target)
+        if source is not None:
+            selected[target] = EnvValue(target, source.raw_value)
+        return
+    _alias(selected, values, target, dedicated, target)
 
 
 def build_service_environments(
     values: dict[str, EnvValue],
 ) -> dict[str, dict[str, EnvValue]]:
+    mysql_mode = mysql_workload_credential_mode(values)
     search_common = _nonsecret_values(
         values,
         excluded_prefixes=("ANALYTICS_", "POSTGRES_"),
@@ -151,8 +179,14 @@ def build_service_environments(
     for name in values:
         if name.endswith("_API_KEY") and not name.endswith("_ANALYTICS_API_KEY"):
             _copy(api, values, name)
-    _alias(api, values, "MYSQL_USER", "MYSQL_SEARCH_USER", "MYSQL_USER")
-    _alias(api, values, "MYSQL_PASSWORD", "MYSQL_SEARCH_PASSWORD", "MYSQL_PASSWORD")
+    _mysql_alias(api, values, "MYSQL_USER", "MYSQL_SEARCH_USER", mysql_mode)
+    _mysql_alias(
+        api,
+        values,
+        "MYSQL_PASSWORD",
+        "MYSQL_SEARCH_PASSWORD",
+        mysql_mode,
+    )
     _alias(api, values, "PGVECTOR_USER", "PGVECTOR_SEARCH_USER", "PGVECTOR_USER")
     _alias(
         api,
@@ -167,13 +201,19 @@ def build_service_environments(
 
     ingestion = dict(search_common)
     _copy(ingestion, values, "API_ADMIN_KEY")
-    _alias(ingestion, values, "MYSQL_USER", "MYSQL_INGEST_USER", "MYSQL_USER")
-    _alias(
+    _mysql_alias(
+        ingestion,
+        values,
+        "MYSQL_USER",
+        "MYSQL_INGEST_USER",
+        mysql_mode,
+    )
+    _mysql_alias(
         ingestion,
         values,
         "MYSQL_PASSWORD",
         "MYSQL_INGEST_PASSWORD",
-        "MYSQL_PASSWORD",
+        mysql_mode,
     )
     _alias(
         ingestion,
@@ -198,19 +238,19 @@ def build_service_environments(
         prefixes=("MYSQL_", "SEARCH_ANALYTICS_", "GAINR_DB_TLS_"),
     )
     _copy(telemetry, values, "API_TENANT_CONFIG_DIR")
-    _alias(
+    _mysql_alias(
         telemetry,
         values,
         "MYSQL_USER",
         "MYSQL_TELEMETRY_USER",
-        "MYSQL_USER",
+        mysql_mode,
     )
-    _alias(
+    _mysql_alias(
         telemetry,
         values,
         "MYSQL_PASSWORD",
         "MYSQL_TELEMETRY_PASSWORD",
-        "MYSQL_PASSWORD",
+        mysql_mode,
     )
     for name in values:
         if name.endswith("_DB_TLS_KEY_FILE"):
@@ -223,19 +263,19 @@ def build_service_environments(
     for name in values:
         if name.endswith("_ANALYTICS_API_KEY"):
             _copy(analytics, values, name)
-    _alias(
+    _mysql_alias(
         analytics,
         values,
         "MYSQL_USER",
         "MYSQL_ANALYTICS_USER",
-        "MYSQL_USER",
+        mysql_mode,
     )
-    _alias(
+    _mysql_alias(
         analytics,
         values,
         "MYSQL_PASSWORD",
         "MYSQL_ANALYTICS_PASSWORD",
-        "MYSQL_PASSWORD",
+        mysql_mode,
     )
     for name in values:
         if name.endswith("_DB_TLS_KEY_FILE"):
@@ -248,20 +288,24 @@ def build_service_environments(
     database_admin = _nonsecret_values(values)
     for name in ROLE_SOURCES | {"POSTGRES_USER", "POSTGRES_PASSWORD"}:
         _copy(database_admin, values, name)
-    _alias(
-        database_admin,
-        values,
-        "MYSQL_USER",
-        "MYSQL_ADMIN_USER",
-        "MYSQL_USER",
-    )
-    _alias(
-        database_admin,
-        values,
-        "MYSQL_PASSWORD",
-        "MYSQL_ADMIN_PASSWORD",
-        "MYSQL_PASSWORD",
-    )
+    if mysql_mode == "shared":
+        _copy(database_admin, values, "MYSQL_USER")
+        _copy(database_admin, values, "MYSQL_PASSWORD")
+    else:
+        _alias(
+            database_admin,
+            values,
+            "MYSQL_USER",
+            "MYSQL_ADMIN_USER",
+            "MYSQL_USER",
+        )
+        _alias(
+            database_admin,
+            values,
+            "MYSQL_PASSWORD",
+            "MYSQL_ADMIN_PASSWORD",
+            "MYSQL_PASSWORD",
+        )
     _alias(
         database_admin,
         values,
@@ -301,14 +345,6 @@ def _validate_production_sources(values: dict[str, EnvValue], keys_path: Path) -
         raise RuntimeError(f"Production secret file must be mode 0600: {keys_path}")
     required = {
         "API_ADMIN_KEY",
-        "MYSQL_SEARCH_USER",
-        "MYSQL_SEARCH_PASSWORD",
-        "MYSQL_INGEST_USER",
-        "MYSQL_INGEST_PASSWORD",
-        "MYSQL_TELEMETRY_USER",
-        "MYSQL_TELEMETRY_PASSWORD",
-        "MYSQL_ANALYTICS_USER",
-        "MYSQL_ANALYTICS_PASSWORD",
         "PGVECTOR_SEARCH_USER",
         "PGVECTOR_SEARCH_PASSWORD",
         "PGVECTOR_INGEST_USER",
@@ -316,6 +352,21 @@ def _validate_production_sources(values: dict[str, EnvValue], keys_path: Path) -
         "POSTGRES_USER",
         "POSTGRES_PASSWORD",
     }
+    if mysql_workload_credential_mode(values) == "shared":
+        required.update({"MYSQL_USER", "MYSQL_PASSWORD"})
+    else:
+        required.update(
+            {
+                "MYSQL_SEARCH_USER",
+                "MYSQL_SEARCH_PASSWORD",
+                "MYSQL_INGEST_USER",
+                "MYSQL_INGEST_PASSWORD",
+                "MYSQL_TELEMETRY_USER",
+                "MYSQL_TELEMETRY_PASSWORD",
+                "MYSQL_ANALYTICS_USER",
+                "MYSQL_ANALYTICS_PASSWORD",
+            }
+        )
     missing = sorted(
         name for name in required if name not in values or not values[name].configured
     )

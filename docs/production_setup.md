@@ -268,6 +268,21 @@ python3 scripts/ensure_service_credentials.py
 python3 scripts/render_service_env.py --production
 ```
 
+Dedicated MySQL workload accounts remain the production default. If a managed
+database provider gives the company only one fixed account and will not grant
+account-management privileges, record the temporary exception explicitly:
+
+```bash
+python3 scripts/ensure_service_credentials.py --mysql-mode shared
+python3 scripts/render_service_env.py --production
+```
+
+Shared mode skips only MySQL role provisioning and passes the provider account
+to the MySQL-dependent workloads. PostgreSQL search/ingestion roles, per-service
+secret files, storage boundaries, and all deployment validation remain active.
+Move back to `--mysql-mode dedicated` as soon as the provider supplies separate
+accounts or an administrator credential.
+
 Never commit, log, screenshot, or paste populated secret files. Rotate a credential immediately if it is exposed. Changing `POSTGRES_PASSWORD` in the environment does not automatically change the password inside an already initialized PostgreSQL volume; coordinate that rotation inside PostgreSQL.
 
 ## 6. Validate configuration and build the API

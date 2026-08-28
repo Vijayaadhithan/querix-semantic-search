@@ -9,6 +9,7 @@ import yaml
 from scripts.ensure_service_credentials import ensure_credentials
 from scripts.migrate_runtime_storage import migrate_runtime_storage
 from scripts.render_service_env import (
+    _validate_production_sources,
     build_service_environments,
     parse_env_file,
     write_service_environments,
@@ -17,13 +18,14 @@ from scripts.render_service_env import (
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def _service_environments(tmp_path: Path):
+def _service_environments(tmp_path: Path, *, mysql_mode: str = "dedicated"):
     env_path = tmp_path / ".env"
     env_path.write_text(
         "MYSQL_HOST=db\n"
         "MYSQL_DATABASE=tenant\n"
         "PGVECTOR_DATABASE=vectors\n"
         "ANALYTICS_API_PORT=8010\n"
+        f"MYSQL_WORKLOAD_CREDENTIAL_MODE={mysql_mode}\n"
         "SEARCH_ANALYTICS_DELIVERY_MODE=daily_spool\n",
         encoding="utf-8",
     )
@@ -33,6 +35,8 @@ def _service_environments(tmp_path: Path):
         "GAINR_API_KEY=search-api-secret\n"
         "GAINR_ANALYTICS_API_KEY=analytics-api-secret\n"
         "OPENROUTER_API_KEY=provider-secret\n"
+        "MYSQL_USER=shared-user\n"
+        "MYSQL_PASSWORD=shared-pass\n"
         "MYSQL_SEARCH_USER=search\n"
         "MYSQL_SEARCH_PASSWORD=search-pass\n"
         "MYSQL_INGEST_USER=ingest\n"
@@ -96,6 +100,29 @@ def test_service_envs_keep_secrets_inside_their_workloads(tmp_path):
     }
 
 
+def test_shared_mysql_mode_uses_provider_credential_without_admin_access(tmp_path):
+    environments = _service_environments(tmp_path, mysql_mode="shared")
+
+    for service in ("api", "ingestion", "telemetry", "analytics-api"):
+        rendered = _raw(environments, service)
+        assert rendered["MYSQL_USER"] == "shared-user"
+        assert rendered["MYSQL_PASSWORD"] == "shared-pass"
+        assert "MYSQL_ADMIN_PASSWORD" not in rendered
+    database_admin = _raw(environments, "database-admin")
+    assert database_admin["MYSQL_USER"] == "shared-user"
+    assert database_admin["MYSQL_PASSWORD"] == "shared-pass"
+
+
+def test_shared_mysql_mode_passes_production_source_validation(tmp_path):
+    _service_environments(tmp_path, mysql_mode="shared")
+    keys_path = tmp_path / ".env.keys"
+    os.chmod(keys_path, 0o600)
+    values = parse_env_file(tmp_path / ".env", required=True)
+    values.update(parse_env_file(keys_path, required=True))
+
+    _validate_production_sources(values, keys_path)
+
+
 def test_rendered_env_files_are_atomic_private_and_checkable(tmp_path):
     environments = _service_environments(tmp_path)
     output_dir = tmp_path / ".runtime" / "env"
@@ -126,6 +153,27 @@ def test_service_credentials_preserve_existing_values(tmp_path):
     assert "MYSQL_INGEST_PASSWORD=" in rendered
     assert "MYSQL_SEARCH_USER" not in generated
     assert keys_path.stat().st_mode & 0o077 == 0
+
+
+def test_shared_mysql_mode_generates_only_pgvector_roles(tmp_path):
+    keys_path = tmp_path / ".env.keys"
+    keys_path.write_text(
+        "MYSQL_USER=shared\nMYSQL_PASSWORD=keep-me\n",
+        encoding="utf-8",
+    )
+    os.chmod(keys_path, 0o600)
+
+    generated = ensure_credentials(
+        keys_path,
+        mysql_mode="shared",
+        persist_mysql_mode=True,
+    )
+    rendered = keys_path.read_text(encoding="utf-8")
+
+    assert "MYSQL_WORKLOAD_CREDENTIAL_MODE=shared" in rendered
+    assert "PGVECTOR_SEARCH_USER=" in rendered
+    assert "MYSQL_SEARCH_USER=" not in rendered
+    assert "MYSQL_WORKLOAD_CREDENTIAL_MODE" in generated
 
 
 def test_runtime_storage_migration_moves_sqlite_sidecars(tmp_path):
