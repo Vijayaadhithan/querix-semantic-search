@@ -111,6 +111,7 @@ def test_shared_mysql_mode_uses_provider_credential_without_admin_access(tmp_pat
     database_admin = _raw(environments, "database-admin")
     assert database_admin["MYSQL_USER"] == "shared-user"
     assert database_admin["MYSQL_PASSWORD"] == "shared-pass"
+    assert database_admin["MYSQL_WORKLOAD_CREDENTIAL_MODE"] == "shared"
 
 
 def test_shared_mysql_mode_passes_production_source_validation(tmp_path):

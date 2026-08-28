@@ -84,6 +84,8 @@ def parse_env_file(path: Path, *, required: bool) -> dict[str, EnvValue]:
 
 
 def _is_secret_or_role_source(name: str) -> bool:
+    if name == "MYSQL_WORKLOAD_CREDENTIAL_MODE":
+        return False
     secret_segments = {
         "CREDENTIAL",
         "CREDENTIALS",
