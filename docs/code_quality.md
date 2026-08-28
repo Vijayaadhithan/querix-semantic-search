@@ -36,6 +36,7 @@ uv run --frozen --group analytics ruff format --check src scripts tests
 uv run --frozen --group analytics python scripts/check_markdown.py
 uv run --frozen --group analytics python -m compileall -q src scripts tests
 uv run --frozen --group analytics pytest -q
+python3 scripts/render_service_env.py
 docker compose config --quiet
 git diff --check
 ```

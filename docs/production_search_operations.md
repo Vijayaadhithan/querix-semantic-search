@@ -237,7 +237,9 @@ their disk use remains bounded to roughly 30 MB per container.
 - Customer and admin keys are distinct.
 - CORS contains only approved, exact HTTPS origins. Production and testing
   frontends are listed separately; wildcard origins are not used.
-- Source and vector databases use least-privilege credentials.
+- Vector storage and supported source databases use least-privilege
+  credentials. A provider-managed shared MySQL account must be recorded through
+  `MYSQL_WORKLOAD_CREDENTIAL_MODE=shared` and treated as a temporary exception.
 - Remote database TLS uses certificate verification.
 - Redis and pgvector are not publicly reachable.
 - Logs do not contain API keys, passwords, or raw sensitive queries.

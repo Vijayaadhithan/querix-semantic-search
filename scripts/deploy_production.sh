@@ -10,11 +10,12 @@ LOCK_FILE="${LOCK_FILE:-/tmp/semantic-search-production-deploy.lock}"
 RUN_DOCTOR="${RUN_DOCTOR:-true}"
 RUN_ANALYTICS_MIGRATION="${RUN_ANALYTICS_MIGRATION:-true}"
 RUN_ANALYTICS_INITIAL_REFRESH="${RUN_ANALYTICS_INITIAL_REFRESH:-true}"
+RUN_DATABASE_ROLE_PROVISIONING="${RUN_DATABASE_ROLE_PROVISIONING:-true}"
 ANALYTICS_READY_URL="${ANALYTICS_READY_URL:-http://127.0.0.1:8010/api/v1/ready}"
 
 cd "$PROJECT_DIR"
 
-for command_name in git docker curl; do
+for command_name in git docker curl python3; do
   if ! command -v "$command_name" >/dev/null 2>&1; then
     echo "Required command is missing: ${command_name}" >&2
     exit 1
@@ -23,6 +24,10 @@ done
 
 if [[ ! -f .env ]]; then
   echo "Missing production .env in ${PROJECT_DIR}." >&2
+  exit 1
+fi
+if [[ ! -f .env.keys ]]; then
+  echo "Missing production .env.keys in ${PROJECT_DIR}." >&2
   exit 1
 fi
 
@@ -38,6 +43,16 @@ if command -v flock >/dev/null 2>&1 && ! flock -n 9; then
   echo "Another production deployment is already running." >&2
   exit 1
 fi
+exec 8>"/tmp/semantic-search-ingest-${COMPANY_ID}.lock"
+if ! flock -n 8; then
+  echo "Tenant ingestion is running; retry deployment after it completes." >&2
+  exit 1
+fi
+exec 7>"/tmp/semantic-search-analytics-${COMPANY_ID}.lock"
+if ! flock -n 7; then
+  echo "Tenant analytics is running; retry deployment after it completes." >&2
+  exit 1
+fi
 
 ready_file="$(mktemp)"
 cleanup() {
@@ -48,12 +63,38 @@ trap cleanup EXIT
 revision="$(git rev-parse --short HEAD)"
 echo "Deploying revision ${revision} for company ${COMPANY_ID}."
 
+python3 scripts/ensure_service_credentials.py
+python3 scripts/render_service_env.py --production
 docker compose config --quiet
 docker compose build --pull api analytics-api
 if [[ "$RUN_ANALYTICS_MIGRATION" == "true" ]]; then
-  docker compose run --rm --no-deps api \
+  docker compose run --rm --no-deps database-admin \
     python scripts/migrate_search_analytics.py --company "$COMPANY_ID"
 fi
+if [[ "$RUN_DATABASE_ROLE_PROVISIONING" == "true" ]]; then
+  docker compose run --rm --no-deps database-admin \
+    python scripts/provision_database_roles.py
+fi
+docker compose run --rm --no-deps ingestion \
+  python -m cli.ingest \
+    --company "$COMPANY_ID" \
+    --database \
+    --check \
+    --limit 1
+docker compose run --rm --no-deps ingestion \
+  python -m cli.ingest --company "$COMPANY_ID" --list
+docker compose run --rm --no-deps telemetry-uploader \
+  python scripts/check_search_analytics_schema.py \
+    --company "$COMPANY_ID"
+python3 scripts/migrate_runtime_storage.py --preflight
+
+# The API is the only writer of its local SQLite state. Stop it before moving
+# the databases into the search-only bind mount, including any WAL sidecars.
+docker compose stop api
+python3 scripts/migrate_runtime_storage.py
+docker compose run --rm --no-deps telemetry-uploader \
+  python scripts/flush_search_analytics.py \
+    --company "$COMPANY_ID"
 if [[ "$RUN_ANALYTICS_INITIAL_REFRESH" == "true" ]]; then
   docker compose run --rm --no-deps analytics-api \
     python -m analytics_service.refresh \

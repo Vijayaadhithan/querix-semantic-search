@@ -8,6 +8,7 @@ LOCK_FILE="${LOCK_FILE:-/tmp/semantic-search-warmup-${COMPANY_ID}.lock}"
 INGEST_LOCK_FILE="${INGEST_LOCK_FILE:-/tmp/semantic-search-ingest-${COMPANY_ID}.lock}"
 
 cd "$PROJECT_DIR"
+python3 scripts/render_service_env.py --production --check
 exec 9>"$LOCK_FILE"
 if ! flock -n 9; then
   echo "Search-path warm-up is already running for ${COMPANY_ID}; skipping."

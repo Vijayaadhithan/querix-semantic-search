@@ -6,6 +6,7 @@ __pycache__
 .ruff_cache
 .env
 .env.*
+.runtime
 storage
 data/raw_docs
 benchmark-results

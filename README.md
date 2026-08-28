@@ -119,8 +119,12 @@ embeddings and indexes untouched.
 
 Run these from the repository root. The production command includes the Ollama
 profile; local macOS may use host Ollama as described in the local workflow.
+Render the ignored, mode-0600 workload env files after every `.env` or
+`.env.keys` change and before running Compose directly:
 
 ```bash
+python3 scripts/render_service_env.py
+
 # Production: start or restore the complete stack.
 docker compose --profile ollama up -d
 

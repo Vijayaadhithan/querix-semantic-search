@@ -6,6 +6,7 @@ BACKUP_ROOT="${BACKUP_ROOT:-/root/backups/semantic-search}"
 LOCK_FILE="${LOCK_FILE:-/tmp/semantic-search-production-backup.lock}"
 
 cd "$PROJECT_DIR"
+python3 scripts/render_service_env.py --production --check
 
 for command_name in cp docker flock python3 sha256sum tar; do
   if ! command -v "$command_name" >/dev/null 2>&1; then
