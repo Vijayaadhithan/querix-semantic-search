@@ -1,3 +1,4 @@
+from core.request_limit import TokenBudgetLimiter
 from search import reranker
 from search.reranker import (
     FallbackReranker,
@@ -375,6 +376,39 @@ def test_request_window_limiter_uses_shared_redis_budget():
 
     assert limiter.allow() == (False, 17.25)
     assert cache.calls == [("query:groq:test", 10, 60)]
+
+
+def test_token_budget_limiter_reserves_weighted_usage_and_refills():
+    now = [100.0]
+    limiter = TokenBudgetLimiter(600, clock=lambda: now[0])
+
+    assert limiter.allow(500) == (True, 0.0)
+    allowed, retry_after = limiter.allow(200)
+    assert allowed is False
+    assert retry_after == 10.0
+
+    now[0] = 110.0
+    assert limiter.allow(200) == (True, 0.0)
+
+
+def test_token_budget_limiter_uses_shared_redis_budget():
+    class FakeRedisCache:
+        def __init__(self):
+            self.calls = []
+
+        def allow_token_budget(self, scope, limit, estimated_tokens):
+            self.calls.append((scope, limit, estimated_tokens))
+            return False, 8.25
+
+    cache = FakeRedisCache()
+    limiter = TokenBudgetLimiter(
+        8000,
+        redis_cache=cache,
+        scope="query:groq",
+    )
+
+    assert limiter.allow(2000) == (False, 8.25)
+    assert cache.calls == [("query:groq", 8000, 2000)]
 
 
 def test_voyage_model_budget_is_counted_independently(monkeypatch):

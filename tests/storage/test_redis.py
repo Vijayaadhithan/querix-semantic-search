@@ -1,3 +1,4 @@
+import pytest
 import redis
 
 from storage import redis as redis_cache
@@ -153,3 +154,27 @@ def test_redis_request_window_returns_retry_seconds(monkeypatch):
         10,
         60000,
     )
+
+
+def test_redis_token_budget_reserves_weighted_tokens(monkeypatch):
+    client = FakeRedisClient()
+
+    def reject_weighted_budget(script, number_of_keys, *args):
+        client.eval_call = (script, number_of_keys, args)
+        return [0, 1000]
+
+    client.eval = reject_weighted_budget
+    monkeypatch.setattr(
+        redis_cache.redis.Redis,
+        "from_url",
+        lambda *_args, **_kwargs: client,
+    )
+    cache = RedisJsonCache("redis://localhost:6379/0", "test")
+
+    allowed, retry_after = cache.allow_token_budget("query:groq", 8000, 2000)
+    assert allowed is False
+    assert retry_after == pytest.approx(7.5)
+    _script, number_of_keys, args = client.eval_call
+    assert number_of_keys == 1
+    assert args[0].startswith("test:provider_token_limit:query:groq")
+    assert args[3:] == (8000, 120000, 2000)

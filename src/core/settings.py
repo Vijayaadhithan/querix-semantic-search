@@ -108,7 +108,13 @@ QUERY_EXTRACT_CONFIG = CONFIG.get("query_extraction", {})
 GROQ_QUERY_RPM = int(
     os.getenv(
         "GROQ_QUERY_RPM",
-        str(QUERY_EXTRACT_CONFIG.get("groq_requests_per_minute", 10)),
+        str(QUERY_EXTRACT_CONFIG.get("groq_requests_per_minute", 30)),
+    )
+)
+GROQ_QUERY_TPM = int(
+    os.getenv(
+        "GROQ_QUERY_TPM",
+        str(QUERY_EXTRACT_CONFIG.get("groq_tokens_per_minute", 8000)),
     )
 )
 GEMINI_QUERY_RPM = int(
@@ -117,8 +123,11 @@ GEMINI_QUERY_RPM = int(
         str(QUERY_EXTRACT_CONFIG.get("gemini_requests_per_minute", 2000)),
     )
 )
-if GROQ_QUERY_RPM <= 0 or GEMINI_QUERY_RPM <= 0:
-    raise ValueError("GROQ_QUERY_RPM and GEMINI_QUERY_RPM must be greater than zero.")
+if GROQ_QUERY_RPM <= 0 or GROQ_QUERY_TPM <= 0 or GEMINI_QUERY_RPM <= 0:
+    raise ValueError(
+        "GROQ_QUERY_RPM, GROQ_QUERY_TPM, and GEMINI_QUERY_RPM "
+        "must be greater than zero."
+    )
 _query_extract_models_env = os.getenv("QUERY_EXTRACT_MODELS")
 _query_extract_models = (
     [model.strip() for model in _query_extract_models_env.split(",") if model.strip()]

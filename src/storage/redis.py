@@ -24,6 +24,7 @@ local now = tonumber(ARGV[1])
 local refill_per_ms = tonumber(ARGV[2])
 local capacity = tonumber(ARGV[3])
 local ttl_ms = tonumber(ARGV[4])
+local cost = tonumber(ARGV[5]) or 1
 local values = redis.call('HMGET', key, 'tokens', 'updated_ms')
 local tokens = tonumber(values[1])
 local updated_ms = tonumber(values[2])
@@ -33,8 +34,8 @@ if tokens == nil then
 end
 tokens = math.min(capacity, tokens + ((now - updated_ms) * refill_per_ms))
 local allowed = 0
-if tokens >= 1 then
-  tokens = tokens - 1
+if tokens >= cost then
+  tokens = tokens - cost
   allowed = 1
 end
 redis.call('HSET', key, 'tokens', tokens, 'updated_ms', now)
@@ -293,6 +294,47 @@ class RedisJsonCache:
         if not isinstance(result, (list, tuple)) or len(result) != 2:
             return None
         return bool(int(result[0])), max(float(result[1]) / 1000, 0.0)
+
+    def allow_token_budget(
+        self,
+        scope: str,
+        tokens_per_minute: int,
+        estimated_tokens: int,
+    ) -> tuple[bool, float] | None:
+        """Atomically reserve a weighted provider token budget across workers."""
+        if not self._can_attempt():
+            return None
+        if estimated_tokens <= 0 or tokens_per_minute <= 0:
+            raise ValueError("token budget and estimate must be greater than zero")
+        if estimated_tokens > tokens_per_minute:
+            return False, 60.0
+        refill_per_ms = tokens_per_minute / 60_000
+        ttl_ms = 120_000
+        try:
+            result = self._client.eval(
+                TOKEN_BUCKET_SCRIPT,
+                1,
+                self._key("provider_token_limit", scope),
+                int(time.time() * 1000),
+                refill_per_ms,
+                tokens_per_minute,
+                ttl_ms,
+                estimated_tokens,
+            )
+            self._mark_success()
+        except (RedisError, OSError, TypeError, ValueError) as exc:
+            self._mark_failure("provider_token_limit", exc)
+            return None
+        if not isinstance(result, (list, tuple)) or len(result) != 2:
+            return None
+        allowed = bool(int(result[0]))
+        remaining = max(float(result[1]), 0.0)
+        retry_after = (
+            0.0
+            if allowed
+            else max((estimated_tokens - remaining) / (tokens_per_minute / 60), 0.0)
+        )
+        return allowed, retry_after
 
     def close(self) -> None:
         self._client.close()
