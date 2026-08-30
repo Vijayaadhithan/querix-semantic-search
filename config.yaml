@@ -23,8 +23,8 @@ query_extraction:
   gemini_thinking_level: minimal
   # Per-provider-attempt timeout. The total deadline bounds the complete
   # fallback chain, so a slow primary cannot consume the whole search budget.
-  timeout_seconds: 3
-  total_timeout_seconds: 5
+  timeout_seconds: 5
+  total_timeout_seconds: 8
   deterministic_fast_path: true
   # Skip hosted planning only for short, objective, explicitly catalogued
   # phrases with no location, price, duration, wanted-ad, multilingual, or
