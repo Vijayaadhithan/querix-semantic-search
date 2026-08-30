@@ -53,3 +53,58 @@ class RequestWindowLimiter:
                 )
             self._requests.append(now)
             return True, 0.0
+
+
+class TokenBudgetLimiter:
+    """Thread-safe weighted token bucket with optional Redis coordination."""
+
+    def __init__(
+        self,
+        tokens_per_minute: int,
+        *,
+        clock=time.monotonic,
+        redis_cache=None,
+        scope: str | None = None,
+    ):
+        if tokens_per_minute <= 0:
+            raise ValueError("token budget must be greater than zero")
+        if redis_cache is not None and not scope:
+            raise ValueError("scope is required when Redis coordination is enabled")
+        self.tokens_per_minute = tokens_per_minute
+        self.clock = clock
+        self.redis_cache = redis_cache
+        self.scope = scope
+        self._tokens = float(tokens_per_minute)
+        self._updated = clock()
+        self._lock = threading.Lock()
+
+    def allow(self, estimated_tokens: int) -> tuple[bool, float]:
+        if estimated_tokens <= 0:
+            raise ValueError("estimated token usage must be greater than zero")
+        if estimated_tokens > self.tokens_per_minute:
+            return False, 60.0
+        if self.redis_cache is not None:
+            result = self.redis_cache.allow_token_budget(
+                self.scope,
+                self.tokens_per_minute,
+                estimated_tokens,
+            )
+            if result is not None:
+                return result
+        return self._allow_memory(estimated_tokens)
+
+    def _allow_memory(self, estimated_tokens: int) -> tuple[bool, float]:
+        now = self.clock()
+        refill_per_second = self.tokens_per_minute / 60
+        with self._lock:
+            elapsed = max(now - self._updated, 0.0)
+            self._tokens = min(
+                float(self.tokens_per_minute),
+                self._tokens + elapsed * refill_per_second,
+            )
+            self._updated = now
+            if self._tokens < estimated_tokens:
+                retry_after = (estimated_tokens - self._tokens) / refill_per_second
+                return False, max(retry_after, 0.0)
+            self._tokens -= estimated_tokens
+            return True, 0.0

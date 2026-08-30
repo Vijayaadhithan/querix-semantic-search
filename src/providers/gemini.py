@@ -2,6 +2,7 @@ import contextlib
 import contextvars
 import json
 import logging
+import math
 import threading
 import time
 from urllib.parse import quote
@@ -9,7 +10,7 @@ from urllib.parse import quote
 import requests
 from requests.adapters import HTTPAdapter
 
-from core.request_limit import RequestWindowLimiter
+from core.request_limit import RequestWindowLimiter, TokenBudgetLimiter
 from core.settings import (
     GEMINI_API_BASE_URL,
     GEMINI_API_KEY,
@@ -18,6 +19,7 @@ from core.settings import (
     GROQ_API_BASE_URL,
     GROQ_API_KEY,
     GROQ_QUERY_RPM,
+    GROQ_QUERY_TPM,
     GROQ_TIMEOUT_SECONDS,
     QUERY_EXTRACT_MAX_OUTPUT_TOKENS,
     QUERY_EXTRACT_MODELS,
@@ -50,6 +52,7 @@ def _provider_rate_limit_cache():
 
 QUERY_PROVIDER_RATE_LIMIT_CACHE = _provider_rate_limit_cache()
 QUERY_MODEL_LIMITERS: dict[str, RequestWindowLimiter] = {}
+QUERY_MODEL_TOKEN_LIMITERS: dict[str, TokenBudgetLimiter] = {}
 QUERY_MODEL_LIMITERS_LOCK = threading.Lock()
 
 
@@ -94,6 +97,42 @@ def query_model_limiter(model: str) -> RequestWindowLimiter | None:
             )
             QUERY_MODEL_LIMITERS[provider] = limiter
         return limiter
+
+
+def query_model_token_limiter(model: str) -> TokenBudgetLimiter | None:
+    provider, _provider_model = query_model_route(model)
+    if provider != "groq":
+        return None
+    with QUERY_MODEL_LIMITERS_LOCK:
+        limiter = QUERY_MODEL_TOKEN_LIMITERS.get(provider)
+        if limiter is None:
+            limiter = TokenBudgetLimiter(
+                GROQ_QUERY_TPM,
+                redis_cache=QUERY_PROVIDER_RATE_LIMIT_CACHE,
+                scope=f"query:{provider}",
+            )
+            QUERY_MODEL_TOKEN_LIMITERS[provider] = limiter
+        return limiter
+
+
+def estimate_groq_request_tokens(
+    system_prompt: str,
+    user_prompt: str,
+    schema: dict,
+) -> int:
+    """Conservatively reserve Groq input plus maximum generated tokens."""
+    schema_text = json.dumps(
+        schema,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    request_text = system_prompt + user_prompt + schema_text
+    ascii_characters = sum(ord(character) < 128 for character in request_text)
+    non_ascii_characters = len(request_text) - ascii_characters
+    estimated_input_tokens = (
+        math.ceil(ascii_characters / 4) + (non_ascii_characters * 3) + 64
+    )
+    return estimated_input_tokens + QUERY_EXTRACT_MAX_OUTPUT_TOKENS
 
 
 def pooled_http_adapter() -> HTTPAdapter:
@@ -164,7 +203,9 @@ def _http_status_error(
 ) -> QueryModelUnavailableError | RuntimeError:
     response = exc.response
     status_code = response.status_code if response is not None else 0
-    if status_code in FALLBACK_HTTP_STATUSES:
+    if status_code in FALLBACK_HTTP_STATUSES or (
+        provider == "groq" and status_code == 400
+    ):
         return QueryModelUnavailableError(
             model,
             provider=provider,
@@ -174,6 +215,30 @@ def _http_status_error(
         f"Cannot extract a structured query with {provider} model "
         f"'{model}' (HTTP {status_code})."
     )
+
+
+def _http_error_metrics(exc: requests.HTTPError) -> dict[str, int | str]:
+    response = exc.response
+    if response is None:
+        return {"http_status": 0}
+    metrics: dict[str, int | str] = {"http_status": int(response.status_code)}
+    with contextlib.suppress(
+        requests.exceptions.JSONDecodeError,
+        TypeError,
+        ValueError,
+    ):
+        payload = response.json()
+        error = payload.get("error") if isinstance(payload, dict) else None
+        if isinstance(error, dict):
+            for source, target in (
+                ("type", "provider_error_type"),
+                ("code", "provider_error_code"),
+                ("param", "provider_error_param"),
+            ):
+                value = error.get(source)
+                if value is not None:
+                    metrics[target] = str(value)[:128]
+    return metrics
 
 
 def _structured_json_text(
@@ -394,6 +459,7 @@ class GeminiProvider:
                 provider="google",
             )
         except requests.HTTPError as exc:
+            metrics.update(_http_error_metrics(exc))
             error = _http_status_error(model, "google", exc)
             raise error from exc
         except QueryModelUnavailableError:
@@ -566,6 +632,7 @@ class GroqProvider:
                 provider="groq",
             )
         except requests.HTTPError as exc:
+            metrics.update(_http_error_metrics(exc))
             error = _http_status_error(model, "groq", exc)
             raise error from exc
         except QueryModelUnavailableError:
@@ -709,6 +776,47 @@ def structured_chat(
                         models[position] if position < len(models) else "none",
                     )
                     continue
+            estimated_groq_tokens = None
+            token_limiter = query_model_token_limiter(candidate_model)
+            if token_limiter is not None:
+                estimated_groq_tokens = estimate_groq_request_tokens(
+                    system_prompt,
+                    user_prompt,
+                    schema,
+                )
+                allowed, retry_after = token_limiter.allow(estimated_groq_tokens)
+                if not allowed:
+                    last_error = QueryModelUnavailableError(
+                        candidate_model,
+                        provider=provider_name,
+                        reason="local_token_limit",
+                    )
+                    attempt_metrics = {
+                        "load_ms": 0.0,
+                        "total_ms": 0.0,
+                        "model": candidate_model,
+                        "provider": provider_name,
+                        "status": "fallback",
+                        "reason": last_error.reason,
+                        "estimated_tokens": estimated_groq_tokens,
+                        "token_budget_per_minute": GROQ_QUERY_TPM,
+                        "retry_after_seconds": retry_after,
+                    }
+                    attempts.append(attempt_metrics)
+                    publish_metrics(
+                        attempt_metrics,
+                        failure_reason=last_error.reason,
+                    )
+                    LOGGER.info(
+                        "step=query_model status=fallback model=%s reason=%s "
+                        "estimated_tokens=%d retry_after=%.1fs next_model=%s",
+                        candidate_model,
+                        last_error.reason,
+                        estimated_groq_tokens,
+                        retry_after,
+                        models[position] if position < len(models) else "none",
+                    )
+                    continue
             try:
                 content = provider.structured_chat(
                     provider_model,
@@ -724,6 +832,13 @@ def structured_chat(
                     "status": "success",
                     "attempt_number": position,
                 }
+                if estimated_groq_tokens is not None:
+                    attempt_metrics.update(
+                        {
+                            "estimated_tokens": estimated_groq_tokens,
+                            "token_budget_per_minute": GROQ_QUERY_TPM,
+                        }
+                    )
                 attempts.append(attempt_metrics)
                 publish_metrics(attempt_metrics)
                 LOGGER.debug(
@@ -742,6 +857,13 @@ def structured_chat(
                     "reason": exc.reason,
                     "attempt_number": position,
                 }
+                if estimated_groq_tokens is not None:
+                    attempt_metrics.update(
+                        {
+                            "estimated_tokens": estimated_groq_tokens,
+                            "token_budget_per_minute": GROQ_QUERY_TPM,
+                        }
+                    )
                 attempts.append(attempt_metrics)
                 publish_metrics(attempt_metrics, failure_reason=exc.reason)
                 LOGGER.warning(

@@ -257,7 +257,10 @@ planner order is `groq:openai/gpt-oss-20b`, then
 is limited by its provider timeout, while `QUERY_EXTRACT_TOTAL_TIMEOUT_SECONDS`
 limits the complete fallback chain. Query plans are cached in Redis plus
 bounded process memory for 24 hours, so repeated normalized queries do not call
-any hosted planner.
+any hosted planner. `GROQ_QUERY_RPM=30` and `GROQ_QUERY_TPM=8000` mirror the
+free GPT-OSS 20B request and token budgets; Redis reserves both budgets across
+workers and routes overflow to Gemini before an upstream rate-limit response.
+Keep `GEMINI_QUERY_RPM` aligned with the active AI Studio project quota.
 
 Protect and verify the files:
 
