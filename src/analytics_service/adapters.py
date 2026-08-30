@@ -20,6 +20,11 @@ class CompanyAnalyticsAdapter(Protocol):
         queries: dict[str, Any],
     ) -> dict[str, Any]: ...
 
+    def facets_response(
+        self,
+        facets: dict[str, Any],
+    ) -> dict[str, Any]: ...
+
     def status_response(
         self,
         status: dict[str, Any],

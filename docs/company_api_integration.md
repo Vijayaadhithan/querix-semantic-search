@@ -47,12 +47,13 @@ false and `cache_seconds` as zero. For a cheap process-only liveness probe, use
 `GET /api/v1/live`.
 
 This endpoint returns `200` only when the configured tenant indexes, source
-database, and Ollama embedding model are available. It returns `503` when a
-critical dependency is unavailable. The public response contains only the
-aggregate status, tenant mode, configured tenant count, and cache/timestamp
-metadata; it does not expose tenant names, index counts, model names, or
-backend component details. Redis and hosted rerank providers are not readiness
-blockers because search has local/fusion fallbacks for those dependencies.
+database, Ollama embedding model, request-usage ledger, and configured Redis
+coordinator are available. It returns `503` when a critical dependency is
+unavailable. The public response contains only the aggregate status, tenant
+mode, configured tenant count, and cache/timestamp metadata; it does not expose
+tenant names, index counts, model names, or backend component details. Hosted
+query/rerank providers are not readiness blockers because search retains local
+planning and fusion fallbacks for those dependencies.
 
 Authenticated tenant health:
 

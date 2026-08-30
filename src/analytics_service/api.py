@@ -131,8 +131,14 @@ def create_app(
     async def protect_analytics_responses(request: Request, call_next):
         response = await call_next(request)
         if "/analytics/" in request.url.path:
-            response.headers["Cache-Control"] = "private, no-store"
-            response.headers["Pragma"] = "no-cache"
+            if request.url.path.endswith("/query-facets"):
+                response.headers.setdefault(
+                    "Cache-Control",
+                    "private, max-age=300, must-revalidate",
+                )
+            else:
+                response.headers["Cache-Control"] = "private, no-store"
+                response.headers["Pragma"] = "no-cache"
             response.headers["X-Content-Type-Options"] = "nosniff"
         return response
 
@@ -409,6 +415,7 @@ def create_app(
         has_filters: bool | None,
         sort_by: str,
         sort_direction: str,
+        include_facets: bool,
     ) -> dict[str, Any]:
         if not active_store.company_status(company.company_id)["has_snapshot"]:
             raise HTTPException(
@@ -440,9 +447,42 @@ def create_app(
                 has_filters=has_filters,
                 sort_by=sort_by,
                 sort_direction=sort_direction,
+                include_facets=include_facets,
             )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    def facet_response(
+        response: Response,
+        payload: dict[str, Any],
+        *,
+        snapshot_version: str | None,
+        audience: str,
+        if_none_match: str | None,
+    ) -> dict[str, Any] | Response:
+        if not snapshot_version:
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "No completed analytics snapshot is available. "
+                    "Run the analytics refresh."
+                ),
+            )
+        etag = f'"query-facets-{audience}-{snapshot_version}"'
+        candidates = {
+            candidate.strip() for candidate in str(if_none_match or "").split(",")
+        }
+        if "*" in candidates or etag in candidates or f"W/{etag}" in candidates:
+            return Response(
+                status_code=304,
+                headers={
+                    "ETag": etag,
+                    "Cache-Control": "private, max-age=300, must-revalidate",
+                },
+            )
+        response.headers["ETag"] = etag
+        response.headers["Cache-Control"] = "private, max-age=300, must-revalidate"
+        return payload
 
     @application.get("/api/v1/live", tags=["system"])
     def live() -> dict[str, str]:
@@ -450,12 +490,24 @@ def create_app(
 
     @application.get("/api/v1/ready", tags=["system"])
     def ready(response: Response) -> dict[str, Any]:
-        statuses = [
-            active_store.company_status(company_id)
-            for company_id in active_registry.companies
-        ]
-        ready_now = bool(statuses) and all(
-            status["has_snapshot"] for status in statuses
+        try:
+            statuses = [
+                active_store.company_status(company_id)
+                for company_id in active_registry.companies
+            ]
+            store_ready = active_store.readiness()
+        except Exception as exc:
+            statuses = []
+            store_ready = {"ok": False, "error_type": type(exc).__name__}
+        try:
+            auth_ready = active_auth_store.readiness()
+        except Exception as exc:
+            auth_ready = {"ok": False, "error_type": type(exc).__name__}
+        ready_now = (
+            bool(statuses)
+            and all(status["has_snapshot"] for status in statuses)
+            and bool(store_ready.get("ok"))
+            and bool(auth_ready.get("ok"))
         )
         if not ready_now:
             response.status_code = 503
@@ -741,6 +793,7 @@ def create_app(
         execution_path: str | None = Query(default=None, max_length=128),
         language: str | None = Query(default=None, max_length=64),
         include_filtered_results: bool = Query(default=False),
+        include_facets: bool = Query(default=True),
         request_kind: str | None = Query(
             default=None,
             pattern="^(text_search|filtered_browse|catalogue_browse)$",
@@ -783,6 +836,38 @@ def create_app(
             has_filters=has_filters,
             sort_by=sort_by,
             sort_direction=sort_direction,
+            include_facets=include_facets,
+        )
+
+    @application.get(
+        "/api/v1/admin/analytics/{company_endpoint}/query-facets",
+        tags=["internal-analytics"],
+        response_model=None,
+    )
+    def admin_query_facets(
+        company_endpoint: str,
+        response: Response,
+        if_none_match: str | None = Header(default=None, alias="If-None-Match"),
+        analytics_session: str | None = Cookie(
+            default=None,
+            alias=active_settings.internal_session_cookie_name,
+        ),
+    ) -> dict[str, Any] | Response:
+        company = require_admin_company(
+            company_endpoint,
+            analytics_session,
+            response,
+        )
+        payload = active_store.query_facets_snapshot(
+            company.company_id,
+            internal=True,
+        )
+        return facet_response(
+            response,
+            payload,
+            snapshot_version=payload["snapshot_version"],
+            audience="internal",
+            if_none_match=if_none_match,
         )
 
     @application.get(
@@ -868,6 +953,7 @@ def create_app(
         category: str | None = Query(default=None, max_length=191),
         language: str | None = Query(default=None, max_length=64),
         include_filtered_results: bool = Query(default=False),
+        include_facets: bool = Query(default=True),
         request_kind: str | None = Query(
             default=None,
             pattern="^(text_search|filtered_browse|catalogue_browse)$",
@@ -912,7 +998,42 @@ def create_app(
                 has_filters=has_filters,
                 sort_by=sort_by,
                 sort_direction=sort_direction,
+                include_facets=include_facets,
             )
+        )
+
+    @application.get(
+        "/api/v1/{company_endpoint}/analytics/query-facets",
+        tags=["company-analytics"],
+        response_model=None,
+    )
+    def company_query_facets(
+        company_endpoint: str,
+        response: Response,
+        if_none_match: str | None = Header(default=None, alias="If-None-Match"),
+        x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+        analytics_session: str | None = Cookie(
+            default=None,
+            alias=active_settings.company_session_cookie_name,
+        ),
+    ) -> dict[str, Any] | Response:
+        company = require_company(
+            company_endpoint,
+            x_api_key,
+            analytics_session,
+            response,
+        )
+        payload = active_store.query_facets_snapshot(
+            company.company_id,
+            internal=False,
+        )
+        adapted = company_adapter(company).facets_response(payload)
+        return facet_response(
+            response,
+            adapted,
+            snapshot_version=payload["snapshot_version"],
+            audience="company",
+            if_none_match=if_none_match,
         )
 
     @application.get(

@@ -24,6 +24,22 @@ def readiness_response(application: FastAPI) -> JSONResponse:
         else:
             checks["legacy"] = application.state.search_service.readiness()
 
+        if getattr(application.state, "redis_required", False):
+            redis_cache = getattr(application.state, "redis_cache", None)
+            checks["redis"] = {
+                "ok": bool(redis_cache and redis_cache.ping(force=True)),
+            }
+
+        usage_store = getattr(application.state, "usage_store", None)
+        if usage_store is not None:
+            try:
+                checks["usage_tracking"] = usage_store.readiness()
+            except Exception as exc:
+                checks["usage_tracking"] = {
+                    "ok": False,
+                    "error_type": type(exc).__name__,
+                }
+
         ollama = _ollama_readiness(application)
         checks["ollama"] = ollama
         ready_now = all(check.get("ok", False) for check in checks.values())

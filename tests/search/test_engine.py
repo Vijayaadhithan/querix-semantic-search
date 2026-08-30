@@ -740,6 +740,8 @@ def test_tenant_prompt_context_is_added_only_to_llm_planning(tmp_path):
     assert result["query_plan"]["execution_path"] == "semantic"
     assert provider.calls == 1
     assert "This tenant rents professional event equipment." in provider.system_prompt
+    assert "Canonical min_rental_fee" not in provider.system_prompt
+    assert "listing perspective" not in provider.system_prompt
     assert "Return the structured query plan." in provider.user_prompt
     assert '"semantic_query"' not in provider.user_prompt
 
@@ -789,6 +791,8 @@ def test_transliterated_queries_receive_trusted_semantic_normalization(tmp_path)
     assert result["query_plan"]["execution_path"] == "semantic"
     assert "romanized/transliterated" in provider.system_prompt
     assert "not a car" in provider.system_prompt
+    assert "Canonical min_rental_fee" in provider.system_prompt
+    assert "default listing perspective" in provider.system_prompt
     assert "Original user query:\nveetu vela kaari in Chennai" in (provider.user_prompt)
     assert "house maid domestic worker in Chennai" in provider.user_prompt
 

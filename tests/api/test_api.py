@@ -1,6 +1,8 @@
+import json
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -15,6 +17,7 @@ from api import (
     TenantServicePool,
     create_app,
 )
+from api.readiness import readiness_response
 from core.rate_limit import TenantRateLimiter
 from core.tenant_config import (
     TenantCompatibilityConfig,
@@ -590,6 +593,53 @@ def test_readiness_rechecks_dependencies_after_a_success():
     assert failed.status_code == 503
     assert failed.json()["status"] == "not_ready"
     assert failed.json()["cached"] is False
+
+
+def test_readiness_fails_when_usage_tracking_storage_is_degraded():
+    class UnreadyUsageStore:
+        @staticmethod
+        def readiness():
+            return {"ok": False, "error_type": "OperationalError"}
+
+    service = ProductSearchService(FakeEngine(), max_results=20)
+    with TestClient(
+        create_app(service=service, usage_store=UnreadyUsageStore())
+    ) as client:
+        response = client.get("/api/v1/ready")
+
+    assert response.status_code == 503
+    assert response.json()["status"] == "not_ready"
+    assert "checks" not in response.json()
+
+
+def test_readiness_fails_when_configured_redis_coordinator_is_degraded():
+    class HealthyService:
+        @staticmethod
+        def readiness():
+            return {"ok": True, "components": {}}
+
+    class UnreadyRedis:
+        @staticmethod
+        def ping(*, force=False):
+            assert force is True
+            return False
+
+    application = SimpleNamespace(
+        state=SimpleNamespace(
+            readiness_cache_lock=threading.Lock(),
+            tenant_mode=False,
+            search_service=HealthyService(),
+            redis_required=True,
+            redis_cache=UnreadyRedis(),
+            usage_store=None,
+            check_ollama_readiness=False,
+        )
+    )
+
+    response = readiness_response(application)
+
+    assert response.status_code == 503
+    assert json.loads(response.body)["status"] == "not_ready"
 
 
 def test_repeated_query_result_cache_is_reported_by_api():
