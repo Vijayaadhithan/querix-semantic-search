@@ -97,7 +97,7 @@ def infer_marketplace_target_ad_type(query: str) -> tuple[str, bool]:
 class MarketplaceSearchPolicy(DefaultSearchPolicy):
     """Reusable offer/wanted perspective for classified marketplaces."""
 
-    cache_key = "marketplace-v1"
+    cache_key = "marketplace-v2"
 
     def infer_target_ad_type(self, query: str) -> tuple[str, bool]:
         return infer_marketplace_target_ad_type(query)
@@ -112,5 +112,6 @@ class MarketplaceSearchPolicy(DefaultSearchPolicy):
             "wants an available item or service targets offer listings. A supplier "
             "looking for buyers, renters, customers, or clients targets wanted "
             "listings. Use wanted only for explicit request ads, third-party demand, "
-            "or an explicit supplier perspective."
+            "or an explicit supplier perspective. Use offer as the default listing "
+            "perspective when no decisive wanted/request evidence is present."
         )

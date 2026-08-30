@@ -8,6 +8,9 @@ from pathlib import Path
 from typing import Any, Protocol
 
 import pandas as pd
+from sqlalchemy import URL, create_engine, text
+from sqlalchemy.engine import Connection
+from sqlalchemy.pool import NullPool
 
 from .config import CompanyAnalyticsConfig, DatabaseTarget, DatasetMapping
 from .source_schema import DATASET_SPECS, DatasetContractError, DatasetSpec
@@ -99,19 +102,9 @@ def _mysql_ssl_context(target: DatabaseTarget) -> ssl.SSLContext | None:
     return context
 
 
-@contextmanager
-def _connection(target: DatabaseTarget) -> Iterator[Any]:
-    if not target.configured:
-        raise RuntimeError(f"Analytics {target.backend} database is not configured")
+def _connect_args(target: DatabaseTarget) -> dict[str, Any]:
     if target.backend == "mysql":
-        import pymysql
-
         options: dict[str, Any] = {
-            "host": target.host,
-            "port": target.port,
-            "user": target.user,
-            "password": target.password,
-            "database": target.database,
             "charset": "utf8mb4",
             "connect_timeout": target.connect_timeout_seconds,
             "read_timeout": target.read_timeout_seconds,
@@ -123,31 +116,45 @@ def _connection(target: DatabaseTarget) -> Iterator[Any]:
             options["ssl_disabled"] = True
         elif ssl_context is not None:
             options["ssl"] = ssl_context
-        connection = pymysql.connect(**options)
-    else:
-        import psycopg
+        return options
 
-        options = {
-            "host": target.host,
-            "port": target.port,
-            "dbname": target.database,
-            "user": target.user,
-            "password": target.password,
-            "connect_timeout": target.connect_timeout_seconds,
-            "sslmode": target.tls_mode,
-            "autocommit": True,
-        }
-        if target.tls_ca_file:
-            options["sslrootcert"] = target.tls_ca_file
-        if target.tls_cert_file:
-            options["sslcert"] = target.tls_cert_file
-        if target.tls_key_file:
-            options["sslkey"] = target.tls_key_file
-        connection = psycopg.connect(**options)
+    options = {
+        "connect_timeout": target.connect_timeout_seconds,
+        "sslmode": target.tls_mode,
+        "autocommit": True,
+    }
+    if target.tls_ca_file:
+        options["sslrootcert"] = target.tls_ca_file
+    if target.tls_cert_file:
+        options["sslcert"] = target.tls_cert_file
+    if target.tls_key_file:
+        options["sslkey"] = target.tls_key_file
+    return options
+
+
+@contextmanager
+def _connection(target: DatabaseTarget) -> Iterator[Connection]:
+    if not target.configured:
+        raise RuntimeError(f"Analytics {target.backend} database is not configured")
+    driver = "mysql+pymysql" if target.backend == "mysql" else "postgresql+psycopg"
+    url = URL.create(
+        driver,
+        username=target.user,
+        password=target.password,
+        host=target.host,
+        port=target.port,
+        database=target.database,
+    )
+    engine = create_engine(
+        url,
+        connect_args=_connect_args(target),
+        poolclass=NullPool,
+    )
     try:
-        yield connection
+        with engine.connect() as connection:
+            yield connection
     finally:
-        connection.close()
+        engine.dispose()
 
 
 class SqlAnalyticsDataSource:
@@ -218,7 +225,7 @@ class SqlAnalyticsDataSource:
                     ),
                 )
                 try:
-                    frame = pd.read_sql_query(sql, connection)
+                    frame = pd.read_sql_query(text(sql), connection)
                 except Exception as exc:
                     raise RuntimeError(
                         f"Unable to load analytics dataset {name!r} "

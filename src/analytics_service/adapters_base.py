@@ -17,5 +17,8 @@ class PassthroughCompanyAnalyticsAdapter:
     def queries_response(self, queries: dict[str, Any]) -> dict[str, Any]:
         return queries
 
+    def facets_response(self, facets: dict[str, Any]) -> dict[str, Any]:
+        return facets
+
     def status_response(self, status: dict[str, Any]) -> dict[str, Any]:
         return status

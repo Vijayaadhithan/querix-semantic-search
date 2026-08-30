@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import sqlite3
 import threading
 from datetime import UTC, datetime
@@ -171,6 +172,22 @@ class MonthlyUsageStore:
             "total_tokens": sum(row["total_tokens"] for row in rows),
             "breakdown": rows,
         }
+
+    def readiness(self) -> dict[str, Any]:
+        """Verify that the request-critical usage ledger is readable and writable."""
+        with self._lock:
+            try:
+                self._connection.execute("SELECT 1 FROM monthly_usage LIMIT 1")
+                self._connection.execute("BEGIN IMMEDIATE")
+                self._connection.execute(
+                    "UPDATE monthly_usage SET updated_at = updated_at WHERE 0"
+                )
+                self._connection.rollback()
+            except Exception as exc:
+                with contextlib.suppress(Exception):
+                    self._connection.rollback()
+                return {"ok": False, "error_type": type(exc).__name__}
+        return {"ok": True}
 
     def close(self) -> None:
         with self._lock:

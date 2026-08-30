@@ -223,6 +223,7 @@ not reuse or alter the semantic-search API's `ACME_API_KEY`.
 ```text
 GET /api/v1/{company}/analytics/dashboard
 GET /api/v1/{company}/analytics/queries
+GET /api/v1/{company}/analytics/query-facets
 GET /api/v1/{company}/analytics/status
 ```
 
@@ -248,6 +249,7 @@ Internal endpoints require an `internal_admin` analytics session:
 GET /api/v1/admin/analytics/companies
 GET /api/v1/admin/analytics/{company}/dashboard
 GET /api/v1/admin/analytics/{company}/queries
+GET /api/v1/admin/analytics/{company}/query-facets
 ```
 
 Dashboard activity filters:
@@ -316,6 +318,7 @@ ad_type
 diagnostic_code (internal endpoint only)
 has_filters
 include_filtered_results
+include_facets (defaults to true for backward compatibility)
 from
 to
 ```
@@ -328,8 +331,15 @@ field and direction that created it.
 The query endpoint uses a stable descending `(created_at, request_id)` cursor.
 It never uses offset pagination.
 
-Analytics responses set `Cache-Control: private, no-store` and must remain
-behind authenticated TLS termination.
+Query pages continue to include `facets` by default. Send
+`include_facets=false` after the first page to avoid retransmitting the
+snapshot-wide city and subcategory lists. The dedicated `query-facets`
+endpoints return `company_id`, `snapshot_version`, and `facets`; they cache the
+facet calculation by snapshot version and support `If-None-Match`/`ETag` with
+`Cache-Control: private, max-age=300, must-revalidate`.
+
+Other analytics responses set `Cache-Control: private, no-store`. All analytics
+routes must remain behind authenticated TLS termination.
 
 Example:
 

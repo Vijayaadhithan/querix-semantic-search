@@ -7,7 +7,9 @@ from pathlib import Path
 import pandas as pd
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.pool import NullPool
 
+from analytics_service import source as analytics_source
 from analytics_service.api import create_app
 from analytics_service.auth import (
     COMPANY_USER,
@@ -498,6 +500,61 @@ def test_source_normalizes_configured_numeric_columns():
     assert normalized["actual_view_count"].iloc[0] == 10
 
 
+@pytest.mark.parametrize(
+    ("backend", "driver"),
+    (("mysql", "mysql+pymysql"), ("postgres", "postgresql+psycopg")),
+)
+def test_sql_source_uses_unpooled_sqlalchemy_connection(
+    backend,
+    driver,
+    monkeypatch,
+):
+    target = DatabaseTarget(
+        backend=backend,
+        host="db.internal",
+        port=3306 if backend == "mysql" else 5432,
+        database="company",
+        user="reader",
+        password="special:/@password",
+        tls_mode="disable",
+    )
+    captured = {}
+
+    class FakeConnectionContext:
+        def __enter__(self):
+            return "sqlalchemy-connection"
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+    class FakeEngine:
+        disposed = False
+
+        def connect(self):
+            return FakeConnectionContext()
+
+        def dispose(self):
+            self.disposed = True
+
+    engine = FakeEngine()
+
+    def fake_create_engine(url, **kwargs):
+        captured["url"] = url
+        captured.update(kwargs)
+        return engine
+
+    monkeypatch.setattr(analytics_source, "create_engine", fake_create_engine)
+
+    with analytics_source._connection(target) as connection:
+        assert connection == "sqlalchemy-connection"
+
+    assert captured["url"].drivername == driver
+    assert captured["url"].password == "special:/@password"
+    assert captured["poolclass"] is NullPool
+    assert captured["connect_args"]["connect_timeout"] == 10
+    assert engine.disposed is True
+
+
 def test_daily_refresh_publishes_both_audiences_and_queries(tmp_path):
     company = analytics_company(tmp_path)
     store = AnalyticsSnapshotStore(tmp_path / "snapshots.sqlite3")
@@ -566,7 +623,9 @@ def test_daily_refresh_publishes_both_audiences_and_queries(tmp_path):
         internal=False,
         limit=1,
         cursor=company_queries["next_cursor"],
+        include_facets=False,
     )
+    assert "facets" not in second_page
     assert (
         second_page["items"][0]["request_id"]
         != (company_queries["items"][0]["request_id"])
@@ -1131,6 +1190,89 @@ def test_failed_refresh_keeps_last_completed_snapshot(tmp_path):
     assert store.company_status("gainr")["latest_run"]["status"] == "failed"
 
 
+def test_startup_reconciliation_closes_only_stale_running_refreshes(tmp_path):
+    path = tmp_path / "snapshots.sqlite3"
+    store = AnalyticsSnapshotStore(path)
+    stale_run = store.begin_refresh("gainr")
+    recent_run = store.begin_refresh("gainr")
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            "UPDATE analytics_refresh_runs SET started_at = ? WHERE run_id = ?",
+            ("2026-08-28T00:00:00+00:00", stale_run),
+        )
+        connection.execute(
+            "UPDATE analytics_refresh_runs SET started_at = ? WHERE run_id = ?",
+            ("2026-08-30T09:00:00+00:00", recent_run),
+        )
+
+    reconciled = store.reconcile_stale_refreshes(
+        now=pd.Timestamp("2026-08-30T10:00:00Z").to_pydatetime()
+    )
+
+    with sqlite3.connect(path) as connection:
+        connection.row_factory = sqlite3.Row
+        rows = {
+            row["run_id"]: row
+            for row in connection.execute(
+                "SELECT run_id, status, completed_at, error_type "
+                "FROM analytics_refresh_runs"
+            )
+        }
+    assert reconciled == 1
+    assert rows[stale_run]["status"] == "interrupted"
+    assert rows[stale_run]["completed_at"] == "2026-08-30T10:00:00+00:00"
+    assert rows[stale_run]["error_type"] == "process_interrupted"
+    assert rows[recent_run]["status"] == "running"
+
+
+def test_analytics_readiness_requires_snapshot_store_and_auth_db(
+    tmp_path,
+    monkeypatch,
+):
+    company = analytics_company(tmp_path)
+    registry = AnalyticsRegistry({"gainr": company})
+    settings = AnalyticsSettings(
+        host="127.0.0.1",
+        port=8010,
+        snapshot_db_path=tmp_path / "snapshots.sqlite3",
+        tenant_config_dir=tmp_path,
+        cors_origins=(),
+        query_page_size=50,
+        query_max_page_size=200,
+        session_cookie_secure=False,
+    )
+    store = AnalyticsSnapshotStore(settings.snapshot_db_path)
+    auth_store = AnalyticsAuthStore(settings.snapshot_db_path)
+    AnalyticsRefreshService(FakeSource(analytics_data()), store).refresh(company)
+    app = create_app(
+        settings=settings,
+        registry=registry,
+        store=store,
+        auth_store=auth_store,
+    )
+
+    with TestClient(app) as client:
+        healthy = client.get("/api/v1/ready")
+        monkeypatch.setattr(
+            store,
+            "readiness",
+            lambda: {"ok": False, "error_type": "OperationalError"},
+        )
+        store_failed = client.get("/api/v1/ready")
+        monkeypatch.setattr(store, "readiness", lambda: {"ok": True})
+        monkeypatch.setattr(
+            auth_store,
+            "readiness",
+            lambda: {"ok": False, "error_type": "OperationalError"},
+        )
+        auth_failed = client.get("/api/v1/ready")
+
+    assert healthy.status_code == 200
+    assert store_failed.status_code == 503
+    assert auth_failed.status_code == 503
+    assert set(healthy.json()) == set(store_failed.json()) == set(auth_failed.json())
+
+
 def test_api_enforces_company_and_internal_field_boundaries(
     tmp_path,
     monkeypatch,
@@ -1201,6 +1343,21 @@ def test_api_enforces_company_and_internal_field_boundaries(
             "/api/v1/gainr/analytics/queries?outcome=zero_result",
             headers={"X-API-Key": "gainr-analytics-secret"},
         )
+        compact_page = client.get(
+            "/api/v1/gainr/analytics/queries?include_facets=false",
+            headers={"X-API-Key": "gainr-analytics-secret"},
+        )
+        facets = client.get(
+            "/api/v1/gainr/analytics/query-facets",
+            headers={"X-API-Key": "gainr-analytics-secret"},
+        )
+        facets_not_modified = client.get(
+            "/api/v1/gainr/analytics/query-facets",
+            headers={
+                "X-API-Key": "gainr-analytics-secret",
+                "If-None-Match": facets.headers["etag"],
+            },
+        )
     with TestClient(app) as company_client:
         login = company_client.post(
             "/api/v1/gainr/analytics/auth/login",
@@ -1239,6 +1396,14 @@ def test_api_enforces_company_and_internal_field_boundaries(
     assert "api_performance" not in company_result.json()
     assert company_queries.json()["returned"] == 1
     assert company_queries.json()["items"][0]["outcome"] == "zero_result"
+    assert "facets" in company_queries.json()
+    assert "facets" not in compact_page.json()
+    assert facets.status_code == 200
+    assert facets.json()["snapshot_version"]
+    assert facets.json()["facets"] == company_queries.json()["facets"]
+    assert facets.headers["cache-control"] == ("private, max-age=300, must-revalidate")
+    assert facets_not_modified.status_code == 304
+    assert facets_not_modified.content == b""
     assert login.status_code == 200
     assert login.json()["user"]["company_id"] == "gainr"
     assert "HttpOnly" in login.headers["set-cookie"]

@@ -110,10 +110,12 @@ analytics service.
 | `POST` | `/api/v1/analytics/internal/auth/logout` | internal cookie | Revoke internal session only |
 | `GET` | `/api/v1/{company}/analytics/dashboard` | company cookie or API key | Company-safe dashboard |
 | `GET` | `/api/v1/{company}/analytics/queries` | company cookie or API key | Company-safe search history |
+| `GET` | `/api/v1/{company}/analytics/query-facets` | company cookie or API key | Versioned Query Explorer facets |
 | `GET` | `/api/v1/{company}/analytics/status` | company cookie or API key | Company snapshot status |
 | `GET` | `/api/v1/admin/analytics/companies` | internal cookie | Company/snapshot inventory |
 | `GET` | `/api/v1/admin/analytics/{company}/dashboard` | internal cookie | One company's internal dashboard |
 | `GET` | `/api/v1/admin/analytics/{company}/queries` | internal cookie | One company's internal query history |
+| `GET` | `/api/v1/admin/analytics/{company}/query-facets` | internal cookie | One company's internal Query Explorer facets |
 
 Local liveness and readiness are `/api/v1/live` and `/api/v1/ready`.
 
@@ -131,7 +133,8 @@ Response `200`:
 
 ### `GET /api/v1/ready`
 
-Response `200` when every configured company has a completed snapshot:
+Response `200` when every configured company has a completed snapshot and the
+snapshot/authentication database is readable and writable:
 
 ```json
 {
@@ -331,11 +334,18 @@ Both accept:
 | `category` | string, max 191 | Category filter |
 | `execution_path` | string, max 128; internal only | Exact, case-insensitive execution-path filter |
 | `language` | string, max 64 | Language filter |
+| `include_facets` | boolean; default `true` | Set `false` after the first page to omit repeated snapshot-wide facets |
 | `from` | ISO-8601 datetime | Inclusive lower time boundary |
 | `to` | ISO-8601 datetime | Inclusive upper time boundary |
 
 The stable cursor is based on descending `(created_at, request_id)`. Do not
 construct or edit it in the frontend.
+
+The dedicated company and internal `query-facets` endpoints return the same
+facet choices with their immutable `snapshot_version`. They support ETag
+revalidation; send the prior `ETag` in `If-None-Match` and retain cached facets
+when the response is `304`. Facet responses use
+`Cache-Control: private, max-age=300, must-revalidate`.
 
 Company response `200`:
 

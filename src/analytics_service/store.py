@@ -2,16 +2,20 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import sqlite3
 import threading
 import uuid
 from collections.abc import Iterator
-from contextlib import contextmanager
-from datetime import UTC, datetime
+from contextlib import contextmanager, suppress
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 from .schedule import REFRESH_SCHEDULE
+
+LOGGER = logging.getLogger(__name__)
+STALE_REFRESH_AFTER = timedelta(hours=6)
 
 
 def utc_now_iso() -> str:
@@ -121,6 +125,12 @@ class AnalyticsSnapshotStore:
         self._lock = threading.Lock()
         self._facet_cache: dict[tuple[str, str, bool], dict[str, Any]] = {}
         self._initialize()
+        interrupted = self.reconcile_stale_refreshes()
+        if interrupted:
+            LOGGER.warning(
+                "Reconciled stale analytics refresh runs status=interrupted count=%d",
+                interrupted,
+            )
 
     @staticmethod
     def _dashboard_activity_record(
@@ -306,6 +316,32 @@ class AnalyticsSnapshotStore:
                 (run_id, company_id, utc_now_iso()),
             )
         return run_id
+
+    def reconcile_stale_refreshes(
+        self,
+        *,
+        now: datetime | None = None,
+    ) -> int:
+        """Close runs that could not record a terminal state before shutdown."""
+        completed_at = now or datetime.now(UTC)
+        if completed_at.tzinfo is None:
+            completed_at = completed_at.replace(tzinfo=UTC)
+        else:
+            completed_at = completed_at.astimezone(UTC)
+        cutoff = completed_at - STALE_REFRESH_AFTER
+        with self._connection() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE analytics_refresh_runs
+                SET status = 'interrupted',
+                    completed_at = ?,
+                    error_type = 'process_interrupted'
+                WHERE status = 'running'
+                  AND started_at < ?
+                """,
+                (completed_at.isoformat(), cutoff.isoformat()),
+            )
+        return max(int(cursor.rowcount), 0)
 
     def fail_refresh(
         self,
@@ -546,6 +582,7 @@ class AnalyticsSnapshotStore:
         has_filters: bool | None = None,
         sort_by: str = "created_at",
         sort_direction: str = "desc",
+        include_facets: bool = True,
     ) -> dict[str, Any]:
         field = "internal_json" if internal else "company_json"
         normalized_sort = str(sort_by or "created_at").strip().casefold()
@@ -690,7 +727,7 @@ class AnalyticsSnapshotStore:
                     offset + len(visible),
                 )
             )
-        return {
+        result = {
             "company_id": company_id,
             "items": [json.loads(row["payload_json"]) for row in visible],
             "returned": len(visible),
@@ -700,11 +737,22 @@ class AnalyticsSnapshotStore:
                 "sort_by": normalized_sort,
                 "sort_direction": normalized_direction,
             },
-            "facets": self.query_facets(company_id, internal=internal),
         }
+        if include_facets:
+            result["facets"] = self.query_facets(company_id, internal=internal)
+        return result
 
     def query_facets(self, company_id: str, *, internal: bool) -> dict[str, Any]:
         """Return snapshot-wide Query Explorer choices, not page-local options."""
+        return self.query_facets_snapshot(company_id, internal=internal)["facets"]
+
+    def query_facets_snapshot(
+        self,
+        company_id: str,
+        *,
+        internal: bool,
+    ) -> dict[str, Any]:
+        """Return facet choices with the immutable snapshot version they describe."""
         field = "internal_json" if internal else "company_json"
         with self._connection() as connection:
             snapshot = connection.execute(
@@ -713,18 +761,26 @@ class AnalyticsSnapshotStore:
             ).fetchone()
             if snapshot is None:
                 return {
-                    "request_kinds": [],
-                    "cities": [],
-                    "subcategories": [],
-                    "ad_types": [],
-                    "diagnostic_codes": [],
+                    "company_id": company_id,
+                    "snapshot_version": None,
+                    "facets": {
+                        "request_kinds": [],
+                        "cities": [],
+                        "subcategories": [],
+                        "ad_types": [],
+                        "diagnostic_codes": [],
+                    },
                 }
             version = str(snapshot["active_version"])
             cache_key = (company_id, version, internal)
             with self._lock:
                 cached = self._facet_cache.get(cache_key)
             if cached is not None:
-                return cached
+                return {
+                    "company_id": company_id,
+                    "snapshot_version": version,
+                    "facets": cached,
+                }
 
             def choices(path: str) -> list[str]:
                 rows = connection.execute(
@@ -774,7 +830,11 @@ class AnalyticsSnapshotStore:
             }
         with self._lock:
             self._facet_cache[cache_key] = facets
-        return facets
+        return {
+            "company_id": company_id,
+            "snapshot_version": version,
+            "facets": facets,
+        }
 
     def company_status(self, company_id: str) -> dict[str, Any]:
         with self._connection() as connection:
@@ -829,3 +889,28 @@ class AnalyticsSnapshotStore:
             ),
             "refresh_schedule": REFRESH_SCHEDULE,
         }
+
+    def readiness(self) -> dict[str, Any]:
+        """Verify the snapshot database can serve reads and accept state changes."""
+        connection = None
+        try:
+            connection = sqlite3.connect(
+                self.path,
+                timeout=1,
+                isolation_level=None,
+            )
+            connection.execute("SELECT 1 FROM analytics_snapshots LIMIT 1")
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute(
+                "UPDATE analytics_refresh_runs SET status = status WHERE 0"
+            )
+            connection.rollback()
+        except Exception as exc:
+            if connection is not None:
+                with suppress(Exception):
+                    connection.rollback()
+            return {"ok": False, "error_type": type(exc).__name__}
+        finally:
+            if connection is not None:
+                connection.close()
+        return {"ok": True}

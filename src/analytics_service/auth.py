@@ -10,7 +10,7 @@ import sqlite3
 import threading
 import uuid
 from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -264,6 +264,31 @@ class AnalyticsAuthStore:
             )
             self._migrate_user_identity_scope(connection)
             self._migrate_sessions(connection)
+
+    def readiness(self) -> dict[str, object]:
+        """Verify authentication state is readable and transactionally writable."""
+        connection = None
+        try:
+            connection = sqlite3.connect(
+                self.path,
+                timeout=1,
+                isolation_level=None,
+            )
+            connection.execute("SELECT 1 FROM analytics_users LIMIT 1")
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute(
+                "UPDATE analytics_sessions SET revoked_at = revoked_at WHERE 0"
+            )
+            connection.rollback()
+        except Exception as exc:
+            if connection is not None:
+                with suppress(Exception):
+                    connection.rollback()
+            return {"ok": False, "error_type": type(exc).__name__}
+        finally:
+            if connection is not None:
+                connection.close()
+        return {"ok": True}
 
     @staticmethod
     def _create_user_identity_indexes(connection: sqlite3.Connection) -> None:

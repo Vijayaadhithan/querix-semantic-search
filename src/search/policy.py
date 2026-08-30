@@ -82,7 +82,7 @@ class SearchPolicy(Protocol):
 class DefaultSearchPolicy:
     """Identity policy used by tenants without marketplace-specific rules."""
 
-    cache_key = "default-v1"
+    cache_key = "default-v2"
 
     def normalize_query(
         self,
@@ -106,9 +106,10 @@ class DefaultSearchPolicy:
 
     def planner_instructions(self) -> str:
         return (
-            "This is a general product and service catalog. Target available offer "
-            "listings. Do not infer wanted/request advertisements unless a tenant "
-            "plugin explicitly enables classified-marketplace behavior."
+            "This is a general product and service catalog. Do not introduce "
+            "domain semantics that are absent from the tenant's catalog and prompt "
+            "context. Treat required compatibility fields as neutral defaults and "
+            "leave absent optional filters null."
         )
 
     def rewrite_semantic_query(self, query: str, semantic_query: str) -> str:

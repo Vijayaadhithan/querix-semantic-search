@@ -119,6 +119,11 @@ def _configure_runtime(
     else:
         application.state.search_service = service
 
+    application.state.redis_cache = redis_cache
+    application.state.redis_required = bool(
+        REDIS_ENABLED and service is None and tenant_registry is None
+    )
+
     return RuntimeResources(
         engine=engine,
         pool=pool,

@@ -454,7 +454,7 @@ def _candidate_text(candidate: dict) -> str:
 class GainrSearchPolicy(MarketplaceSearchPolicy):
     """Gainr marketplace interpretation without coupling it to the engine."""
 
-    cache_key = "gainr-marketplace-v13"
+    cache_key = "gainr-marketplace-v14"
 
     def normalize_query(
         self,
@@ -487,8 +487,11 @@ class GainrSearchPolicy(MarketplaceSearchPolicy):
             "romanized/transliterated Indian-language wording. Resolve the intended "
             "meaning before selecting a catalog value; Tamil 'veetu vela kaari' "
             "means a house maid or domestic worker, not a car. Keep rental duration "
-            "and rental-fee semantics. A person hiring an available listing targets "
-            "offer ads; a supplier searching for customers targets wanted ads."
+            "and rental-fee semantics. Canonical min_rental_fee and max_rental_fee "
+            "are the internal lower and upper price bounds. Once a duration or price "
+            "is extracted, remove it from semantic_query and keyword_query. A person "
+            "hiring an available listing targets offer ads; a supplier searching for "
+            "customers targets wanted ads."
         )
 
     @staticmethod
