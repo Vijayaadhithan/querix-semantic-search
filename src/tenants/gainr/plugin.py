@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from tenants.plugin import (
+    AnalyticsAdapterRegistration,
     CompatibilityAdapterRegistration,
     SearchClientContract,
     TenantPlugin,
@@ -39,12 +40,22 @@ def _gainr_search_payload(
 
 
 def _build_gainr_analytics(company):
-    from tenants.gainr.analytics import GainrAnalyticsAdapter
+    from tenants.gainr.analytics import (
+        GAINR_ANALYTICS_CONTRACT,
+        GainrAnalyticsAdapter,
+    )
 
     return GainrAnalyticsAdapter(
         company_id=company.company_id,
         plugin_name="gainr",
+        analytics_contract=GAINR_ANALYTICS_CONTRACT,
     )
+
+
+def _gainr_analytics_contract():
+    from tenants.gainr.analytics import GAINR_ANALYTICS_CONTRACT
+
+    return GAINR_ANALYTICS_CONTRACT
 
 
 PLUGIN = TenantPlugin(
@@ -63,6 +74,11 @@ PLUGIN = TenantPlugin(
             ),
         )
     },
-    analytics_adapters={"gainr": _build_gainr_analytics},
+    analytics_adapters={
+        "gainr": AnalyticsAdapterRegistration(
+            factory=_build_gainr_analytics,
+            contract_factory=_gainr_analytics_contract,
+        )
+    },
     logger_names=("gainr_compat",),
 )

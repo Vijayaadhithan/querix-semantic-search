@@ -80,8 +80,8 @@ _GROUP_LABELS = {
 _QUESTIONS = {
     "q47_supply_by_category": "Which marketplace categories have the most supply?",
     "q48_supply_by_city": "Which cities have the most listing supply?",
-    "q51_user_growth": "How is Gainr's user base growing?",
-    "q56_verification": "How many Gainr users are verified?",
+    "q51_user_growth": "How is {marketplace_name}'s user base growing?",
+    "q56_verification": "How many {marketplace_name} users are verified?",
     "q59_top_subcategories": "Which subcategories have the most listings?",
     "q60_rental_fee_distribution": "How are rental fees distributed?",
     "q62_ad_status": "What is the current listing-status mix?",
@@ -142,6 +142,7 @@ def build_metric_definitions(
     *,
     audience: str,
     source_rows: Mapping[str, int],
+    marketplace_name: str,
 ) -> dict[str, dict[str, Any]]:
     definitions = {}
     for module, metric_names in profile.items():
@@ -152,7 +153,9 @@ def build_metric_definitions(
             group = _group(metric_id, module, audience)
             title = str(payload.get("title") or metric_id)
             definitions[metric_id] = {
-                "question": _QUESTIONS.get(metric_id, title),
+                "question": _QUESTIONS.get(metric_id, title).format(
+                    marketplace_name=marketplace_name
+                ),
                 "description": str(payload.get("note") or ""),
                 "group": group,
                 "group_label": _GROUP_LABELS[group],

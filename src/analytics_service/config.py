@@ -12,8 +12,9 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import yaml
 from dotenv import load_dotenv
 
-from .adapters import supported_analytics_adapters
+from .adapters import analytics_adapter_contract, supported_analytics_adapters
 from .metrics import validate_metric_profile
+from .source_schema import DatasetSpec
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,62}$")
@@ -262,6 +263,7 @@ class CompanyAnalyticsConfig:
     timezone: str = "UTC"
     company_metric_profile: dict[str, tuple[str, ...]] = field(default_factory=dict)
     internal_metric_profile: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    dataset_specs: dict[str, DatasetSpec] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not TENANT_ID_RE.fullmatch(self.company_id):
@@ -280,21 +282,21 @@ class CompanyAnalyticsConfig:
                 f"Unsupported analytics adapter {self.adapter!r}; "
                 f"supported adapters: {supported}"
             )
-
-
-DEFAULT_TABLES = {
-    "search_history": "semantic_search_history",
-    "api_usage": "semantic_search_api_usage",
-    "categories": "categories",
-    "sub_categories": "sub_categories",
-    "states": "states",
-    "location": "location",
-    "attributes": "attributes",
-    "attribute_values": "attribute_values",
-    "ads_attributes": "ads_attributes",
-    "ads": "ads",
-    "users": "users",
-}
+        contract = analytics_adapter_contract(self.adapter)
+        specs = dict(self.dataset_specs or contract.dataset_specs)
+        if set(self.datasets) != set(specs):
+            raise ValueError(
+                "Analytics configured datasets must exactly match the adapter contract"
+            )
+        for name, mapping in self.datasets.items():
+            allowed_columns = set(specs[name].usecols or specs[name].required_columns)
+            unknown = set(mapping.columns) - allowed_columns
+            if unknown:
+                raise ValueError(
+                    f"Analytics dataset {name!r} maps unsupported canonical columns: "
+                    + ", ".join(sorted(unknown))
+                )
+        object.__setattr__(self, "dataset_specs", specs)
 
 
 def _env_value(section: dict[str, Any], name: str, default_env: str) -> str:
@@ -370,6 +372,8 @@ def load_company_analytics_config(path: Path) -> CompanyAnalyticsConfig | None:
         return None
     company = dict(raw.get("company", {}))
     company_id = str(company.get("id", path.stem)).strip().casefold()
+    adapter = str(analytics.get("adapter", "default")).strip().casefold()
+    contract = analytics_adapter_contract(adapter)
     endpoint_slug = str(analytics.get("endpoint_slug", company_id)).strip().casefold()
     api_key_envs = tuple(
         str(name).strip()
@@ -403,30 +407,34 @@ def load_company_analytics_config(path: Path) -> CompanyAnalyticsConfig | None:
     company_metric_profile = validate_metric_profile(
         raw_metric_profiles.get("company"),
         audience="company",
+        available_metrics=contract.available_metrics,
+        allowed_modules=contract.company_modules,
     )
     internal_metric_profile = validate_metric_profile(
         raw_metric_profiles.get("internal"),
         audience="internal",
+        available_metrics=contract.available_metrics,
+        allowed_modules=contract.internal_modules,
     )
 
     raw_tables = dict(analytics.get("tables", {}))
     raw_columns = dict(analytics.get("columns", {}))
-    tables = {
-        **DEFAULT_TABLES,
-        "search_history": str(
-            analytics.get(
-                "search_history_table",
-                DEFAULT_TABLES["search_history"],
-            )
-        ),
-        "api_usage": str(
-            analytics.get(
-                "api_usage_table",
-                DEFAULT_TABLES["api_usage"],
-            )
-        ),
-        **{str(key): str(value) for key, value in raw_tables.items()},
-    }
+    unknown_tables = set(raw_tables) - set(contract.dataset_specs)
+    unknown_columns = set(raw_columns) - set(contract.dataset_specs)
+    if unknown_tables or unknown_columns:
+        unknown = sorted(unknown_tables | unknown_columns)
+        raise ValueError(
+            "Analytics configuration references unsupported datasets: "
+            + ", ".join(unknown)
+        )
+    tables = dict(contract.default_tables)
+    for dataset_name, legacy_name in (
+        ("search_history", "search_history_table"),
+        ("api_usage", "api_usage_table"),
+    ):
+        if dataset_name in tables and legacy_name in analytics:
+            tables[dataset_name] = str(analytics[legacy_name])
+    tables.update({str(key): str(value) for key, value in raw_tables.items()})
     datasets = {
         name: DatasetMapping(
             table=_safe_identifier(table, label=f"Analytics table {name}"),
@@ -445,11 +453,12 @@ def load_company_analytics_config(path: Path) -> CompanyAnalyticsConfig | None:
         telemetry_database=telemetry_database,
         datasets=datasets,
         config_path=path,
-        adapter=str(analytics.get("adapter", "default")).strip().casefold(),
+        adapter=adapter,
         history_days=int(analytics.get("history_days", 90)),
         timezone=str(analytics.get("timezone", "UTC")).strip() or "UTC",
         company_metric_profile=company_metric_profile,
         internal_metric_profile=internal_metric_profile,
+        dataset_specs=dict(contract.dataset_specs),
     )
 
 
@@ -493,7 +502,7 @@ class AnalyticsRegistry:
             for dataset_name, mapping in company.datasets.items():
                 target = (
                     company.telemetry_database
-                    if dataset_name == "api_usage"
+                    if company.dataset_specs[dataset_name].database == "telemetry"
                     else company.database
                 )
                 identity = (*self._database_identity(target), mapping.table)

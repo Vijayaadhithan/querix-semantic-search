@@ -37,7 +37,7 @@ from .config import (
     CompanyAnalyticsConfig,
     load_analytics_registry,
 )
-from .dashboard_filters import DashboardFilters, build_dashboard_overview
+from .filters import DashboardFilters
 from .schedule import REFRESH_SCHEDULE
 from .store import AnalyticsSnapshotStore
 
@@ -94,7 +94,7 @@ def create_app(
         time_bucket: datetime | None,
     ) -> dict[str, Any]:
         del generated_at
-        return build_dashboard_overview(
+        return active_adapters[company_id].dashboard_overview(
             list(
                 active_store.dashboard_activity_records(
                     company_id,

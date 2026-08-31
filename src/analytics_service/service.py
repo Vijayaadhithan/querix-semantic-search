@@ -1,23 +1,15 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
 import pandas as pd
 
+from .adapters import build_analytics_adapter
 from .config import CompanyAnalyticsConfig
-from .domain import (
-    build_company_business_insights,
-    build_company_overview,
-    process_part_a,
-    process_part_b,
-    process_part_c,
-    process_part_d,
-)
-from .domain.search.records import build_query_records
-from .metric_catalog import build_metric_definitions
 from .metrics import (
     metric_counts,
     resolve_metric_profiles,
@@ -25,26 +17,17 @@ from .metrics import (
 )
 from .schedule import REFRESH_SCHEDULE
 from .source import AnalyticsDataSource
+from .source_schema import DatasetSpec
 from .store import AnalyticsSnapshotStore
 
 LOGGER = logging.getLogger(__name__)
-
-# Search telemetry is written explicitly as naive UTC for MySQL portability.
-# Business tables use the tenant's configured timezone because provider-managed
-# MySQL sessions commonly return naive local timestamps.
-UTC_TIMESTAMP_DATASETS = frozenset({"search_history", "api_usage"})
-
-
-def _copy_data(data: dict[str, pd.DataFrame]) -> dict[str, pd.DataFrame]:
-    # Pandas 3 uses copy-on-write. A shallow copy isolates columns added by
-    # individual report modules without doubling every source table in memory.
-    return {name: frame.copy(deep=False) for name, frame in data.items()}
 
 
 def _normalize_source_timestamps(
     data: dict[str, pd.DataFrame],
     *,
     timezone_name: str,
+    dataset_specs: Mapping[str, DatasetSpec],
 ) -> dict[str, pd.DataFrame]:
     """Convert naive source timestamps to naive UTC exactly once."""
 
@@ -58,7 +41,9 @@ def _normalize_source_timestamps(
             normalized[name] = original
             continue
         frame = original.copy(deep=False)
-        assumed_timezone = UTC if name in UTC_TIMESTAMP_DATASETS else tenant_timezone
+        assumed_timezone = (
+            UTC if dataset_specs[name].timestamps_are_utc else tenant_timezone
+        )
         for column in timestamp_columns:
             parsed = pd.to_datetime(
                 frame[column],
@@ -79,44 +64,6 @@ def _normalize_source_timestamps(
             frame[column] = aware.dt.tz_localize(None)
         normalized[name] = frame
     return normalized
-
-
-def _normalize_created_at(value: Any) -> str:
-    parsed = pd.to_datetime(value, utc=True, errors="coerce")
-    if pd.isna(parsed):
-        return str(value or "")
-    return parsed.isoformat()
-
-
-def _company_query_record(record: dict[str, Any]) -> dict[str, Any]:
-    api = dict(record.get("api") or {})
-    return {
-        "search_id": record.get("search_id"),
-        "request_id": record.get("request_id"),
-        "query": record.get("query"),
-        "normalized_query": record.get("normalized_query"),
-        "request_kind": record.get("request_kind"),
-        "created_at": record.get("created_at"),
-        "word_count": record.get("word_count"),
-        "categories": list(record.get("categories") or []),
-        "brands": list(record.get("brands") or []),
-        "locations": list(record.get("locations") or []),
-        "language": record.get("language"),
-        "rental_duration": record.get("rental_duration"),
-        "flags": dict(record.get("flags") or {}),
-        "outcome": record.get("outcome"),
-        "filters": dict(record.get("filters") or {}),
-        "search": {
-            "status": api.get("status"),
-            "result_count": api.get("result_count"),
-            "total_results": api.get("total_results"),
-        },
-        **(
-            {"ai_enrichment": record["ai_enrichment"]}
-            if "ai_enrichment" in record
-            else {}
-        ),
-    }
 
 
 def _dashboard_sections(
@@ -155,44 +102,33 @@ class AnalyticsRefreshService:
             data = _normalize_source_timestamps(
                 self.source.load(company),
                 timezone_name=company.timezone,
+                dataset_specs=company.dataset_specs,
             )
             source_rows = {name: int(len(frame)) for name, frame in data.items()}
             generated_at = datetime.now(UTC).isoformat()
 
-            LOGGER.info(
-                "Building search intelligence company=%s",
-                company.company_id,
-            )
-            query_payload = build_query_records(_copy_data(data))
-            search_intelligence = process_part_a(_copy_data(data))
-            search_intelligence.update(
-                build_company_business_insights(data, query_payload["queries"])
-            )
-            LOGGER.info(
-                "Building API performance company=%s",
-                company.company_id,
-            )
-            api_performance = process_part_b(_copy_data(data))
-            LOGGER.info(
-                "Building deep analytics company=%s",
-                company.company_id,
-            )
-            deep_analytics = process_part_c(_copy_data(data))
-            LOGGER.info(
-                "Building market intelligence company=%s",
-                company.company_id,
-            )
-            market_intelligence = process_part_d(_copy_data(data))
-            reports = {
-                "search_intelligence": search_intelligence,
-                "api_performance": api_performance,
-                "deep_analytics": deep_analytics,
-                "market_intelligence": market_intelligence,
-            }
+            adapter = build_analytics_adapter(company.adapter, company)
+            contract = adapter.analytics_contract
             company_profile, internal_profile = resolve_metric_profiles(
                 company.company_metric_profile,
                 company.internal_metric_profile,
+                default_company=contract.default_company_metric_profile,
+                default_internal=contract.default_internal_metric_profile,
             )
+            selected_modules = frozenset(
+                module
+                for profile in (company_profile, internal_profile)
+                for module, names in profile.items()
+                if names
+            )
+            LOGGER.info(
+                "Building tenant analytics company=%s adapter=%s modules=%s",
+                company.company_id,
+                company.adapter,
+                ",".join(sorted(selected_modules)),
+            )
+            computation = adapter.build_computation(data, selected_modules)
+            reports = computation.reports
             company_sections = _dashboard_sections(
                 reports,
                 company_profile,
@@ -202,13 +138,7 @@ class AnalyticsRefreshService:
                 internal_profile,
             )
 
-            query_pairs = []
-            for internal_record in query_payload["queries"]:
-                internal_record["created_at"] = _normalize_created_at(
-                    internal_record.get("created_at")
-                )
-                company_record = _company_query_record(internal_record)
-                query_pairs.append((company_record, internal_record))
+            query_pairs = computation.query_pairs
 
             metadata = {
                 "schema_version": "3.3",
@@ -226,17 +156,14 @@ class AnalyticsRefreshService:
                     "modules": _dashboard_modules(company_sections),
                     "metric_counts": metric_counts(company_profile),
                     "individual_query_count": len(query_pairs),
-                    "metric_definitions": build_metric_definitions(
+                    "metric_definitions": adapter.metric_definitions(
                         reports,
                         company_profile,
                         audience="company",
                         source_rows=source_rows,
                     ),
                 },
-                "business_overview": build_company_overview(
-                    data,
-                    query_payload["queries"],
-                ),
+                "business_overview": computation.company_overview,
                 **company_sections,
             }
             internal_dashboard = {
@@ -246,7 +173,7 @@ class AnalyticsRefreshService:
                     "modules": _dashboard_modules(internal_sections),
                     "metric_counts": metric_counts(internal_profile),
                     "individual_query_count": len(query_pairs),
-                    "metric_definitions": build_metric_definitions(
+                    "metric_definitions": adapter.metric_definitions(
                         reports,
                         internal_profile,
                         audience="internal",
@@ -256,9 +183,8 @@ class AnalyticsRefreshService:
                 **internal_sections,
             }
             watermarks = []
-            for name in ("search_history", "api_usage", "ads", "users"):
-                frame = data.get(name)
-                if frame is None or frame.empty or "created_at" not in frame:
+            for frame in data.values():
+                if frame.empty or "created_at" not in frame:
                     continue
                 parsed = pd.to_datetime(
                     frame["created_at"],

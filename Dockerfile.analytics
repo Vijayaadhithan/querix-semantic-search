@@ -27,6 +27,7 @@ RUN uv sync --frozen --no-dev --group analytics
 
 COPY src/analytics_service ./src/analytics_service
 COPY src/tenants ./src/tenants
+COPY src/verticals ./src/verticals
 COPY configs/tenants ./configs/tenants
 
 RUN mkdir -p /app/storage/analytics \

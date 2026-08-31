@@ -13,7 +13,7 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.pool import NullPool
 
 from .config import CompanyAnalyticsConfig, DatabaseTarget, DatasetMapping
-from .source_schema import DATASET_SPECS, DatasetContractError, DatasetSpec
+from .source_schema import DatasetContractError, DatasetSpec
 
 LOGGER = logging.getLogger(__name__)
 
@@ -45,9 +45,8 @@ class CsvAnalyticsDataSource:
         self.data_dir = Path(data_dir).expanduser().resolve()
 
     def load(self, company: CompanyAnalyticsConfig) -> dict[str, pd.DataFrame]:
-        del company
         data: dict[str, pd.DataFrame] = {}
-        for name, spec in DATASET_SPECS.items():
+        for name, spec in company.dataset_specs.items():
             path = self.data_dir / spec.filename
             if not path.is_file():
                 raise DatasetContractError(
@@ -212,16 +211,14 @@ class SqlAnalyticsDataSource:
         frames: dict[str, pd.DataFrame] = {}
         with _connection(target) as connection:
             for name in names:
-                spec = DATASET_SPECS[name]
+                spec = company.dataset_specs[name]
                 mapping = company.datasets[name]
                 sql = self._select_sql(
                     target,
                     mapping,
                     spec,
                     history_days=(
-                        company.history_days
-                        if name in {"search_history", "api_usage"}
-                        else None
+                        company.history_days if spec.history_window else None
                     ),
                 )
                 try:
@@ -241,17 +238,22 @@ class SqlAnalyticsDataSource:
         return frames
 
     def load(self, company: CompanyAnalyticsConfig) -> dict[str, pd.DataFrame]:
-        company_names = tuple(name for name in DATASET_SPECS if name != "api_usage")
-        data = self._load_group(
-            company=company,
-            target=company.database,
-            names=company_names,
-        )
-        data.update(
-            self._load_group(
-                company=company,
-                target=company.telemetry_database,
-                names=("api_usage",),
+        data: dict[str, pd.DataFrame] = {}
+        for database_name, target in (
+            ("company", company.database),
+            ("telemetry", company.telemetry_database),
+        ):
+            names = tuple(
+                name
+                for name, spec in company.dataset_specs.items()
+                if spec.database == database_name
             )
-        )
+            if names:
+                data.update(
+                    self._load_group(
+                        company=company,
+                        target=target,
+                        names=names,
+                    )
+                )
         return data
