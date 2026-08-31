@@ -3,17 +3,17 @@ from collections import Counter
 
 import pandas as pd
 
-from .scope import active_ads
+from .scope import MarketplaceScope
 
 LOGGER = logging.getLogger(__name__)
 
 
-def process_part_d(data):
+def process_part_d(data, *, scope: MarketplaceScope):
     LOGGER.info("Processing Part D: Customer-Facing Market Intelligence")
     results = {}
 
     all_ads = data["ads"]
-    ads = active_ads(all_ads)
+    ads = scope.active_ads(all_ads)
     cats = data["categories"]
     subcats = data["sub_categories"]
     location = data["location"]

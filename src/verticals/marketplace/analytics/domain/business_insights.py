@@ -7,7 +7,7 @@ from typing import Any
 
 import pandas as pd
 
-from .scope import active_ads, active_users
+from .scope import MarketplaceScope
 
 
 def _is_present(value: Any) -> bool:
@@ -72,8 +72,11 @@ def _demand_records(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def build_company_business_insights(
     data: dict[str, pd.DataFrame],
     records: list[dict[str, Any]],
+    *,
+    scope: MarketplaceScope,
+    marketplace_name: str,
 ) -> dict[str, dict[str, Any]]:
-    """Build Gainr-relevant demand and demand-versus-supply answers.
+    """Build marketplace demand and demand-versus-supply answers.
 
     Applied catalogue/location filters are authoritative. Text classification is
     used only when a historical request has no recorded structured category.
@@ -126,7 +129,7 @@ def build_company_business_insights(
         key=lambda item: (item["zero_results"], item["searches"]), reverse=True
     )
 
-    ads = active_ads(data["ads"])
+    ads = scope.active_ads(data["ads"])
     categories = data["categories"]
     subcategories = data["sub_categories"]
     category_names = categories.set_index("id")["name"].to_dict()
@@ -200,6 +203,12 @@ def build_company_business_insights(
         if _demand_label(record) == "Unclassified text"
     )
     classified_count = len(demand_records) - sum(unclassified_queries.values())
+    active_status_values = sorted(scope.active_ad_statuses)
+    active_statuses = (
+        " or ".join(active_status_values)
+        if len(active_status_values) <= 2
+        else ", ".join(active_status_values[:-1]) + f", or {active_status_values[-1]}"
+    )
 
     return {
         "q94_catalog_demand": {
@@ -207,7 +216,8 @@ def build_company_business_insights(
             "values": [int(count) for _, count in ordered_demand],
             "title": "What are customers looking for?",
             "note": (
-                "Uses the applied Gainr catalogue category when recorded; "
+                f"Uses the applied {marketplace_name} catalogue category when "
+                "recorded; "
                 "historical text-only requests use a labelled fallback."
             ),
             "chart_type": "bar",
@@ -227,7 +237,8 @@ def build_company_business_insights(
             "data": gap_rows[:40],
             "title": "Where is demand stronger than available supply?",
             "note": (
-                "Available listings are non-deleted ads in active statuses 1 or 8 "
+                "Available listings are non-deleted ads in active statuses "
+                f"{active_statuses} "
                 "at snapshot time. Demand uses a rolling 90-day search window; "
                 "structured catalogue IDs are used when captured and older text-only "
                 "records fall back to labels."
@@ -270,11 +281,13 @@ def build_company_business_insights(
 def build_company_overview(
     data: dict[str, pd.DataFrame],
     records: list[dict[str, Any]],
+    *,
+    scope: MarketplaceScope,
 ) -> dict[str, Any]:
     ads = data["ads"]
     users = data["users"]
-    current_ads = active_ads(ads)
-    current_users = active_users(users)
+    current_ads = scope.active_ads(ads)
+    current_users = scope.active_users(users)
     demand_records = _demand_records(records)
     outcomes = Counter(str(record.get("outcome") or "") for record in demand_records)
     completed = outcomes["fulfilled"] + outcomes["zero_result"]

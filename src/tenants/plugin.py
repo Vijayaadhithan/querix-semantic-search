@@ -7,6 +7,7 @@ from typing import Any
 SearchPolicyFactory = Callable[[], Any]
 CompatibilityAdapterFactory = Callable[[Any, Any, Any], Any]
 AnalyticsAdapterFactory = Callable[[Any], Any]
+AnalyticsContractFactory = Callable[[], Any]
 SearchPayloadFactory = Callable[[Any, str, int, int | None], dict[str, Any]]
 
 
@@ -51,6 +52,12 @@ class CompatibilityAdapterRegistration:
 
 
 @dataclass(frozen=True, slots=True)
+class AnalyticsAdapterRegistration:
+    factory: AnalyticsAdapterFactory
+    contract_factory: AnalyticsContractFactory
+
+
+@dataclass(frozen=True, slots=True)
 class TenantPlugin:
     """One tenant/vertical bundle registered with the company-neutral core."""
 
@@ -62,7 +69,7 @@ class TenantPlugin:
         str,
         CompatibilityAdapterRegistration,
     ] = field(default_factory=dict)
-    analytics_adapters: Mapping[str, AnalyticsAdapterFactory] = field(
+    analytics_adapters: Mapping[str, AnalyticsAdapterRegistration] = field(
         default_factory=dict
     )
     logger_names: tuple[str, ...] = ()

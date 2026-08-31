@@ -17,7 +17,6 @@ from analytics_service.auth import (
     AnalyticsAuthStore,
 )
 from analytics_service.config import (
-    DEFAULT_TABLES,
     AnalyticsRegistry,
     AnalyticsSettings,
     CompanyAnalyticsConfig,
@@ -25,28 +24,36 @@ from analytics_service.config import (
     DatasetMapping,
     load_company_analytics_config,
 )
-from analytics_service.dashboard_filters import (
-    DashboardFilters,
+from analytics_service.filters import DashboardFilters
+from analytics_service.service import AnalyticsRefreshService
+from analytics_service.source import SqlAnalyticsDataSource, _validate_frame
+from analytics_service.store import AnalyticsSnapshotStore
+from tenants.gainr.analytics import (
+    GAINR_ANALYTICS_CONTRACT,
+    GAINR_MARKETPLACE_SCOPE,
+    GainrAnalyticsAdapter,
+)
+from tenants.gainr.analytics_schema import (
+    GAINR_DATASET_SPECS,
+    GAINR_DEFAULT_TABLES,
+)
+from verticals.marketplace.analytics.dashboard_filters import (
     build_dashboard_overview,
 )
-from analytics_service.domain import (
+from verticals.marketplace.analytics.domain import (
     build_company_business_insights,
     process_part_a,
     process_part_b,
     process_part_c,
     process_part_d,
 )
-from analytics_service.domain.search.records import build_query_records
-from analytics_service.metrics import (
+from verticals.marketplace.analytics.domain.search.records import build_query_records
+from verticals.marketplace.analytics.metrics import (
     COMPANY_DEEP_METRICS,
     COMPANY_MARKET_METRICS,
     COMPANY_SEARCH_METRICS,
     INTERNAL_API_METRICS,
 )
-from analytics_service.service import AnalyticsRefreshService
-from analytics_service.source import SqlAnalyticsDataSource, _validate_frame
-from analytics_service.source_schema import DATASET_SPECS
-from analytics_service.store import AnalyticsSnapshotStore
 
 
 def analytics_company(tmp_path: Path, company_id: str = "gainr"):
@@ -66,9 +73,12 @@ def analytics_company(tmp_path: Path, company_id: str = "gainr"):
         database=database,
         telemetry_database=database,
         datasets={
-            name: DatasetMapping(table=table) for name, table in DEFAULT_TABLES.items()
+            name: DatasetMapping(table=table)
+            for name, table in GAINR_DEFAULT_TABLES.items()
         },
         config_path=tmp_path / f"{company_id}.yaml",
+        adapter="gainr",
+        dataset_specs=GAINR_DATASET_SPECS,
     )
 
 
@@ -323,9 +333,20 @@ def test_company_supply_metrics_use_active_inventory_only():
         ignore_index=True,
     )
 
-    deep = process_part_c({name: frame.copy() for name, frame in data.items()})
-    market = process_part_d({name: frame.copy() for name, frame in data.items()})
-    business = build_company_business_insights(data, [])
+    deep = process_part_c(
+        {name: frame.copy() for name, frame in data.items()},
+        scope=GAINR_MARKETPLACE_SCOPE,
+    )
+    market = process_part_d(
+        {name: frame.copy() for name, frame in data.items()},
+        scope=GAINR_MARKETPLACE_SCOPE,
+    )
+    business = build_company_business_insights(
+        data,
+        [],
+        scope=GAINR_MARKETPLACE_SCOPE,
+        marketplace_name="Gainr",
+    )
 
     assert sum(deep["q47_supply_by_category"]["values"]) == 2
     assert sum(deep["q62_ad_status"]["values"]) == 3
@@ -335,6 +356,9 @@ def test_company_supply_metrics_use_active_inventory_only():
         "Current Active Listings by Creation Month"
     )
     assert business["q96_demand_supply_gap"]["demand_window_days"] == 90
+    assert business["q96_demand_supply_gap"]["note"].startswith(
+        "Available listings are non-deleted ads in active statuses 1 or 8 "
+    )
 
 
 class FakeSource:
@@ -348,10 +372,7 @@ class FakeSource:
         return {name: frame.copy() for name, frame in self.data.items()}
 
 
-class WrappedAnalyticsAdapter:
-    def __init__(self, company_id: str):
-        self.company_id = company_id
-
+class WrappedAnalyticsAdapter(GainrAnalyticsAdapter):
     def dashboard_response(self, dashboard):
         return {
             "contract": f"{self.company_id}-dashboard",
@@ -402,7 +423,7 @@ database:
 analytics:
   enabled: true
   endpoint_slug: testco-analytics
-  adapter: default
+  adapter: gainr
   api_key_envs: [TESTCO_ANALYTICS_API_KEY]
   history_days: 120
   metrics:
@@ -431,7 +452,7 @@ analytics:
 
     assert config.database.host == "db.internal"
     assert config.endpoint_slug == "testco-analytics"
-    assert config.adapter == "default"
+    assert config.adapter == "gainr"
     assert config.api_key_envs == ("TESTCO_ANALYTICS_API_KEY",)
     assert config.database.tls_mode == "require"
     assert config.telemetry_database is config.database
@@ -454,7 +475,7 @@ analytics:
     sql = SqlAnalyticsDataSource._select_sql(
         config.database,
         config.datasets["ads"],
-        DATASET_SPECS["ads"],
+        GAINR_DATASET_SPECS["ads"],
     )
     assert "`listing_id` AS `id`" in sql
     assert "`listing_title` AS `title`" in sql
@@ -462,7 +483,7 @@ analytics:
     history_sql = SqlAnalyticsDataSource._select_sql(
         config.database,
         config.datasets["search_history"],
-        DATASET_SPECS["search_history"],
+        GAINR_DATASET_SPECS["search_history"],
         history_days=config.history_days,
     )
     assert "`created_at` >= CURRENT_TIMESTAMP - INTERVAL 120 DAY" in history_sql
@@ -491,7 +512,7 @@ def test_source_normalizes_configured_numeric_columns():
     normalized = _validate_frame(
         "ads",
         frame,
-        DATASET_SPECS["ads"],
+        GAINR_DATASET_SPECS["ads"],
     )
 
     assert normalized["rental_fee"].iloc[0] == 1000.5
@@ -1098,6 +1119,8 @@ def test_refresh_applies_separate_company_and_internal_metric_profiles(
         telemetry_database=base.telemetry_database,
         datasets=base.datasets,
         config_path=base.config_path,
+        adapter="gainr",
+        dataset_specs=GAINR_ANALYTICS_CONTRACT.dataset_specs,
         company_metric_profile={
             "search_intelligence": (
                 "q1_category_distribution",

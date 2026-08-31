@@ -3,17 +3,17 @@ from collections import Counter, defaultdict
 
 import pandas as pd
 
-from .scope import active_ads
+from .scope import MarketplaceScope
 
 LOGGER = logging.getLogger(__name__)
 
 
-def process_part_c(data):
+def process_part_c(data, *, scope: MarketplaceScope):
     LOGGER.info("Processing Part C: Cross-CSV Deep Analytics")
     results = {}
 
     all_ads = data["ads"]
-    ads = active_ads(all_ads)
+    ads = scope.active_ads(all_ads)
     users = data["users"]
     cats = data["categories"]
     subcats = data["sub_categories"]

@@ -2,11 +2,13 @@ from datetime import UTC, datetime
 
 import pytest
 
-from analytics_service.dashboard_filters import (
-    DashboardFilters,
+from analytics_service.filters import DashboardFilters
+from verticals.marketplace.analytics.dashboard_filters import (
     build_dashboard_overview,
 )
-from analytics_service.domain.search.classification import detect_language
+from verticals.marketplace.analytics.domain.search.classification import (
+    detect_language,
+)
 
 
 def _record(

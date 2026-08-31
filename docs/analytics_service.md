@@ -80,11 +80,14 @@ Metric names and modules are validated when the service loads the tenant
 configuration. A typo or attempt to expose an internal-only module fails
 configuration rather than silently weakening the audience boundary.
 
-## Company analytics adapters
+## Tenant analytics adapters
 
-The company-facing dashboard, query-list, and status responses pass through a
-tenant adapter selected by `analytics.adapter`. The built-in `default` adapter
-preserves the canonical response contract:
+Analytics computation is selected by `analytics.adapter`. An adapter registers
+its normalized dataset schemas, default source tables, source-database routing,
+timestamp semantics, allowed audience modules, metric catalogue, default metric
+profiles, scope predicates, report builders, activity-filter builder, and
+company-facing response projection. The built-in `default` adapter is a neutral,
+empty contract; it does not inherit marketplace or Gainr assumptions:
 
 ```yaml
 analytics:
@@ -93,11 +96,15 @@ analytics:
   adapter: default
 ```
 
-When a company needs a different response shape, add its adapter beside
-`analytics_service/adapters.py`, register one factory there, and select it in
-that company's YAML. Shared authentication, endpoint-to-company resolution,
-snapshot storage, and audience filtering remain outside the adapter. Internal
-admin endpoints deliberately keep one stable operational response contract.
+Register the adapter factory and its lazy contract factory in the tenant plugin,
+then select it in that company's YAML. Reusable marketplace calculations live
+under `verticals/marketplace/analytics`; Gainr owns its concrete schemas, active
+status rules, metric choices, and marketplace adapter under `tenants/gainr`.
+Only modules selected by the tenant's resolved company/internal profiles are
+built during refresh. Shared authentication, endpoint-to-company resolution,
+SQL extraction, timestamp normalization, snapshot publication, pagination, and
+audience filtering remain in `analytics_service`. Internal admin endpoints keep
+one stable operational response contract.
 
 Company query records include query classification and search outcome. They do
 not include provider names, model names, execution paths, tokens, attempts,
@@ -508,12 +515,15 @@ Do not remove the shared endpoints as part of the additive backend rollout.
 
 ## Tenant SQL configuration
 
-Analytics-enabled tenant YAML files define normalized source tables:
+Analytics-enabled tenant YAML files may override only datasets registered by
+their selected adapter. Gainr's adapter, for example, defines these normalized
+source tables:
 
 ```yaml
 analytics:
   enabled: true
   endpoint_slug: acme
+  adapter: gainr
   api_key_envs:
     - ACME_ANALYTICS_API_KEY
   history_days: 90
@@ -548,7 +558,8 @@ analytics:
       created_at: listed_at
 ```
 
-The SQL loader selects only the columns used by the analytics contract.
+Unknown datasets or canonical columns fail configuration. The SQL loader selects
+only the columns used by the selected tenant analytics contract.
 MySQL and PostgreSQL company sources are supported. Source credentials should
 be read-only because the snapshot builder does not modify company tables.
 `history_days` limits query history and API telemetry at the SQL source; the
