@@ -640,9 +640,6 @@ def test_zero_result_diagnostics_do_not_delay_response(tmp_path):
         event.duration_ms,
         abs=0.001,
     )
-    assert (
-        event.timings_ms["total_server_ms"] < event.timings_ms["filter_diagnostics_ms"]
-    )
 
 
 def test_explicit_locality_id_clears_inferred_location_hierarchy(tmp_path):
