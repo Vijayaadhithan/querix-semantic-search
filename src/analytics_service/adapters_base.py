@@ -34,7 +34,12 @@ class PassthroughCompanyAnalyticsAdapter:
             raise ValueError(
                 f"Analytics adapter {self.plugin_name!r} has no metric modules"
             )
-        return AnalyticsComputation(reports={}, query_pairs=[], company_overview={})
+        return AnalyticsComputation(
+            reports={},
+            query_pairs=(),
+            query_record_count=0,
+            company_overview={},
+        )
 
     def metric_definitions(
         self,

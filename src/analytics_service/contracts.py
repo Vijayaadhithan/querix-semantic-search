@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -61,5 +61,6 @@ class AnalyticsComputation:
     """Tenant-built payload consumed by shared snapshot publication plumbing."""
 
     reports: dict[str, dict[str, Any]]
-    query_pairs: list[tuple[dict[str, Any], dict[str, Any]]]
+    query_pairs: Iterable[tuple[dict[str, Any], dict[str, Any]]]
+    query_record_count: int
     company_overview: dict[str, Any]

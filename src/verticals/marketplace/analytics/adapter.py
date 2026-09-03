@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from datetime import datetime
 from typing import Any
 
@@ -67,6 +68,16 @@ def _company_query_record(record: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _stream_query_pairs(
+    records: list[dict[str, Any]],
+) -> Iterator[tuple[dict[str, Any], dict[str, Any]]]:
+    """Build audience payloads lazily and release each source record promptly."""
+
+    while records:
+        internal_record = records.pop()
+        yield _company_query_record(internal_record), internal_record
+
+
 class MarketplaceAnalyticsAdapter(PassthroughCompanyAnalyticsAdapter):
     scope: MarketplaceScope
     marketplace_name: str
@@ -107,22 +118,21 @@ class MarketplaceAnalyticsAdapter(PassthroughCompanyAnalyticsAdapter):
                 _copy_data(data), scope=self.scope
             )
 
-        query_pairs = []
         for internal_record in records:
             internal_record["created_at"] = _normalize_created_at(
                 internal_record.get("created_at")
             )
-            query_pairs.append(
-                (_company_query_record(internal_record), internal_record)
-            )
+        query_record_count = len(records)
+        company_overview = build_company_overview(
+            data,
+            records,
+            scope=self.scope,
+        )
         return AnalyticsComputation(
             reports=reports,
-            query_pairs=query_pairs,
-            company_overview=build_company_overview(
-                data,
-                records,
-                scope=self.scope,
-            ),
+            query_pairs=_stream_query_pairs(records),
+            query_record_count=query_record_count,
+            company_overview=company_overview,
         )
 
     def metric_definitions(

@@ -27,7 +27,7 @@ from analytics_service.config import (
 from analytics_service.filters import DashboardFilters
 from analytics_service.service import AnalyticsRefreshService
 from analytics_service.source import SqlAnalyticsDataSource, _validate_frame
-from analytics_service.store import AnalyticsSnapshotStore
+from analytics_service.store import AnalyticsSnapshotStore, _query_record_batches
 from tenants.gainr.analytics import (
     GAINR_ANALYTICS_CONTRACT,
     GAINR_MARKETPLACE_SCOPE,
@@ -585,6 +585,7 @@ def test_daily_refresh_publishes_both_audiences_and_queries(tmp_path):
     ).refresh(company)
 
     assert result["status"] == "complete"
+    assert result["query_records"] == 2
     company_dashboard = store.dashboard("gainr", internal=False)
     internal_dashboard = store.dashboard("gainr", internal=True)
     assert set(company_dashboard) >= {
@@ -606,6 +607,7 @@ def test_daily_refresh_publishes_both_audiences_and_queries(tmp_path):
     assert "deep_analytics" not in internal_dashboard
     assert "market_intelligence" not in internal_dashboard
     assert company_dashboard["metadata"]["schema_version"] == "3.3"
+    assert company_dashboard["metadata"]["individual_query_count"] == 2
     assert company_dashboard["business_overview"] == {
         "scope": "Latest completed company snapshot",
         "total_users": 2,
@@ -695,7 +697,6 @@ def test_daily_refresh_publishes_both_audiences_and_queries(tmp_path):
             limit=10,
             sort_by="duration",
         )
-
     internal_queries = store.query_records(
         "gainr",
         internal=True,
@@ -777,6 +778,71 @@ def test_daily_refresh_publishes_both_audiences_and_queries(tmp_path):
     assert "text_search" in internal_queries["facets"]["request_kinds"]
     assert "performance" not in company_queries["items"][0]
     assert "token_usage" not in company_queries["items"][0]
+
+
+def test_query_record_serialization_is_lazy_and_batched():
+    consumed: list[int] = []
+
+    def query_records():
+        for index in range(5):
+            consumed.append(index)
+            record = {
+                "request_id": f"request-{index}",
+                "created_at": f"2026-08-20T00:0{index}:00+00:00",
+                "query": f"query {index}",
+                "outcome": "fulfilled",
+                "categories": ["Camera"],
+                "language": "English",
+            }
+            yield record, record
+
+    batches = _query_record_batches(
+        "gainr",
+        "version",
+        query_records(),
+        batch_size=2,
+    )
+
+    first_batch = next(batches)
+    assert consumed == [0, 1]
+    assert len(first_batch) == 2
+    assert [len(batch) for batch in batches] == [2, 1]
+    assert consumed == [0, 1, 2, 3, 4]
+
+
+def test_query_stream_count_mismatch_rolls_back_publication(tmp_path):
+    store = AnalyticsSnapshotStore(tmp_path / "snapshots.sqlite3")
+    run_id = store.begin_refresh("gainr")
+    record = {
+        "request_id": "request-1",
+        "created_at": "2026-08-20T00:00:00+00:00",
+        "query": "camera",
+        "outcome": "fulfilled",
+        "categories": ["Camera"],
+        "language": "English",
+    }
+
+    with pytest.raises(ValueError, match="produced 1 records; expected 2"):
+        store.publish(
+            run_id=run_id,
+            company_id="gainr",
+            generated_at="2026-08-20T00:01:00+00:00",
+            source_watermark=None,
+            source_rows={},
+            company_dashboard={},
+            internal_dashboard={},
+            query_records=((record, record) for _ in range(1)),
+            expected_query_records=2,
+        )
+
+    assert store.dashboard("gainr", internal=False) is None
+    with sqlite3.connect(store.path) as connection:
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM analytics_query_records"
+            ).fetchone()[0]
+            == 0
+        )
 
 
 def test_refresh_normalizes_business_timestamps_from_tenant_timezone(tmp_path):

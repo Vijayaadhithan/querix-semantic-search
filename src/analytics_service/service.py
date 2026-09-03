@@ -139,6 +139,7 @@ class AnalyticsRefreshService:
             )
 
             query_pairs = computation.query_pairs
+            query_record_count = computation.query_record_count
 
             metadata = {
                 "schema_version": "3.3",
@@ -155,7 +156,7 @@ class AnalyticsRefreshService:
                     "audience": "company",
                     "modules": _dashboard_modules(company_sections),
                     "metric_counts": metric_counts(company_profile),
-                    "individual_query_count": len(query_pairs),
+                    "individual_query_count": query_record_count,
                     "metric_definitions": adapter.metric_definitions(
                         reports,
                         company_profile,
@@ -172,7 +173,7 @@ class AnalyticsRefreshService:
                     "audience": "internal",
                     "modules": _dashboard_modules(internal_sections),
                     "metric_counts": metric_counts(internal_profile),
-                    "individual_query_count": len(query_pairs),
+                    "individual_query_count": query_record_count,
                     "metric_definitions": adapter.metric_definitions(
                         reports,
                         internal_profile,
@@ -203,6 +204,7 @@ class AnalyticsRefreshService:
                 company_dashboard=company_dashboard,
                 internal_dashboard=internal_dashboard,
                 query_records=query_pairs,
+                expected_query_records=query_record_count,
             )
         except Exception as exc:
             self.store.fail_refresh(
@@ -224,5 +226,5 @@ class AnalyticsRefreshService:
             "generated_at": generated_at,
             "source_watermark": source_watermark,
             "source_rows": source_rows,
-            "query_records": len(query_pairs),
+            "query_records": query_record_count,
         }

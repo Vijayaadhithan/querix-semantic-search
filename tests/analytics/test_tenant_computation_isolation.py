@@ -54,6 +54,7 @@ class NeutralInventoryAdapter(PassthroughCompanyAnalyticsAdapter):
                 }
             },
             query_pairs=[],
+            query_record_count=0,
             company_overview={"active_items": count},
         )
 
