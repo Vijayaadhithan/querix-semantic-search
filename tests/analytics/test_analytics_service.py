@@ -837,9 +837,12 @@ def test_query_stream_count_mismatch_rolls_back_publication(tmp_path):
 
     assert store.dashboard("gainr", internal=False) is None
     with sqlite3.connect(store.path) as connection:
-        assert connection.execute(
-            "SELECT COUNT(*) FROM analytics_query_records"
-        ).fetchone()[0] == 0
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM analytics_query_records"
+            ).fetchone()[0]
+            == 0
+        )
 
 
 def test_refresh_normalizes_business_timestamps_from_tenant_timezone(tmp_path):
