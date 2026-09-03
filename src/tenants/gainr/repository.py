@@ -546,7 +546,8 @@ class GainrDatabaseRepository:
                     allowed_ad_types=allowed_types,
                 )
                 cursor.execute(
-                    f"SELECT COUNT(DISTINCT sr.id) AS total "
+                    f"SELECT /* querix:gainr_zero_result_diagnostics */ "
+                    f"COUNT(DISTINCT sr.id) AS total "
                     f"{join} WHERE {where_clause}",
                     params,
                 )
@@ -737,10 +738,13 @@ class GainrDatabaseRepository:
         rank_placeholders = ", ".join("%s" for _ in ranked_ids)
         rows: list[dict] = []
         total = 0
+        checkout_started = time.perf_counter()
         with self.connection() as connection, connection.cursor() as cursor:
+            checkout_ms = (time.perf_counter() - checkout_started) * 1000
+            query_started = time.perf_counter()
             cursor.execute(
                 f"""
-                SELECT sr.*,
+                SELECT /* querix:gainr_ranked_search_ready_page */ sr.*,
                        sr.city_name AS __city_name,
                        sr.locality_name AS __locality_name,
                        COUNT(*) OVER () AS __eligible_total,
@@ -753,26 +757,38 @@ class GainrDatabaseRepository:
                 (*ranked_ids, *where_params, page_size, offset),
             )
             rows = list(cursor.fetchall())
+            query_ms = (time.perf_counter() - query_started) * 1000
             if rows:
                 total = int(rows[0].get("__eligible_total") or 0)
                 for row in rows:
                     row.pop("__eligible_total", None)
                     row.pop("__rank_order", None)
             elif offset:
+                count_started = time.perf_counter()
                 cursor.execute(
                     f"""
-                    SELECT COUNT(*) AS total
+                    SELECT /* querix:gainr_ranked_search_ready_count */
+                           COUNT(*) AS total
                     FROM {self.search_table} AS sr
                     WHERE {where_clause}
                     """,
                     where_params,
                 )
                 total = int(cursor.fetchone()["total"])
+                query_ms += (time.perf_counter() - count_started) * 1000
+        decode_started = time.perf_counter()
         self._attach_search_ready_relations(rows)
+        relation_decode_ms = (time.perf_counter() - decode_started) * 1000
+        total_ms = (time.perf_counter() - started) * 1000
         logger.info(
-            "Gainr search-ready hydration rows=%s total_ms=%s",
+            "Gainr search-ready hydration "
+            "digest=gainr_ranked_search_ready_page rows=%s "
+            "checkout_ms=%s query_ms=%s relation_decode_ms=%s total_ms=%s",
             len(rows),
-            round((time.perf_counter() - started) * 1000),
+            round(checkout_ms),
+            round(query_ms),
+            round(relation_decode_ms),
+            round(total_ms),
         )
         return rows, total
 
