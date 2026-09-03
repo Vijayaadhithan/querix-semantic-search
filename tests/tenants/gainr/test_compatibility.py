@@ -594,6 +594,57 @@ def test_zero_result_diagnostics_identify_location_blocker(tmp_path):
     }
 
 
+def test_zero_result_diagnostics_do_not_delay_response(tmp_path):
+    adapter, _engine, repository = service(tmp_path)
+    analytics = CaptureAnalyticsStore()
+    adapter.product_search_service.analytics_store = analytics
+    diagnostics_started = threading.Event()
+    release_diagnostics = threading.Event()
+
+    def empty_ranked_page(*_args, **_kwargs):
+        return [], 0
+
+    def blocking_counts(variants, **kwargs):
+        repository.filter_variant_call = (variants, kwargs)
+        diagnostics_started.set()
+        release_diagnostics.wait(timeout=2)
+        return dict.fromkeys(variants, 0)
+
+    repository.hydrate_ranked_page = empty_ranked_page
+    repository.count_filter_variants = blocking_counts
+    request = adapter.parse_filter_result(
+        {
+            "searchTerm": "bike",
+            "filter": {"city_id": 81, "subcategory_id": 313},
+            "page": 1,
+        }
+    )
+
+    started = time.perf_counter()
+    response = adapter.filter_results(request)
+    response_ms = (time.perf_counter() - started) * 1000
+
+    assert response["status"] is True
+    assert response_ms < 500
+    assert diagnostics_started.wait(timeout=1)
+    assert analytics.events == []
+
+    release_diagnostics.set()
+    adapter.close()
+
+    assert len(analytics.events) == 1
+    event = analytics.events[0]
+    assert event.context["filter_diagnostics"]["evidence_complete"] is True
+    assert event.timings_ms["filter_diagnostics_ms"] >= 0
+    assert event.timings_ms["total_server_ms"] == pytest.approx(
+        event.duration_ms,
+        abs=0.001,
+    )
+    assert (
+        event.timings_ms["total_server_ms"] < event.timings_ms["filter_diagnostics_ms"]
+    )
+
+
 def test_explicit_locality_id_clears_inferred_location_hierarchy(tmp_path):
     adapter, engine, _repository = service(tmp_path)
 
@@ -874,6 +925,7 @@ def test_search_ready_ranked_page_uses_one_query_and_embedded_card_relations(
 
     assert total == 1
     assert len(executions) == 1
+    assert "querix:gainr_ranked_search_ready_page" in executions[0][0]
     assert "JOIN `ads`" not in executions[0][0]
     assert "FROM `users`" not in executions[0][0]
     assert "FROM `ads_attributes`" not in executions[0][0]

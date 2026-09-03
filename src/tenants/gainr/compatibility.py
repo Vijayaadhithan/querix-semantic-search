@@ -4,6 +4,7 @@ import copy
 import hashlib
 import logging
 import math
+import queue
 import re
 import threading
 import time
@@ -24,9 +25,12 @@ from tenants.gainr.models import (
 from tenants.gainr.repository import GainrDatabaseRepository
 
 PERFORMANCE_LOGGER = logging.getLogger("uvicorn.error")
+_DIAGNOSTICS_STOP = object()
 
 
 class GainrCompatibilityService:
+    _ZERO_RESULT_DIAGNOSTICS_QUEUE_CAPACITY = 64
+
     def __init__(
         self,
         profile: TenantProfile,
@@ -56,6 +60,12 @@ class GainrCompatibilityService:
         )
         self._memory_cache: dict[str, tuple[float, dict[str, Any]]] = {}
         self._lock = threading.RLock()
+        self._diagnostics_queue: queue.Queue = queue.Queue(
+            maxsize=self._ZERO_RESULT_DIAGNOSTICS_QUEUE_CAPACITY
+        )
+        self._diagnostics_lock = threading.Lock()
+        self._diagnostics_worker: threading.Thread | None = None
+        self._diagnostics_closed = False
 
     def parse_filter_result(
         self,
@@ -587,43 +597,35 @@ class GainrCompatibilityService:
             "hydrated_results": len(cards),
             "returned_results": len(cards),
         }
-        if total == 0 and request.page == 1:
-            diagnostics_started = time.perf_counter()
-            try:
-                analytics_result["_analytics_filter_diagnostics"] = (
-                    self._zero_result_filter_diagnostics(
-                        request,
-                        effective,
-                        allowed_ad_types,
-                        product_ids=(
-                            None
-                            if execution_path == "deterministic_filter"
-                            else list(analytics_result.get("product_ids") or ())
-                        ),
-                    )
+        analytics_deferred = (
+            total == 0
+            and request.page == 1
+            and (
+                self._defer_zero_result_analytics(
+                    request,
+                    effective,
+                    allowed_ad_types,
+                    product_ids=(
+                        None
+                        if execution_path == "deterministic_filter"
+                        else list(analytics_result.get("product_ids") or ())
+                    ),
+                    analytics_result=analytics_result,
+                    duration_ms=duration_ms,
+                    result_count=len(cards),
+                    total_results=total,
+                    trace_id=trace_id,
                 )
-            except Exception:
-                PERFORMANCE_LOGGER.exception(
-                    "Zero-result filter diagnostics failed trace_id=%s", trace_id
-                )
-                analytics_result["_analytics_filter_diagnostics"] = {
-                    "evidence_complete": False,
-                    "diagnosis": "diagnostic_query_failed",
-                    "counterfactual_counts": {},
-                    "blocking_filters": [],
-                }
-            analytics_result["_analytics_timings_ms"]["filter_diagnostics_ms"] = (
-                time.perf_counter() - diagnostics_started
-            ) * 1000
-            duration_ms = (time.perf_counter() - request_started) * 1000
-            analytics_result["_analytics_timings_ms"]["total_server_ms"] = duration_ms
-        self.product_search_service.record_search_analytics(
-            request.searchTerm,
-            analytics_result,
-            duration_ms=duration_ms,
-            result_count=len(cards),
-            total_results=total,
+            )
         )
+        if not analytics_deferred:
+            self.product_search_service.record_search_analytics(
+                request.searchTerm,
+                analytics_result,
+                duration_ms=duration_ms,
+                result_count=len(cards),
+                total_results=total,
+            )
 
         route_reason = planned["query_plan"].get("route_reason") or "none"
         query_words = len(re.findall(r"[^\W_]+", request.searchTerm, re.UNICODE))
@@ -686,6 +688,148 @@ class GainrCompatibilityService:
                 ],
             )
         return response
+
+    @staticmethod
+    def _incomplete_filter_diagnostics(diagnosis: str) -> dict[str, Any]:
+        return {
+            "evidence_complete": False,
+            "diagnosis": diagnosis,
+            "counterfactual_counts": {},
+            "blocking_filters": [],
+        }
+
+    def _defer_zero_result_analytics(
+        self,
+        request: GainrFilterResultRequest,
+        effective: dict,
+        allowed_ad_types: set[str],
+        *,
+        product_ids: list[Any] | None,
+        analytics_result: dict[str, Any],
+        duration_ms: float,
+        result_count: int,
+        total_results: int,
+        trace_id: str,
+    ) -> bool:
+        """Run analytics-only counterfactual queries outside response latency."""
+        if self.product_search_service.analytics_store is None:
+            return False
+        job = {
+            "request": request.model_copy(deep=True),
+            "effective": copy.deepcopy(effective),
+            "allowed_ad_types": set(allowed_ad_types),
+            "product_ids": copy.deepcopy(product_ids),
+            "analytics_result": copy.deepcopy(analytics_result),
+            "duration_ms": duration_ms,
+            "result_count": result_count,
+            "total_results": total_results,
+            "trace_id": trace_id,
+        }
+        with self._diagnostics_lock:
+            if self._diagnostics_closed:
+                return False
+            if self._diagnostics_worker is None:
+                self._diagnostics_worker = threading.Thread(
+                    target=self._run_zero_result_diagnostics,
+                    name=f"zero-result-diagnostics-{self.profile.company_id}",
+                    daemon=True,
+                )
+                self._diagnostics_worker.start()
+            try:
+                self._diagnostics_queue.put_nowait(job)
+            except queue.Full:
+                analytics_result["_analytics_filter_diagnostics"] = (
+                    self._incomplete_filter_diagnostics("diagnostics_queue_full")
+                )
+                PERFORMANCE_LOGGER.warning(
+                    "Zero-result diagnostics queue full company=%s trace_id=%s",
+                    self.profile.company_id,
+                    trace_id,
+                )
+                self.product_search_service.record_search_analytics(
+                    request.searchTerm,
+                    analytics_result,
+                    duration_ms=duration_ms,
+                    result_count=result_count,
+                    total_results=total_results,
+                )
+            return True
+
+    def _run_zero_result_diagnostics(self) -> None:
+        while True:
+            job = self._diagnostics_queue.get()
+            try:
+                if job is _DIAGNOSTICS_STOP:
+                    return
+                diagnostics_started = time.perf_counter()
+                analytics_result = job["analytics_result"]
+                try:
+                    analytics_result["_analytics_filter_diagnostics"] = (
+                        self._zero_result_filter_diagnostics(
+                            job["request"],
+                            job["effective"],
+                            job["allowed_ad_types"],
+                            product_ids=job["product_ids"],
+                        )
+                    )
+                except Exception:
+                    PERFORMANCE_LOGGER.exception(
+                        "Zero-result filter diagnostics failed trace_id=%s",
+                        job["trace_id"],
+                    )
+                    analytics_result["_analytics_filter_diagnostics"] = (
+                        self._incomplete_filter_diagnostics("diagnostic_query_failed")
+                    )
+                diagnostics_ms = (time.perf_counter() - diagnostics_started) * 1000
+                analytics_result["_analytics_timings_ms"]["filter_diagnostics_ms"] = (
+                    diagnostics_ms
+                )
+                self.product_search_service.record_search_analytics(
+                    job["request"].searchTerm,
+                    analytics_result,
+                    duration_ms=job["duration_ms"],
+                    result_count=job["result_count"],
+                    total_results=job["total_results"],
+                )
+                PERFORMANCE_LOGGER.info(
+                    "Zero-result filter diagnostics complete company=%s "
+                    "trace_id=%s duration_ms=%.0f",
+                    self.profile.company_id,
+                    job["trace_id"],
+                    diagnostics_ms,
+                )
+            finally:
+                self._diagnostics_queue.task_done()
+
+    def close(self, timeout_seconds: float = 5.0) -> None:
+        with self._diagnostics_lock:
+            if self._diagnostics_closed:
+                return
+            self._diagnostics_closed = True
+            worker = self._diagnostics_worker
+        if worker is None:
+            return
+        deadline = time.monotonic() + max(timeout_seconds, 0.0)
+        while self._diagnostics_queue.unfinished_tasks:
+            if time.monotonic() >= deadline:
+                PERFORMANCE_LOGGER.warning(
+                    "Zero-result diagnostics worker did not drain company=%s",
+                    self.profile.company_id,
+                )
+                return
+            time.sleep(0.01)
+        try:
+            self._diagnostics_queue.put(
+                _DIAGNOSTICS_STOP,
+                timeout=max(timeout_seconds, 0.1),
+            )
+        except queue.Full:
+            PERFORMANCE_LOGGER.warning(
+                "Zero-result diagnostics worker could not stop company=%s",
+                self.profile.company_id,
+            )
+            return
+        worker.join(timeout=max(timeout_seconds, 0.1))
 
     def _zero_result_filter_diagnostics(
         self,

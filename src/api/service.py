@@ -1144,6 +1144,10 @@ class ProductSearchService:
         )
 
     def close(self) -> None:
+        compatibility_service = getattr(self, "compatibility_service", None)
+        compatibility_close = getattr(compatibility_service, "close", None)
+        if callable(compatibility_close):
+            compatibility_close()
         if self.analytics_store is not None:
             self.analytics_store.close()
         close = getattr(self.engine, "close", None)
