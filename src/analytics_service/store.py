@@ -6,7 +6,7 @@ import logging
 import sqlite3
 import threading
 import uuid
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from contextlib import contextmanager, suppress
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -16,6 +16,42 @@ from .schedule import REFRESH_SCHEDULE
 
 LOGGER = logging.getLogger(__name__)
 STALE_REFRESH_AFTER = timedelta(hours=6)
+QUERY_RECORD_BATCH_SIZE = 1_000
+
+
+def _query_record_batches(
+    company_id: str,
+    version: str,
+    query_records: Iterable[tuple[dict[str, Any], dict[str, Any]]],
+    *,
+    batch_size: int = QUERY_RECORD_BATCH_SIZE,
+) -> Iterator[list[tuple[Any, ...]]]:
+    """Serialize query rows in bounded batches for SQLite publication."""
+
+    if batch_size < 1:
+        raise ValueError("Analytics query batch size must be positive")
+    batch: list[tuple[Any, ...]] = []
+    for company_record, internal_record in query_records:
+        categories = [str(value) for value in company_record.get("categories", [])]
+        batch.append(
+            (
+                company_id,
+                version,
+                str(company_record.get("request_id") or ""),
+                str(company_record.get("created_at") or ""),
+                str(company_record.get("query") or ""),
+                str(company_record.get("outcome") or "unknown"),
+                f"|{'|'.join(categories)}|",
+                str(company_record.get("language") or "Unknown"),
+                json_dumps(company_record),
+                json_dumps(internal_record),
+            )
+        )
+        if len(batch) == batch_size:
+            yield batch
+            batch = []
+    if batch:
+        yield batch
 
 
 def utc_now_iso() -> str:
@@ -378,26 +414,10 @@ class AnalyticsSnapshotStore:
         source_rows: dict[str, int],
         company_dashboard: dict[str, Any],
         internal_dashboard: dict[str, Any],
-        query_records: list[tuple[dict[str, Any], dict[str, Any]]],
+        query_records: Iterable[tuple[dict[str, Any], dict[str, Any]]],
+        expected_query_records: int | None = None,
     ) -> str:
         version = uuid.uuid4().hex
-        query_values = []
-        for company_record, internal_record in query_records:
-            categories = [str(value) for value in company_record.get("categories", [])]
-            query_values.append(
-                (
-                    company_id,
-                    version,
-                    str(company_record.get("request_id") or ""),
-                    str(company_record.get("created_at") or ""),
-                    str(company_record.get("query") or ""),
-                    str(company_record.get("outcome") or "unknown"),
-                    f"|{'|'.join(categories)}|",
-                    str(company_record.get("language") or "Unknown"),
-                    json_dumps(company_record),
-                    json_dumps(internal_record),
-                )
-            )
         with self._lock, self._connection() as connection:
             connection.execute("BEGIN IMMEDIATE")
             try:
@@ -409,24 +429,40 @@ class AnalyticsSnapshotStore:
                     """,
                     (company_id,),
                 ).fetchone()
-                connection.executemany(
-                    """
-                    INSERT INTO analytics_query_records (
-                        company_id,
-                        snapshot_version,
-                        request_id,
-                        created_at,
-                        query_text,
-                        outcome,
-                        categories_text,
-                        language,
-                        company_json,
-                        internal_json
+                inserted_query_records = 0
+                for query_batch in _query_record_batches(
+                    company_id,
+                    version,
+                    query_records,
+                ):
+                    connection.executemany(
+                        """
+                        INSERT INTO analytics_query_records (
+                            company_id,
+                            snapshot_version,
+                            request_id,
+                            created_at,
+                            query_text,
+                            outcome,
+                            categories_text,
+                            language,
+                            company_json,
+                            internal_json
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        query_batch,
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    query_values,
-                )
+                    inserted_query_records += len(query_batch)
+                if (
+                    expected_query_records is not None
+                    and inserted_query_records != expected_query_records
+                ):
+                    raise ValueError(
+                        "Analytics query stream produced "
+                        f"{inserted_query_records} records; expected "
+                        f"{expected_query_records}"
+                    )
                 connection.execute(
                     """
                     INSERT INTO analytics_snapshots (
