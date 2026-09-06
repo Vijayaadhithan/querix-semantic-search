@@ -958,6 +958,52 @@ def test_dashboard_activity_cache_uses_compact_records_without_changing_metrics(
     )
 
 
+def test_dashboard_api_cache_separates_filters_and_refreshes(tmp_path, monkeypatch):
+    monkeypatch.setenv("GAINR_ANALYTICS_API_KEY", "analytics-test-key")
+    company = analytics_company(tmp_path)
+    settings = AnalyticsSettings(
+        host="127.0.0.1",
+        port=8010,
+        snapshot_db_path=tmp_path / "snapshots.sqlite3",
+        tenant_config_dir=tmp_path,
+        cors_origins=(),
+        query_page_size=50,
+        query_max_page_size=200,
+        session_cookie_secure=False,
+    )
+    store = AnalyticsSnapshotStore(settings.snapshot_db_path)
+    refresh = AnalyticsRefreshService(FakeSource(analytics_data()), store)
+    refresh.refresh(company)
+    calls = []
+    original = store.dashboard_activity_records
+
+    def records(company_id, *, internal):
+        calls.append((company_id, internal))
+        return original(company_id, internal=internal)
+
+    monkeypatch.setattr(store, "dashboard_activity_records", records)
+    app = create_app(
+        settings=settings,
+        registry=AnalyticsRegistry({"gainr": company}),
+        store=store,
+    )
+    with TestClient(app) as client:
+        client.headers["X-API-Key"] = "analytics-test-key"
+        path = "/api/v1/gainr/analytics/dashboard"
+        first = client.get(path)
+        assert first.status_code == 200
+        assert client.get(path).json() == first.json()
+        assert calls == [("gainr", False)]
+        assert client.get(path, params={"outcome": "zero_result"}).status_code == 200
+        assert len(calls) == 2
+        refresh.refresh(company)
+        updated = client.get(path)
+        assert updated.status_code == 200
+        assert updated.json()["snapshot"] != first.json()["snapshot"]
+        assert updated.json()["filtered_overview"] == first.json()["filtered_overview"]
+        assert len(calls) == 3
+
+
 def test_daily_refresh_supports_empty_search_telemetry(tmp_path):
     company = analytics_company(tmp_path)
     data = analytics_data()

@@ -27,6 +27,15 @@ The snapshot database defaults to
 records, and an atomic active-version switch. A failed refresh records a
 failed run but does not replace or delete the last completed dashboard.
 
+Filtered dashboard activity caches up to 32 completed summaries per API process.
+Uncached calculations run one at a time across company and internal dashboards,
+so concurrent requests cannot each hold a decoded copy of the snapshot. Requests
+for the same view reuse the completed summary after waiting; existing cache hits
+remain available while another view builds. Keys include company, snapshot,
+audience, filters, timezone, and the rolling-period time bucket. Only summaries
+are retained in the cache. Different uncached views may wait for each other;
+single-view memory still scales with the snapshot's record count.
+
 ## Data and audience boundaries
 
 Company dashboard modules:

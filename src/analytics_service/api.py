@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from functools import lru_cache
 from typing import Any
 
 from fastapi import (
@@ -37,6 +36,7 @@ from .config import (
     CompanyAnalyticsConfig,
     load_analytics_registry,
 )
+from .dashboard_cache import DashboardActivityCache
 from .filters import DashboardFilters
 from .schedule import REFRESH_SCHEDULE
 from .store import AnalyticsSnapshotStore
@@ -84,7 +84,8 @@ def create_app(
         for company in active_registry.companies.values()
     }
 
-    @lru_cache(maxsize=32)
+    dashboard_activity_cache = DashboardActivityCache()
+
     def cached_dashboard_activity(
         company_id: str,
         generated_at: str,
@@ -93,18 +94,20 @@ def create_app(
         timezone_name: str,
         time_bucket: datetime | None,
     ) -> dict[str, Any]:
-        del generated_at
-        return active_adapters[company_id].dashboard_overview(
-            list(
-                active_store.dashboard_activity_records(
-                    company_id,
-                    internal=internal,
-                )
+        return dashboard_activity_cache.get(
+            (company_id, generated_at, internal, filters, timezone_name, time_bucket),
+            lambda: active_adapters[company_id].dashboard_overview(
+                list(
+                    active_store.dashboard_activity_records(
+                        company_id,
+                        internal=internal,
+                    )
+                ),
+                internal=internal,
+                filters=filters,
+                timezone_name=timezone_name,
+                now=time_bucket,
             ),
-            internal=internal,
-            filters=filters,
-            timezone_name=timezone_name,
-            now=time_bucket,
         )
 
     application = FastAPI(
