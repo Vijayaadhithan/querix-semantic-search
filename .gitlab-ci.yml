@@ -29,7 +29,7 @@ compose-config:
   stage: validate
   timeout: 10m
   before_script:
-    - apk add --no-cache python3
+    - apk add --no-cache python3 py3-yaml
   script:
     - cp .env.example .env
     - cp .env.keys.example .env.keys

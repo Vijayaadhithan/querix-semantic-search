@@ -219,7 +219,7 @@ RESULT_CACHE_ENABLED = _env_bool(
 RESULT_CACHE_TTL_SECONDS = int(
     os.getenv(
         "REDIS_RESULT_CACHE_TTL_SECONDS",
-        str(REDIS_CONFIG.get("result_cache_ttl_seconds", 300)),
+        str(REDIS_CONFIG.get("result_cache_ttl_seconds", 900)),
     )
 )
 if RESULT_CACHE_TTL_SECONDS <= 0:

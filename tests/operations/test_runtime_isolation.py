@@ -10,13 +10,97 @@ from scripts.ensure_service_credentials import ensure_credentials
 from scripts.migrate_runtime_storage import migrate_runtime_storage
 from scripts.provision_database_roles import _pgvector_table_candidates
 from scripts.render_service_env import (
+    EnvValue,
     _validate_production_sources,
     build_service_environments,
+    load_tenant_environment_profiles,
     parse_env_file,
     write_service_environments,
 )
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+def test_tenant_credentials_follow_declared_references(tmp_path):
+    tenant_dir = tmp_path / "configs" / "tenants"
+    tenant_dir.mkdir(parents=True)
+    profile = {
+        "company": {"id": "acme"},
+        "database": {
+            "backend": "postgres",
+            "host_env": "ACME_POSTGRES_HOST",
+            "user_env": "ACME_POSTGRES_USER",
+            "password_env": "ACME_LOGIN",
+        },
+        "api": {"key_envs": ["ACME_SEARCH_TOKEN"]},
+        "storage": {
+            "pgvector": {
+                "use_company_database": False,
+                "password_env": "ACME_VECTOR_PASSWORD",
+            }
+        },
+        "analytics": {
+            "enabled": True,
+            "api_key_envs": ["ACME_PORTAL_TOKEN"],
+            "telemetry": {
+                "use_company_database": False,
+                "database": {"password_env": "ACME_TELEMETRY_PASSWORD"},
+            },
+        },
+    }
+    (tenant_dir / "acme.yaml").write_text(yaml.safe_dump(profile))
+    raw = {
+        "ACME_POSTGRES_HOST": "acme-db",
+        "ACME_POSTGRES_USER": "acme",
+        "ACME_LOGIN": "synthetic",
+        "ACME_VECTOR_PASSWORD": "vector-only",
+        "ACME_SEARCH_TOKEN": "search-only",
+        "ACME_PORTAL_TOKEN": "portal-only",
+        "ACME_TELEMETRY_PASSWORD": "telemetry-only",
+        "UNUSED_PASSWORD": "excluded",
+    }
+    values = {name: EnvValue(name, value) for name, value in raw.items()}
+    environments = build_service_environments(
+        values,
+        tenant_profiles=load_tenant_environment_profiles(tmp_path, values),
+    )
+    for service in ("api", "ingestion", "analytics-api", "telemetry"):
+        assert environments[service]["ACME_LOGIN"].plain_value == "synthetic"
+        assert environments[service]["ACME_POSTGRES_HOST"].plain_value == "acme-db"
+        assert "UNUSED_PASSWORD" not in environments[service]
+    assert "ACME_LOGIN" not in environments["pgvector"]
+    assert "ACME_SEARCH_TOKEN" in environments["api"]
+    assert "ACME_SEARCH_TOKEN" not in environments["analytics-api"]
+    assert "ACME_PORTAL_TOKEN" in environments["analytics-api"]
+    assert "ACME_PORTAL_TOKEN" not in environments["api"]
+    assert "ACME_VECTOR_PASSWORD" in environments["ingestion"]
+    assert "ACME_VECTOR_PASSWORD" not in environments["analytics-api"]
+    assert "ACME_VECTOR_PASSWORD" not in environments["telemetry"]
+    assert "ACME_TELEMETRY_PASSWORD" in environments["analytics-api"]
+    assert "ACME_TELEMETRY_PASSWORD" not in environments["api"]
+
+
+def test_gainr_declared_references_preserve_workload_aliases(tmp_path):
+    _service_environments(tmp_path)
+    values = parse_env_file(tmp_path / ".env", required=True)
+    values.update(parse_env_file(tmp_path / ".env.keys", required=True))
+    profile = yaml.safe_load((ROOT / "configs/tenants/gainr.yaml").read_text())
+    original = build_service_environments(values)
+    rendered = build_service_environments(
+        values, tenant_profiles=[profile], require_tenant_credentials=True
+    )
+    assert rendered == original
+
+
+def test_missing_custom_tenant_password_fails_closed():
+    profile = {
+        "database": {"password_env": "CUSTOM_PASSWORD"},
+        "storage": {"pgvector": {"use_company_database": True}},
+    }
+    with pytest.raises(RuntimeError, match="CUSTOM_PASSWORD"):
+        build_service_environments(
+            {}, tenant_profiles=[profile], require_tenant_credentials=True
+        )
 
 
 def _service_environments(tmp_path: Path, *, mysql_mode: str = "dedicated"):

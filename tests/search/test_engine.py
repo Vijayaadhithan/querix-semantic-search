@@ -1996,7 +1996,7 @@ def test_shared_plan_cache_survives_engine_restart(tmp_path):
         "redis_connected": True,
         "query_plan_cache_backend": "redis+memory",
         "result_cache_enabled": True,
-        "result_cache_ttl_seconds": 300,
+        "result_cache_ttl_seconds": 900,
     }
     index.close()
 
@@ -2092,6 +2092,60 @@ def test_result_id_cache_skips_repeated_search_and_invalidates_on_index_change(
 
     assert third["result_cache_hit"] is False
     assert len(browse_calls) == 2
+    index.close()
+
+
+def test_extended_result_cache_rehydrates_and_expires(tmp_path, monkeypatch):
+    class ExpiringCache(DictSharedCache):
+        now = 0
+
+        def __init__(self):
+            super().__init__()
+            self.expiry = {}
+
+        def set_json(self, namespace, key, value, ttl_seconds):
+            self.expiry[(namespace, key)] = self.now + ttl_seconds
+            return super().set_json(namespace, key, value, ttl_seconds)
+
+        def get_json(self, namespace, key):
+            if self.expiry.get((namespace, key), 0) <= self.now:
+                return None
+            return super().get_json(namespace, key)
+
+    index = build_index(tmp_path / "extended-cache.sqlite3")
+    cache = ExpiringCache()
+    engine = ProductSearchEngine(
+        collection=FakeCollection(),
+        bm25_index=index,
+        shared_plan_cache=cache,
+    )
+    calls = []
+    live_products = [{"id": 101, "title": "before"}, {"id": 102, "title": "removed"}]
+
+    def browse(*_args, **_kwargs):
+        calls.append(True)
+        return [product["id"] for product in live_products]
+
+    monkeypatch.setattr(search_engine, "related_tail_product_ids", browse)
+    monkeypatch.setattr(
+        search_engine, "fetch_products_by_ids", lambda _ids: list(live_products)
+    )
+    assert engine.search("bike", limit=20)["result_cache_hit"] is False
+    result_expiries = [
+        value
+        for (namespace, _), value in cache.expiry.items()
+        if namespace == "search_result"
+    ]
+    assert result_expiries == [900]
+    cache.now = 601
+    live_products[:] = [{"id": 101, "title": "updated"}]
+    cached = engine.search("bike", limit=20)
+    assert cached["result_cache_hit"] is True
+    assert [(p["id"], p["title"]) for p in cached["products"]] == [(101, "updated")]
+    assert len(calls) == 1
+    cache.now = 901
+    assert engine.search("bike", limit=20)["result_cache_hit"] is False
+    assert len(calls) == 2
     index.close()
 
 

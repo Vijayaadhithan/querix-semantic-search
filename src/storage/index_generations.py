@@ -8,7 +8,6 @@ slot without placing the serving slot behind its consistency gate.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import sqlite3
 from dataclasses import dataclass, replace
@@ -18,6 +17,11 @@ from typing import Any
 from uuid import uuid4
 
 from core.tenant_config import TenantProfile
+from storage.index_layout import (
+    index_manifest_path,
+    shadow_bm25_path,
+    shadow_vector_table,
+)
 
 MANIFEST_SCHEMA_VERSION = 1
 SLOTS = ("a", "b")
@@ -32,19 +36,11 @@ class ResolvedIndexGeneration:
 
 
 def generation_manifest_path(profile: TenantProfile) -> Path:
-    return profile.storage.bm25_path.parent / "index-generations.json"
+    return index_manifest_path(profile.storage.bm25_path)
 
 
 def _utc_now() -> str:
     return datetime.now(UTC).isoformat()
-
-
-def _slot_b_table(base: str) -> str:
-    suffix = "__b"
-    if len(base) + len(suffix) <= 63:
-        return f"{base}{suffix}"
-    digest = hashlib.sha256(base.encode("utf-8")).hexdigest()[:8]
-    return f"{base[:51]}_{digest}_b"
 
 
 def profile_for_slot(profile: TenantProfile, slot: str) -> TenantProfile:
@@ -56,8 +52,8 @@ def profile_for_slot(profile: TenantProfile, slot: str) -> TenantProfile:
         base_path = profile.storage.bm25_path
         storage = replace(
             profile.storage,
-            pgvector_table=_slot_b_table(profile.storage.pgvector_table),
-            bm25_path=(base_path.parent / "generations" / "b" / base_path.name),
+            pgvector_table=shadow_vector_table(profile.storage.pgvector_table),
+            bm25_path=shadow_bm25_path(base_path),
         )
     return replace(profile, storage=storage)
 

@@ -43,7 +43,7 @@ redis:
   key_prefix: semantic_ads
   # Cache only ordered IDs and ranking metadata; MySQL rows remain fresh.
   result_cache_enabled: true
-  result_cache_ttl_seconds: 300
+  result_cache_ttl_seconds: 900
 
 embedding:
   model: embeddinggemma:latest

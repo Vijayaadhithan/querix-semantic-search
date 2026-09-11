@@ -12,6 +12,11 @@ from typing import Any
 import yaml
 
 from core.settings import PROJECT_ROOT
+from storage.index_layout import (
+    index_manifest_path,
+    shadow_bm25_path,
+    shadow_vector_table,
+)
 from storage.mysql import MySQLRuntimeConfig
 from storage.postgres import PostgresRuntimeConfig
 from tenants.compatibility import supported_compatibility_adapters
@@ -818,10 +823,19 @@ def discover_tenant_profiles(
 
 
 def validate_tenant_isolation(profiles: Iterable[TenantProfile]) -> None:
-    pgvector_owners: dict[tuple[str, int, str, str, str], str] = {}
     source_owners: dict[tuple[str, str, int, str, str, str], tuple[str, str]] = {}
-    bm25_owners: dict[Path, str] = {}
+    file_owners: dict[Path, tuple[str, str]] = {}
     endpoint_owners: dict[str, str] = {}
+
+    def claim_table(key, company_id: str, resource: str) -> None:
+        owner = source_owners.get(key)
+        if owner is not None and owner[0] != company_id:
+            raise ValueError(
+                f"Tenants {owner[0]!r} and {company_id!r} "
+                f"share a company {resource} table ({owner[1]})."
+            )
+        source_owners[key] = (company_id, resource)
+
     for profile in profiles:
         endpoint_slug = profile.endpoint_slug or profile.company_id
         endpoint_owner = endpoint_owners.get(endpoint_slug)
@@ -837,7 +851,7 @@ def validate_tenant_isolation(profiles: Iterable[TenantProfile]) -> None:
             "postgres"
             if isinstance(source_database, PostgresRuntimeConfig)
             else "mysql",
-            source_database.host.casefold(),
+            source_database.host.casefold().rstrip("."),
             source_database.port,
             source_database.database,
             (
@@ -850,40 +864,45 @@ def validate_tenant_isolation(profiles: Iterable[TenantProfile]) -> None:
             ("search-data", source_database.search_table),
             ("result-data", source_database.result_table),
         ):
-            source_key = (*source_prefix, table_name)
-            source_owner = source_owners.get(source_key)
-            if source_owner is not None and source_owner[0] != profile.company_id:
-                raise ValueError(
-                    f"Tenants {source_owner[0]!r} and {profile.company_id!r} "
-                    f"share a company {resource_name} table."
-                )
-            source_owners[source_key] = (profile.company_id, resource_name)
+            claim_table((*source_prefix, table_name), profile.company_id, resource_name)
 
         database = profile.storage.pgvector_database
         if database is None:
             raise ValueError(f"Tenant {profile.company_id!r} has no pgvector database.")
-        vector_key = (
-            database.host,
+        vector_prefix = (
+            "postgres",
+            database.host.casefold().rstrip("."),
             database.port,
             database.database,
             database.schema,
-            profile.storage.pgvector_table,
         )
-        if vector_key in pgvector_owners:
-            raise ValueError(
-                f"Tenants {pgvector_owners[vector_key]!r} and "
-                f"{profile.company_id!r} share pgvector table "
-                f"{vector_key[-1]!r}."
-            )
-        pgvector_owners[vector_key] = profile.company_id
+        for table in (
+            profile.storage.pgvector_table,
+            shadow_vector_table(profile.storage.pgvector_table),
+        ):
+            claim_table((*vector_prefix, table), profile.company_id, "pgvector")
 
-        bm25_path = profile.storage.bm25_path.resolve()
-        if bm25_path in bm25_owners:
-            raise ValueError(
-                f"Tenants {bm25_owners[bm25_path]!r} and "
-                f"{profile.company_id!r} share BM25 path {bm25_path}."
+        base = profile.storage.bm25_path
+        resources = [(index_manifest_path(base), "generation manifest")]
+        for bm25 in (base, shadow_bm25_path(base)):
+            resources.extend(
+                [
+                    (bm25, "BM25"),
+                    (Path(str(bm25) + "-wal"), "BM25 WAL"),
+                    (Path(str(bm25) + "-shm"), "BM25 shared memory"),
+                    (bm25.parent / ".ingestion-state.json", "ingestion state"),
+                    (bm25.parent / "ingestion-manifest.json", "ingestion manifest"),
+                ]
             )
-        bm25_owners[bm25_path] = profile.company_id
+        for path, resource in resources:
+            path = path.resolve()
+            owner = file_owners.get(path)
+            if owner is not None:
+                raise ValueError(
+                    f"Tenants {owner[0]!r} and {profile.company_id!r} share "
+                    f"{resource} path {path} ({owner[1]})."
+                )
+            file_owners[path] = (profile.company_id, resource)
 
 
 def api_key_digest(api_key: str) -> str:

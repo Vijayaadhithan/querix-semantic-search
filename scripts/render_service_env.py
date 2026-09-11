@@ -7,8 +7,11 @@ import argparse
 import os
 import re
 import tempfile
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
+
+import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -169,6 +172,9 @@ def _mysql_alias(
 
 def build_service_environments(
     values: dict[str, EnvValue],
+    *,
+    tenant_profiles: Iterable[dict] = (),
+    require_tenant_credentials: bool = False,
 ) -> dict[str, dict[str, EnvValue]]:
     mysql_mode = mysql_workload_credential_mode(values)
     search_common = _nonsecret_values(
@@ -331,7 +337,7 @@ def build_service_environments(
         "PGVECTOR_PASSWORD",
     )
 
-    return {
+    environments = {
         "api": api,
         "ingestion": ingestion,
         "telemetry": telemetry,
@@ -339,6 +345,131 @@ def build_service_environments(
         "pgvector": pgvector,
         "database-admin": database_admin,
     }
+    _propagate_tenant_environments(
+        environments,
+        values,
+        tenant_profiles,
+        require_credentials=require_tenant_credentials,
+    )
+    return environments
+
+
+def _propagate_tenant_environments(
+    environments: dict[str, dict[str, EnvValue]],
+    values: dict[str, EnvValue],
+    profiles: Iterable[dict],
+    *,
+    require_credentials: bool,
+) -> None:
+    """Copy declared references, preserving existing workload-specific aliases."""
+    references: dict[str, set[str]] = {service: set() for service in environments}
+    secrets: set[str] = set()
+    required: set[tuple[str, str]] = set()
+
+    def reference(section, field, default, services, *, secret=False, mandatory=False):
+        name = str(section.get(field, default)).strip()
+        if not KEY_RE.fullmatch(name):
+            raise RuntimeError(f"Invalid tenant environment reference: {field}")
+        if secret:
+            secrets.add(name)
+        for service in services:
+            references[service].add(name)
+            if mandatory:
+                required.add((service, name))
+
+    def database(section, prefix, services, *, source=True):
+        for field in ("host", "port", "database", "user", "password"):
+            reference(
+                section,
+                f"{field}_env",
+                f"{prefix}_{field.upper()}",
+                services,
+                secret=field == "password",
+                mandatory=field in {"user", "password"},
+            )
+        if source:
+            reference(
+                section, "index_namespace_env", f"{prefix}_INDEX_NAMESPACE", services
+            )
+            tls = dict(section.get("tls", {}))
+            for field in ("mode", "ca_file", "cert_file", "key_file"):
+                reference(
+                    tls, f"{field}_env", f"{prefix}_TLS_{field.upper()}", services
+                )
+
+    for raw in profiles:
+        company = str(dict(raw.get("company", {})).get("id", "")).strip().upper()
+        source = dict(raw.get("database", {}))
+        backend = str(source.get("backend", "mysql")).strip().casefold()
+        prefix = "POSTGRES" if backend == "postgres" else "MYSQL"
+        database(source, prefix, ("api", "ingestion", "telemetry", "database-admin"))
+        storage = dict(raw.get("storage", {}))
+        vector = dict(storage.get("pgvector", {}))
+        if not vector.get("use_company_database", prefix == "POSTGRES"):
+            database(
+                vector, "PGVECTOR", ("api", "ingestion", "database-admin"), source=False
+            )
+            # Telemetry loads tenant identities but does not access vector data.
+            for field in ("host", "port", "database", "user"):
+                reference(
+                    vector, f"{field}_env", f"PGVECTOR_{field.upper()}", ("telemetry",)
+                )
+        for name in dict(raw.get("api", {})).get("key_envs") or (f"{company}_API_KEY",):
+            reference({"key": name}, "key", "", ("api",), secret=True, mandatory=True)
+        analytics = dict(raw.get("analytics", {}))
+        if analytics.get("enabled", False):
+            database(source, company, ("analytics-api",))
+            for name in analytics.get("api_key_envs", ()):
+                reference({"key": name}, "key", "", ("analytics-api",), secret=True)
+            telemetry = dict(analytics.get("telemetry", {}))
+            if not telemetry.get("use_company_database", True):
+                database(
+                    dict(telemetry.get("database", {})),
+                    f"{company}_ANALYTICS",
+                    ("analytics-api", "telemetry", "database-admin"),
+                )
+
+    # A declared password can have an arbitrary name without PASSWORD/SECRET.
+    # Remove it from generic copies before granting the explicit workload access.
+    for service, selected in environments.items():
+        for name in secrets - references[service]:
+            selected.pop(name, None)
+        for name in references[service]:
+            if name in values:
+                selected.setdefault(name, values[name])
+    if require_credentials:
+        missing = sorted(
+            f"{service}:{name}"
+            for service, name in required
+            if name not in environments[service]
+            or not environments[service][name].configured
+        )
+        if missing:
+            raise RuntimeError(
+                "Missing tenant workload credentials: " + ", ".join(missing)
+            )
+
+
+def load_tenant_environment_profiles(
+    root: Path, values: dict[str, EnvValue]
+) -> list[dict]:
+    paths: set[Path] = set()
+    for variable in ("API_TENANT_CONFIG_DIR", "ANALYTICS_TENANT_CONFIG_DIR"):
+        value = values.get(variable)
+        directory = Path(value.plain_value if value else "configs/tenants")
+        if not directory.is_absolute():
+            directory = root / directory
+        paths.update(directory.glob("*.yaml"))
+    profiles = []
+    for path in sorted(paths):
+        try:
+            raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        except yaml.YAMLError as exc:
+            raise RuntimeError(f"Invalid tenant YAML: {path}") from exc
+        if not isinstance(raw, dict):
+            raise RuntimeError(f"Tenant profile must be an object: {path}")
+        profiles.append(raw)
+    return profiles
 
 
 def _render(values: dict[str, EnvValue]) -> bytes:
@@ -455,7 +586,11 @@ def main() -> None:
     if args.production:
         _validate_production_sources(values, keys_path)
     write_service_environments(
-        build_service_environments(values),
+        build_service_environments(
+            values,
+            tenant_profiles=load_tenant_environment_profiles(root, values),
+            require_tenant_credentials=args.production,
+        ),
         root / ".runtime" / "env",
         check=args.check,
     )

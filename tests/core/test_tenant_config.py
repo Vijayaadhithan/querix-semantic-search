@@ -1,3 +1,4 @@
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -6,8 +7,10 @@ from core.tenant_config import (
     TenantAnalyticsConfig,
     TenantRegistry,
     discover_tenant_profiles,
+    validate_tenant_isolation,
 )
 from storage import vector as vector_store
+from storage.index_generations import generation_manifest_path, profile_for_slot
 from storage.postgres import PostgresRuntimeConfig
 
 PROFILE = """
@@ -341,6 +344,80 @@ def test_tenant_profiles_reject_shared_company_result_table(
 
     with pytest.raises(ValueError, match="share a company result-data table"):
         discover_tenant_profiles(tmp_path)
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize(
+    "collision",
+    ["shadow_vector", "shadow_bm25", "manifest", "symlink", "wal", "source_vector"],
+)
+def test_tenant_resources_reject_derived_collisions(
+    tmp_path, monkeypatch, collision, reverse
+):
+    for company in ("alpha", "beta"):
+        write_profile(tmp_path, company)
+        set_database_environment(monkeypatch, company)
+    profiles = discover_tenant_profiles(tmp_path)
+    alpha, beta = profiles["alpha"], profiles["beta"]
+    shadow = profile_for_slot(alpha, "b")
+    if collision == "shadow_vector":
+        beta = replace(
+            beta,
+            storage=replace(
+                beta.storage,
+                pgvector_table=shadow.storage.pgvector_table,
+                pgvector_database=replace(
+                    beta.storage.pgvector_database, host="LOCALHOST."
+                ),
+            ),
+        )
+    elif collision == "source_vector":
+        beta = replace(
+            beta,
+            database=replace(
+                alpha.storage.pgvector_database,
+                search_table=shadow.storage.pgvector_table,
+                result_table="other_ads",
+            ),
+        )
+    else:
+        paths = {
+            "shadow_bm25": shadow.storage.bm25_path,
+            "manifest": generation_manifest_path(alpha).parent / "other.sqlite3",
+            "wal": Path(str(alpha.storage.bm25_path) + "-wal"),
+        }
+        if collision == "symlink":
+            alpha.storage.bm25_path.parent.mkdir()
+            alias = tmp_path / "alias"
+            alias.symlink_to(alpha.storage.bm25_path.parent, target_is_directory=True)
+            paths["symlink"] = alias / "other.sqlite3"
+        beta = replace(beta, storage=replace(beta.storage, bm25_path=paths[collision]))
+    peers = [alpha, beta]
+    with pytest.raises(ValueError, match="share"):
+        validate_tenant_isolation(reversed(peers) if reverse else peers)
+
+
+def test_shadow_collision_uses_truncated_table_derivation(tmp_path, monkeypatch):
+    for company in ("alpha", "beta"):
+        write_profile(tmp_path, company)
+        set_database_environment(monkeypatch, company)
+    profiles = discover_tenant_profiles(tmp_path)
+    alpha = replace(
+        profiles["alpha"],
+        storage=replace(
+            profiles["alpha"].storage,
+            pgvector_table="a" * 63,
+        ),
+    )
+    beta = replace(
+        profiles["beta"],
+        storage=replace(
+            profiles["beta"].storage,
+            pgvector_table=profile_for_slot(alpha, "b").storage.pgvector_table,
+        ),
+    )
+    with pytest.raises(ValueError, match="pgvector"):
+        validate_tenant_isolation([alpha, beta])
 
 
 def test_postgres_company_profile_is_supported(tmp_path, monkeypatch):
