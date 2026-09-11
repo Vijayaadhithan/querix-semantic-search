@@ -1,0 +1,37 @@
+stages:
+  - validate
+
+workflow:
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+
+default:
+  interruptible: true
+
+python-quality:
+  image: python:3.12.13-bookworm
+  stage: validate
+  timeout: 10m
+  before_script:
+    - python -m pip install --disable-pip-version-check uv==0.11.32
+  script:
+    - uv lock --check
+    - uv sync --frozen --group analytics
+    - uv run --frozen --group analytics ruff check src scripts tests
+    - uv run --frozen --group analytics ruff format --check src scripts tests
+    - uv run --frozen --group analytics python scripts/check_markdown.py
+    - uv run --frozen --group analytics python -m compileall -q src scripts tests
+    - uv run --frozen --group analytics pytest -q
+
+compose-config:
+  image: docker:27.5.1-cli
+  stage: validate
+  timeout: 10m
+  before_script:
+    - apk add --no-cache python3
+  script:
+    - cp .env.example .env
+    - cp .env.keys.example .env.keys
+    - python3 scripts/render_service_env.py
+    - docker compose config --quiet
