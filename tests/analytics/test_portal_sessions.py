@@ -57,11 +57,15 @@ class StubSnapshotStore:
 
     def dashboard(self, company_id: str, *, internal: bool):
         return {
+            "snapshot": {"generated_at": "2026-07-31T00:00:00+00:00"},
             "metadata": {
                 "company_id": company_id,
                 "audience": "internal" if internal else "company",
-            }
+            },
         }
+
+    def prepared_view(self, company_id, version, *, internal, view_key):
+        return None
 
     def dashboard_activity_records(self, company_id: str, *, internal: bool):
         self.dashboard_activity_calls += 1

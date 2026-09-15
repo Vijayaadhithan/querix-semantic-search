@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import replace
+from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
@@ -25,6 +26,7 @@ from analytics_service.config import (
     load_company_analytics_config,
 )
 from analytics_service.filters import DashboardFilters
+from analytics_service.prepared_views import activity_view_key
 from analytics_service.service import AnalyticsRefreshService
 from analytics_service.source import SqlAnalyticsDataSource, _validate_frame
 from analytics_service.store import AnalyticsSnapshotStore, _query_record_batches
@@ -977,9 +979,10 @@ def test_dashboard_api_cache_separates_filters_and_refreshes(tmp_path, monkeypat
     calls = []
     original = store.dashboard_activity_records
 
-    def records(company_id, *, internal):
-        calls.append((company_id, internal))
-        return original(company_id, internal=internal)
+    def records(company_id, *, internal, version=None):
+        if version is None:
+            calls.append((company_id, internal))
+        return original(company_id, internal=internal, version=version)
 
     monkeypatch.setattr(store, "dashboard_activity_records", records)
     app = create_app(
@@ -993,15 +996,19 @@ def test_dashboard_api_cache_separates_filters_and_refreshes(tmp_path, monkeypat
         first = client.get(path)
         assert first.status_code == 200
         assert client.get(path).json() == first.json()
-        assert calls == [("gainr", False)]
+        assert calls == []
         assert client.get(path, params={"outcome": "zero_result"}).status_code == 200
-        assert len(calls) == 2
+        assert len(calls) == 1
+        assert client.get(path, params={"outcome": "zero_result"}).status_code == 200
+        assert len(calls) == 1
         refresh.refresh(company)
         updated = client.get(path)
         assert updated.status_code == 200
         assert updated.json()["snapshot"] != first.json()["snapshot"]
         assert updated.json()["filtered_overview"] == first.json()["filtered_overview"]
-        assert len(calls) == 3
+        assert len(calls) == 1
+        assert client.get(path, params={"outcome": "zero_result"}).status_code == 200
+        assert len(calls) == 2
 
 
 def test_daily_refresh_supports_empty_search_telemetry(tmp_path):
@@ -1715,3 +1722,109 @@ def test_company_usernames_and_authentication_are_tenant_scoped(tmp_path):
         )
         is None
     )
+
+
+def test_prepared_views_preserve_metrics_and_survive_api_restart(tmp_path, monkeypatch):
+    company = analytics_company(tmp_path)
+    store = AnalyticsSnapshotStore(tmp_path / "snapshots.sqlite3")
+    result = AnalyticsRefreshService(FakeSource(analytics_data()), store).refresh(
+        company
+    )
+    version = result["snapshot_version"]
+    anchor = datetime.fromisoformat(result["generated_at"])
+    expected_facets = {}
+    for internal in (False, True):
+        records = list(store.dashboard_activity_records("gainr", internal=internal))
+        expected_facets[internal] = store.build_query_facets(
+            "gainr", version, internal=internal
+        )
+        for period in ("all", "24h", "7d", "30d", "90d"):
+            for scope in ("all", "text_search", "browse"):
+                filters = DashboardFilters(period=period, request_scope=scope)
+                key = activity_view_key(filters)
+                assert store.prepared_view(
+                    "gainr", version, internal=internal, view_key=key
+                ) == build_dashboard_overview(
+                    records,
+                    internal=internal,
+                    filters=filters,
+                    timezone_name=company.timezone,
+                    now=anchor,
+                )
+                assert (
+                    store.prepared_view(
+                        "another-company", version, internal=internal, view_key=key
+                    )
+                    is None
+                )
+
+    reopened = AnalyticsSnapshotStore(store.path)
+    monkeypatch.setattr(
+        reopened,
+        "build_query_facets",
+        lambda *args, **kwargs: pytest.fail("Request scanned history for facets"),
+    )
+    for internal in (False, True):
+        assert (
+            reopened.query_records("gainr", internal=internal, limit=1)["facets"]
+            == expected_facets[internal]
+        )
+    assert activity_view_key(DashboardFilters(city_id=301)) is None
+    assert activity_view_key(DashboardFilters(period="custom")) is None
+
+
+def test_preparation_failure_keeps_active_snapshot_and_allows_session_writes(tmp_path):
+    company = analytics_company(tmp_path)
+    store = AnalyticsSnapshotStore(tmp_path / "snapshots.sqlite3")
+    AnalyticsRefreshService(FakeSource(analytics_data()), store).refresh(company)
+    before = store.dashboard("gainr", internal=False)
+    previous_version = before["snapshot"]["version"]
+    old_facets = store.query_facets("gainr", internal=False)
+    auth = AnalyticsAuthStore(store.path)
+    del auth
+    candidate_versions = []
+
+    def fail_preparation(candidate_store, version):
+        candidate_versions.append(version)
+        # A separate connection models API readers and authentication writers
+        # while the scheduled refresh prepares an invisible candidate.
+        with sqlite3.connect(store.path, timeout=0.1) as connection:
+            assert (
+                connection.execute(
+                    "SELECT active_version FROM analytics_snapshots "
+                    "WHERE company_id = ?",
+                    ("gainr",),
+                ).fetchone()[0]
+                == previous_version
+            )
+            connection.execute("BEGIN IMMEDIATE")
+            connection.rollback()
+        candidate_store.save_prepared_view(
+            "gainr", version, internal=False, view_key="facets", payload={}
+        )
+        raise ValueError("preparation failed")
+
+    run = store.begin_refresh("gainr")
+    with pytest.raises(ValueError, match="preparation failed"):
+        store.publish(
+            run_id=run,
+            company_id="gainr",
+            generated_at="2026-09-15T00:00:00+00:00",
+            source_watermark=None,
+            source_rows={},
+            company_dashboard={},
+            internal_dashboard={},
+            query_records=[({"request_id": "candidate"}, {})],
+            prepare_views=fail_preparation,
+        )
+    assert store.dashboard("gainr", internal=False) == before
+    assert store.query_facets("gainr", internal=False) == old_facets
+    with sqlite3.connect(store.path) as connection:
+        for table in ("analytics_query_records", "analytics_prepared_views"):
+            assert (
+                connection.execute(
+                    f"SELECT COUNT(*) FROM {table} WHERE snapshot_version = ?",
+                    (candidate_versions[0],),
+                ).fetchone()[0]
+                == 0
+            )

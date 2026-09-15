@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any
 
 from fastapi import (
@@ -38,6 +38,7 @@ from .config import (
 )
 from .dashboard_cache import DashboardActivityCache
 from .filters import DashboardFilters
+from .prepared_views import activity_view_key
 from .schedule import REFRESH_SCHEDULE
 from .store import AnalyticsSnapshotStore
 
@@ -371,12 +372,25 @@ def create_app(
                 ),
             )
         try:
-            # Fixed rolling periods depend on the current time. A minute bucket
-            # keeps their boundary current while still coalescing repeated UI
-            # loads. Snapshot identity invalidates every cached result after a
-            # refresh without retaining decoded per-query records in memory.
+            snapshot = dict(dashboard.get("snapshot") or {})
+            view_key = activity_view_key(filters)
+            prepared = (
+                active_store.prepared_view(
+                    company.company_id,
+                    str(snapshot.get("version") or ""),
+                    internal=internal,
+                    view_key=view_key,
+                )
+                if view_key is not None
+                else None
+            )
+            if prepared is not None:
+                return {**dashboard, **prepared}
+            # All activity periods share the snapshot's as-of time. Custom
+            # filters still use the bounded cache; legacy snapshots can also be
+            # served until their first refresh prepares the standard views.
             time_bucket = (
-                datetime.now(UTC).replace(second=0, microsecond=0)
+                datetime.fromisoformat(str(snapshot["generated_at"]))
                 if filters.period in {"24h", "7d", "30d", "90d"}
                 else None
             )

@@ -1,8 +1,8 @@
 # Company analytics service
 
 The analytics backend is a separate deployable service. It is not imported by
-the semantic-search API image and it never calculates dashboards on an HTTP
-request.
+the semantic-search API image. Standard dashboards and Query Explorer filter
+choices are prepared by the refresh job and read directly on HTTP requests.
 
 ## Service and image
 
@@ -24,15 +24,27 @@ python -m analytics_service.refresh --company acme
 
 The snapshot database defaults to
 `storage/analytics/snapshots.sqlite3`. It uses WAL mode, versioned query
-records, and an atomic active-version switch. A failed refresh records a
+records, prepared views, and an atomic active-version switch. A failed refresh records a
 failed run but does not replace or delete the last completed dashboard.
 
-Filtered dashboard activity caches up to 32 completed summaries per API process.
+Each refresh prepares company and internal activity views for all five standard
+periods and three request scopes, plus the Query Explorer facets. Rolling periods
+are evaluated **as of the snapshot generation time**, so dashboards stay consistent
+with their source data until the next two-hour refresh. The applied `from`/`to`
+boundaries and snapshot timestamp expose this time basis. Opening a page does not
+decode the query history, including after an API restart.
+
+Candidate query rows are staged before preparing views, while the previous
+snapshot remains active. Preparation does not hold a SQLite write transaction,
+so login/session writes can continue. Activation publishes the candidate and all
+its prepared views together; preparation failures retain the previous snapshot.
+
+Custom filtered dashboard activity caches up to 32 completed summaries per API process.
 Uncached calculations run one at a time across company and internal dashboards,
 so concurrent requests cannot each hold a decoded copy of the snapshot. Requests
 for the same view reuse the completed summary after waiting; existing cache hits
 remain available while another view builds. Keys include company, snapshot,
-audience, filters, timezone, and the rolling-period time bucket. Only summaries
+audience, filters, timezone, and snapshot generation time. Only summaries
 are retained in the cache. Different uncached views may wait for each other;
 single-view memory still scales with the snapshot's record count.
 

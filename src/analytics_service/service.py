@@ -15,6 +15,7 @@ from .metrics import (
     resolve_metric_profiles,
     select_metrics,
 )
+from .prepared_views import prepare_snapshot_views
 from .schedule import REFRESH_SCHEDULE
 from .source import AnalyticsDataSource
 from .source_schema import DatasetSpec
@@ -195,6 +196,10 @@ class AnalyticsRefreshService:
                 if not parsed.empty:
                     watermarks.append(parsed.max())
             source_watermark = max(watermarks).isoformat() if watermarks else None
+            # The query stream releases its source rows as it is consumed.
+            # Drop extraction frames before the candidate's summaries are built.
+            del data, computation, reports
+            frame = None
             version = self.store.publish(
                 run_id=run_id,
                 company_id=company.company_id,
@@ -205,6 +210,13 @@ class AnalyticsRefreshService:
                 internal_dashboard=internal_dashboard,
                 query_records=query_pairs,
                 expected_query_records=query_record_count,
+                prepare_views=lambda store, version: prepare_snapshot_views(
+                    store,
+                    version,
+                    company=company,
+                    adapter=adapter,
+                    generated_at=generated_at,
+                ),
             )
         except Exception as exc:
             self.store.fail_refresh(

@@ -6,7 +6,7 @@ import logging
 import sqlite3
 import threading
 import uuid
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager, suppress
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -333,6 +333,15 @@ class AnalyticsSnapshotStore:
                     company_id,
                     started_at DESC
                 );
+
+                CREATE TABLE IF NOT EXISTS analytics_prepared_views (
+                    company_id TEXT NOT NULL,
+                    snapshot_version TEXT NOT NULL,
+                    internal INTEGER NOT NULL,
+                    view_key TEXT NOT NULL,
+                    payload_json TEXT NOT NULL,
+                    PRIMARY KEY (company_id, snapshot_version, internal, view_key)
+                );
                 """
             )
 
@@ -416,6 +425,7 @@ class AnalyticsSnapshotStore:
         internal_dashboard: dict[str, Any],
         query_records: Iterable[tuple[dict[str, Any], dict[str, Any]]],
         expected_query_records: int | None = None,
+        prepare_views: Callable[[AnalyticsSnapshotStore, str], None] | None = None,
     ) -> str:
         version = uuid.uuid4().hex
         with self._lock, self._connection() as connection:
@@ -463,6 +473,22 @@ class AnalyticsSnapshotStore:
                         f"{inserted_query_records} records; expected "
                         f"{expected_query_records}"
                     )
+                # Commit the invisible candidate before expensive preparation.
+                # Readers keep using the old active version, and authentication
+                # can still write sessions while dashboard summaries are built.
+                connection.commit()
+                if prepare_views is not None:
+                    prepare_views(self, version)
+                connection.execute("BEGIN IMMEDIATE")
+                current = connection.execute(
+                    "SELECT active_version FROM analytics_snapshots "
+                    "WHERE company_id = ?",
+                    (company_id,),
+                ).fetchone()
+                if (current[0] if current else None) != (
+                    previous[0] if previous else None
+                ):
+                    raise RuntimeError("Analytics snapshot changed during preparation")
                 connection.execute(
                     """
                     INSERT INTO analytics_snapshots (
@@ -514,9 +540,27 @@ class AnalyticsSnapshotStore:
                         """,
                         (company_id, previous["active_version"]),
                     )
+                    connection.execute(
+                        "DELETE FROM analytics_prepared_views "
+                        "WHERE company_id = ? AND snapshot_version = ?",
+                        (company_id, previous["active_version"]),
+                    )
                 connection.commit()
             except Exception:
                 connection.rollback()
+                # Candidate rows may already be committed, but are never active
+                # until every prepared view succeeds.
+                with connection:
+                    connection.execute(
+                        "DELETE FROM analytics_query_records "
+                        "WHERE company_id = ? AND snapshot_version = ?",
+                        (company_id, version),
+                    )
+                    connection.execute(
+                        "DELETE FROM analytics_prepared_views "
+                        "WHERE company_id = ? AND snapshot_version = ?",
+                        (company_id, version),
+                    )
                 raise
         with self._lock:
             self._facet_cache = {
@@ -525,6 +569,39 @@ class AnalyticsSnapshotStore:
                 if key[0] != company_id
             }
         return version
+
+    def save_prepared_view(
+        self,
+        company_id: str,
+        version: str,
+        *,
+        internal: bool,
+        view_key: str,
+        payload: dict[str, Any],
+    ) -> None:
+        with self._connection() as connection:
+            connection.execute(
+                "INSERT OR REPLACE INTO analytics_prepared_views "
+                "VALUES (?, ?, ?, ?, ?)",
+                (company_id, version, int(internal), view_key, json_dumps(payload)),
+            )
+
+    def prepared_view(
+        self,
+        company_id: str,
+        version: str,
+        *,
+        internal: bool,
+        view_key: str,
+    ) -> dict[str, Any] | None:
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT payload_json FROM analytics_prepared_views "
+                "WHERE company_id = ? AND snapshot_version = ? "
+                "AND internal = ? AND view_key = ?",
+                (company_id, version, int(internal), view_key),
+            ).fetchone()
+        return json.loads(row[0]) if row is not None else None
 
     def dashboard(
         self,
@@ -536,7 +613,8 @@ class AnalyticsSnapshotStore:
         with self._connection() as connection:
             row = connection.execute(
                 f"""
-                SELECT generated_at, source_watermark, source_rows_json, {field}
+                SELECT active_version, generated_at, source_watermark,
+                       source_rows_json, {field}
                 FROM analytics_snapshots
                 WHERE company_id = ?
                 """,
@@ -546,6 +624,7 @@ class AnalyticsSnapshotStore:
             return None
         payload = json.loads(row[field])
         payload["snapshot"] = {
+            "version": row["active_version"],
             "generated_at": row["generated_at"],
             "source_watermark": row["source_watermark"],
             "source_rows": json.loads(row["source_rows_json"]),
@@ -558,6 +637,7 @@ class AnalyticsSnapshotStore:
         company_id: str,
         *,
         internal: bool,
+        version: str | None = None,
     ) -> tuple[dict[str, Any], ...]:
         field = "internal_json" if internal else "company_json"
         with self._connection() as connection:
@@ -569,9 +649,9 @@ class AnalyticsSnapshotStore:
                 """,
                 (company_id,),
             ).fetchone()
-            if snapshot is None:
+            if snapshot is None and version is None:
                 return ()
-            version = str(snapshot["active_version"])
+            version = version or str(snapshot["active_version"])
             rows = connection.execute(
                 f"""
                 SELECT records.{field} AS payload_json
@@ -789,7 +869,6 @@ class AnalyticsSnapshotStore:
         internal: bool,
     ) -> dict[str, Any]:
         """Return facet choices with the immutable snapshot version they describe."""
-        field = "internal_json" if internal else "company_json"
         with self._connection() as connection:
             snapshot = connection.execute(
                 "SELECT active_version FROM analytics_snapshots WHERE company_id = ?",
@@ -817,6 +896,29 @@ class AnalyticsSnapshotStore:
                     "snapshot_version": version,
                     "facets": cached,
                 }
+
+            facets = self.prepared_view(
+                company_id, version, internal=internal, view_key="facets"
+            )
+            if facets is None:
+                facets = self.build_query_facets(company_id, version, internal=internal)
+        with self._lock:
+            self._facet_cache[cache_key] = facets
+        return {
+            "company_id": company_id,
+            "snapshot_version": version,
+            "facets": facets,
+        }
+
+    def build_query_facets(
+        self,
+        company_id: str,
+        version: str,
+        *,
+        internal: bool,
+    ) -> dict[str, Any]:
+        field = "internal_json" if internal else "company_json"
+        with self._connection() as connection:
 
             def choices(path: str) -> list[str]:
                 rows = connection.execute(
@@ -864,13 +966,7 @@ class AnalyticsSnapshotStore:
                 "ad_types": choices("$.filters.target_ad_type"),
                 "diagnostic_codes": (choices("$.diagnostics.code") if internal else []),
             }
-        with self._lock:
-            self._facet_cache[cache_key] = facets
-        return {
-            "company_id": company_id,
-            "snapshot_version": version,
-            "facets": facets,
-        }
+        return facets
 
     def company_status(self, company_id: str) -> dict[str, Any]:
         with self._connection() as connection:
