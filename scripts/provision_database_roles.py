@@ -153,6 +153,8 @@ def provision_mysql(profiles) -> None:
                     profile.database.search_table,
                     profile.database.result_table,
                 }
+                if profile.compatibility.adapter == "gainr_legacy":
+                    search_tables.add("boost_ads")
                 for table in sorted(search_tables):
                     _mysql_grant(
                         cursor,

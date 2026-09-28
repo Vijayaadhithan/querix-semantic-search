@@ -106,11 +106,15 @@ class FakeEngine:
 
 class FakeRepository:
     def __init__(self):
+        self.boosted_ids = set()
         self.catalog_call = None
         self.filter_ids_call = None
         self.hydrate_call = None
         self.ranked_page_call = None
         self.filter_variant_call = None
+
+    def active_boosted_ad_ids(self):
+        return set(self.boosted_ids)
 
     def suggestions(self, term, limit):
         return ["Bike", "Bike Cargo Rider"][:limit]
@@ -709,6 +713,71 @@ def test_deterministic_result_uses_full_catalog_pagination(tmp_path):
     ]
 
 
+def test_deterministic_search_passes_live_boosts_into_catalog_order(tmp_path):
+    adapter, _, repository = service(tmp_path, execution_path="deterministic_filter")
+    repository.boosted_ids = {"2"}
+
+    adapter.filter_results(
+        GainrFilterResultRequest.model_validate(
+            {"searchTerm": "Bike", "filter": {}, "page": 1}
+        )
+    )
+
+    assert repository.catalog_call[2]["boosted_ids"] == {"2"}
+
+
+def test_boost_lookup_failure_keeps_normal_search_available(tmp_path, monkeypatch):
+    adapter, _, repository = service(tmp_path, execution_path="deterministic_filter")
+
+    def unavailable():
+        raise RuntimeError("boost table unavailable")
+
+    monkeypatch.setattr(repository, "active_boosted_ad_ids", unavailable)
+    response = adapter.filter_results(
+        GainrFilterResultRequest.model_validate(
+            {"searchTerm": "Bike", "filter": {}, "page": 1}
+        )
+    )
+
+    assert response["status"] is True
+    assert repository.catalog_call[2]["boosted_ids"] == set()
+
+
+@pytest.mark.parametrize("execution_path", ["semantic", "direct_semantic"])
+def test_semantic_routes_promote_only_existing_boosted_ids_before_paging(
+    tmp_path, monkeypatch, execution_path
+):
+    adapter, engine, repository = service(tmp_path, execution_path=execution_path)
+    repository.boosted_ids = {"25", "999"}
+
+    def search(query, limit=None, **kwargs):
+        return {
+            "query_plan": kwargs["planned_result"]["query_plan"],
+            "resolved_filters": kwargs["resolved_filters"],
+            "unresolved_filters": {},
+            "products": [],
+            "product_ids": list(range(1, 46)),
+            "query_model_metrics": {},
+            "reranker_attempts": [],
+        }
+
+    def hydrate(product_ids, *_args, page, page_size):
+        selected = product_ids[(page - 1) * page_size : page * page_size]
+        return ([{"id": product_id} for product_id in selected], len(product_ids))
+
+    monkeypatch.setattr(engine, "search", search)
+    monkeypatch.setattr(repository, "hydrate_ranked_page", hydrate)
+    request = GainrFilterResultRequest.model_validate(
+        {"searchTerm": "bike", "filter": {}, "page": 1}
+    )
+
+    response = adapter.filter_results(request)
+
+    assert [card["id"] for card in response["data"]] == [25, *range(1, 20)]
+    assert response["last_page"] == 3
+    assert "boosted" not in response["data"][0]
+
+
 def test_semantic_result_hydrates_only_requested_twenty_row_page(
     tmp_path,
     monkeypatch,
@@ -1000,6 +1069,58 @@ def test_search_ready_catalog_counts_without_materializing_full_rows(
     assert "ORDER BY sr.updated_at DESC, sr.id DESC" in executions[1][0]
     assert executions[0][1] == ("Car", "1")
     assert executions[1][1] == ("Car", "1", 20, 0)
+
+
+def test_search_ready_catalog_promotes_boosts_before_price_sort_and_paging(
+    tmp_path, monkeypatch
+):
+    repository = GainrDatabaseRepository(
+        profile(tmp_path, serves_cards_from_search_ready=True)
+    )
+    executions = []
+
+    class Cursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def execute(self, sql, params):
+            executions.append((sql, tuple(params)))
+
+        def fetchone(self):
+            return {"total": 41}
+
+        def fetchall(self):
+            return []
+
+    class Connection:
+        def cursor(self):
+            return Cursor()
+
+    @contextmanager
+    def connection():
+        yield Connection()
+
+    monkeypatch.setattr(repository, "connection", connection)
+    repository.search_catalog(
+        {"categorical": {"subcategory_name": "Car"}},
+        GainrSearchFilter(),
+        search_term="car",
+        page=2,
+        page_size=20,
+        sort_order="price_asc",
+        allowed_ad_types={"1"},
+        boosted_ids={"25", "2"},
+    )
+
+    assert len(executions) == 2
+    assert "COUNT(*) AS total" in executions[0][0]
+    assert "boost_ads" not in executions[0][0]
+    assert "ORDER BY CASE WHEN sr.id IN (%s, %s) THEN 0 ELSE 1 END" in executions[1][0]
+    assert "sr.rental_fee ASC" in executions[1][0]
+    assert executions[1][1] == ("Car", "1", "2", "25", 20, 20)
 
 
 def test_search_ready_catalog_retries_one_transient_mysql_disconnect(

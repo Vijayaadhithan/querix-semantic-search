@@ -25,6 +25,7 @@ from tenants.gainr.models import (
 logger = logging.getLogger("uvicorn.error")
 
 _TRANSIENT_MYSQL_READ_ERROR_CODES = {2006, 2013}
+_BOOST_ADS_TABLE = quote_mysql_identifier("boost_ads")
 
 
 def _transient_mysql_read_error_code(exc: Exception) -> int | None:
@@ -118,6 +119,21 @@ class GainrDatabaseRepository:
             return
         with self.connection() as active_connection:
             yield active_connection
+
+    @retry_transient_mysql_read
+    def active_boosted_ad_ids(self) -> set[str]:
+        """Read today's active boosts from Gainr's authoritative table."""
+        with self.connection() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                f"""
+                SELECT DISTINCT ads_id
+                FROM {_BOOST_ADS_TABLE}
+                WHERE deleted_at IS NULL
+                  AND start_date <= CURDATE()
+                  AND end_date >= CURDATE()
+                """
+            )
+            return {str(row["ads_id"]) for row in cursor.fetchall()}
 
     @retry_transient_mysql_read
     def suggestions(self, term: str, limit: int) -> list[str]:
@@ -385,6 +401,7 @@ class GainrDatabaseRepository:
         page_size: int,
         sort_order: str | None,
         allowed_ad_types: set[str] | None,
+        boosted_ids: set[str] | None = None,
     ) -> tuple[list[dict], int]:
         where_clause, params = self._where_clause(
             resolved_filters,
@@ -406,6 +423,12 @@ class GainrDatabaseRepository:
                 "THEN 1 ELSE 0 END, sr.rental_fee DESC, sr.id DESC"
             ),
         }.get(sort_order, "sr.updated_at DESC, sr.id DESC")
+        boosted_ids = sorted(boosted_ids or (), key=int)
+        boost_params: tuple[str, ...] = ()
+        if boosted_ids:
+            placeholders = ", ".join("%s" for _ in boosted_ids)
+            order = f"CASE WHEN sr.id IN ({placeholders}) THEN 0 ELSE 1 END, {order}"
+            boost_params = tuple(boosted_ids)
         offset = (page - 1) * page_size
 
         def fetch_search_ready_total(connection) -> int:
@@ -432,7 +455,7 @@ class GainrDatabaseRepository:
                     ORDER BY {order}
                     LIMIT %s OFFSET %s
                     """,
-                    (*params, page_size, offset),
+                    (*params, *boost_params, page_size, offset),
                 )
                 return list(cursor.fetchall())
 
@@ -490,7 +513,7 @@ class GainrDatabaseRepository:
                     ORDER BY {order}
                     LIMIT %s OFFSET %s
                     """,
-                    (*params, page_size, offset),
+                    (*params, *boost_params, page_size, offset),
                 )
                 return list(cursor.fetchall())
 

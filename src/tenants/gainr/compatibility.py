@@ -332,6 +332,16 @@ class GainrCompatibilityService:
             categorical[id_key] = category_id
         return indexed
 
+    def _active_boosted_ad_ids(self) -> set[str]:
+        try:
+            return self.repository.active_boosted_ad_ids()
+        except Exception as exc:
+            PERFORMANCE_LOGGER.warning(
+                "Gainr boost lookup failed error_type=%s; using normal order",
+                type(exc).__name__,
+            )
+            return set()
+
     def filter_results(
         self,
         request: GainrFilterResultRequest,
@@ -407,6 +417,7 @@ class GainrCompatibilityService:
                 page_size=page_size,
                 sort_order=planned["query_plan"].get("sort_order"),
                 allowed_ad_types=allowed_ad_types,
+                boosted_ids=self._active_boosted_ad_ids(),
             )
             database_ms = (time.perf_counter() - database_started) * 1000
             route = "deterministic"
@@ -463,6 +474,12 @@ class GainrCompatibilityService:
                 ),
             )
             engine_ms = (time.perf_counter() - engine_started) * 1000
+            boosted_ids = self._active_boosted_ad_ids()
+            if boosted_ids:
+                result["product_ids"] = sorted(
+                    result.get("product_ids", []),
+                    key=lambda product_id: str(product_id) not in boosted_ids,
+                )
             trace_id = str(result.get("trace_id") or "-")
             if database_only_filters or not result.get("products"):
                 eligibility_source = "ranked_page"
