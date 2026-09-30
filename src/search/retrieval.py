@@ -137,9 +137,8 @@ def vector_search(
             include_unpriced,
         )
         exact_filter_max_rows = VECTOR_EXACT_FILTER_MAX_ROWS
-        if (
-            city_exact_filter_max_rows is not None
-            and "city_id" in resolved_filters.get("categorical", {})
+        if city_exact_filter_max_rows is not None and "city_id" in resolved_filters.get(
+            "categorical", {}
         ):
             exact_filter_max_rows = city_exact_filter_max_rows
         if where_filter is not None and post_filter_metadata == "adaptive":

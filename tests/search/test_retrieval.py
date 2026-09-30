@@ -15,12 +15,16 @@ class SqlLimitCollection:
         return {
             "ids": [["1"]],
             "documents": [["camera"]],
-            "metadatas": [[{
-                "primary_key_value": "1",
-                "source_file": "ads",
-                "city_id": 456,
-                "subcategory_id": 12,
-            }]],
+            "metadatas": [
+                [
+                    {
+                        "primary_key_value": "1",
+                        "source_file": "ads",
+                        "city_id": 456,
+                        "subcategory_id": 12,
+                    }
+                ]
+            ],
             "distances": [[0.1]],
         }
 
@@ -67,6 +71,4 @@ def test_city_exact_limit_applies_only_to_structured_city_filter():
         resolved_filters={"categorical": {"subcategory_id": 12}},
         **common,
     )
-    assert collection.options["exact_filter_max_rows"] == (
-        VECTOR_EXACT_FILTER_MAX_ROWS
-    )
+    assert collection.options["exact_filter_max_rows"] == (VECTOR_EXACT_FILTER_MAX_ROWS)
