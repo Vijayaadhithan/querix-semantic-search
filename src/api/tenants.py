@@ -451,6 +451,9 @@ class TenantServicePool:
                     if profile.retrieval.adaptive_vector_post_filter_metadata
                     else False
                 ),
+                city_vector_exact_filter_max_rows=(
+                    profile.retrieval.city_vector_exact_filter_max_rows
+                ),
                 semantic_related_tail_enabled=(
                     profile.retrieval.semantic_related_tail_enabled
                 ),

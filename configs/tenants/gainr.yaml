@@ -113,6 +113,9 @@ retrieval:
   # are ranked exactly; broader filters use pgvector 0.8 iterative filtered
   # HNSW so the predicate is enforced while the graph continues scanning.
   adaptive_vector_post_filter_metadata: true
+  # Exact ranking is faster for the measured Mumbai city subset (~7k vectors).
+  # Broader city filters keep iterative HNSW; other filter types keep the global limit.
+  city_vector_exact_filter_max_rows: 10000
   # Keep the strongest reranked matches first, then the remaining fused
   # vector/BM25 matches, and only then continue from the filtered catalogue.
   # related_tail_product_ids still requires at least one structured constraint,

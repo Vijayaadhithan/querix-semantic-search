@@ -81,12 +81,18 @@ class TenantRateLimit:
 @dataclass(frozen=True)
 class TenantRetrievalConfig:
     adaptive_vector_post_filter_metadata: bool = False
+    city_vector_exact_filter_max_rows: int | None = None
     semantic_related_tail_enabled: bool = True
     semantic_related_tail_requires_explicit_category: bool = False
     reranker_relative_score_floor: float = 0.0
     reranker_min_score_by_provider: dict[str, float] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
+        if (
+            self.city_vector_exact_filter_max_rows is not None
+            and self.city_vector_exact_filter_max_rows <= 0
+        ):
+            raise ValueError("city_vector_exact_filter_max_rows must be positive")
         if not 0 <= self.reranker_relative_score_floor <= 1:
             raise ValueError("reranker_relative_score_floor must be between 0 and 1")
         for provider, score in self.reranker_min_score_by_provider.items():
@@ -672,6 +678,11 @@ def load_tenant_profile(path: Path) -> TenantProfile:
                 "adaptive_vector_post_filter_metadata",
                 False,
             )
+        ),
+        city_vector_exact_filter_max_rows=(
+            int(retrieval["city_vector_exact_filter_max_rows"])
+            if retrieval.get("city_vector_exact_filter_max_rows") is not None
+            else None
         ),
         semantic_related_tail_enabled=bool(
             retrieval.get("semantic_related_tail_enabled", True)

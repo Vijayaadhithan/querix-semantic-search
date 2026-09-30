@@ -212,6 +212,7 @@ class SearchEngineSupportMixin:
             str(getattr(self, "index_generation", "legacy-a")),
             str(self.bm25_index.revision()),
             str(self.bm25_index.count()),
+            str(getattr(self, "city_vector_exact_filter_max_rows", None)),
             str(limit),
             str(ranking_window),
             RERANK_MODEL,

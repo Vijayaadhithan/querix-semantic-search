@@ -116,6 +116,12 @@ def test_tenant_profiles_resolve_separate_storage_and_api_keys(
     for company in ("alpha", "beta"):
         write_profile(tmp_path, company)
         set_database_environment(monkeypatch, company)
+    alpha_profile = tmp_path / "alpha.yaml"
+    alpha_profile.write_text(
+        alpha_profile.read_text(encoding="utf-8")
+        + "\nretrieval:\n  city_vector_exact_filter_max_rows: 10000\n",
+        encoding="utf-8",
+    )
 
     profiles = discover_tenant_profiles(tmp_path)
     registry = TenantRegistry(
@@ -144,6 +150,8 @@ def test_tenant_profiles_resolve_separate_storage_and_api_keys(
     assert profiles["alpha"].database.tls_mode == "disable"
     assert profiles["alpha"].retrieval.semantic_related_tail_enabled is True
     assert profiles["alpha"].retrieval.adaptive_vector_post_filter_metadata is False
+    assert profiles["alpha"].retrieval.city_vector_exact_filter_max_rows == 10_000
+    assert profiles["beta"].retrieval.city_vector_exact_filter_max_rows is None
     assert (
         profiles["alpha"].retrieval.semantic_related_tail_requires_explicit_category
         is False

@@ -105,6 +105,7 @@ class ProductSearchEngine(SearchEngineSupportMixin, SearchRankingMixin):
         planner_prompt_context: str = "",
         planner_query_aliases: dict[str, str] | None = None,
         vector_post_filter_metadata: bool | str = False,
+        city_vector_exact_filter_max_rows: int | None = None,
         semantic_related_tail_enabled: bool = RELATED_TAIL_ENABLED,
         semantic_related_tail_requires_explicit_category: bool = False,
         reranker_relative_score_floor: float = 0.0,
@@ -129,6 +130,12 @@ class ProductSearchEngine(SearchEngineSupportMixin, SearchRankingMixin):
         self.planner_prompt_context = planner_prompt_context
         self.planner_query_aliases = dict(planner_query_aliases or {})
         self.vector_post_filter_metadata = vector_post_filter_metadata
+        if (
+            city_vector_exact_filter_max_rows is not None
+            and city_vector_exact_filter_max_rows <= 0
+        ):
+            raise ValueError("city_vector_exact_filter_max_rows must be positive")
+        self.city_vector_exact_filter_max_rows = city_vector_exact_filter_max_rows
         self.semantic_related_tail_enabled = semantic_related_tail_enabled
         self.semantic_related_tail_requires_explicit_category = (
             semantic_related_tail_requires_explicit_category
@@ -252,6 +259,7 @@ class ProductSearchEngine(SearchEngineSupportMixin, SearchRankingMixin):
                 embedding_provider=self.embedding_provider,
                 company_id=self.company_id,
                 post_filter_metadata=self.vector_post_filter_metadata,
+                city_exact_filter_max_rows=self.city_vector_exact_filter_max_rows,
                 include_unpriced=include_unpriced,
                 metrics=vector_metrics,
                 query_embedding=query_embedding,

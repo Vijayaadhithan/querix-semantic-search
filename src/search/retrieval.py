@@ -96,6 +96,7 @@ def vector_search(
     embedding_provider=None,
     company_id=None,
     post_filter_metadata=False,
+    city_exact_filter_max_rows=None,
     include_unpriced=False,
     metrics=None,
     query_embedding=None,
@@ -135,9 +136,15 @@ def vector_search(
             resolved_filters,
             include_unpriced,
         )
+        exact_filter_max_rows = VECTOR_EXACT_FILTER_MAX_ROWS
+        if (
+            city_exact_filter_max_rows is not None
+            and "city_id" in resolved_filters.get("categorical", {})
+        ):
+            exact_filter_max_rows = city_exact_filter_max_rows
         if where_filter is not None and post_filter_metadata == "adaptive":
             query_options["where"] = where_filter
-            query_options["exact_filter_max_rows"] = VECTOR_EXACT_FILTER_MAX_ROWS
+            query_options["exact_filter_max_rows"] = exact_filter_max_rows
             query_options["post_filter_n_results"] = min(
                 max(candidate_k, top_k) * VECTOR_POST_FILTER_OVERFETCH_FACTOR,
                 VECTOR_POST_FILTER_MAX_CANDIDATES,
@@ -154,7 +161,7 @@ def vector_search(
             )
         elif where_filter is not None:
             query_options["where"] = where_filter
-            query_options["exact_filter_max_rows"] = VECTOR_EXACT_FILTER_MAX_ROWS
+            query_options["exact_filter_max_rows"] = exact_filter_max_rows
     database_started = time.perf_counter()
     while True:
         try:

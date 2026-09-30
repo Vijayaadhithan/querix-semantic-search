@@ -175,10 +175,15 @@ not change the prewarm mode, `shared_buffers`, or the container memory limit
 without comparing filtered semantic latency and peak host/cgroup memory.
 
 `vector_eligible=1001 vector_eligible_capped=True` means the bounded
-eligibility probe found more than the 1,000-row exact-ranking threshold; it
-does not mean the vector query fetched 1,001 payload rows. The broad-filter
-path uses native iterative filtered HNSW and stops after the requested matching
-candidate count. A semantic engine log
+eligibility probe found more than the default 1,000-row exact-ranking threshold;
+it does not mean the vector query fetched 1,001 payload rows. Gainr raises the
+threshold to 10,000 only when a structured `city_id` filter is present. This
+uses exact ranking for city subsets such as Mumbai, where filtered HNSW scans
+were slower in live measurements. Other filters retain the default threshold;
+broader city filters continue to use iterative filtered HNSW. The cutoff is
+tenant-scoped through `retrieval.city_vector_exact_filter_max_rows` and must be
+benchmarked against both filtered latency and candidate quality before change.
+A semantic engine log
 with `products=0 hydration=deferred` likewise means the compatibility layer
 will hydrate the ranked IDs, not that retrieval found no products.
 

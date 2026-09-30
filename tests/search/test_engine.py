@@ -1962,6 +1962,18 @@ def test_result_cache_key_changes_with_index_generation(tmp_path):
     index.close()
 
 
+def test_result_cache_key_changes_with_city_exact_limit(tmp_path):
+    index = build_index(tmp_path / "city-exact-cache.sqlite3")
+    engine = ProductSearchEngine(collection=FakeCollection(), bm25_index=index)
+    before = engine._result_cache_key("phone repair", 20)
+    engine.city_vector_exact_filter_max_rows = 10_000
+    after = engine._result_cache_key("phone repair", 20)
+
+    assert before != after
+    engine.close()
+    index.close()
+
+
 def test_shared_plan_cache_survives_engine_restart(tmp_path):
     index = build_index(tmp_path / "shared-plan-cache.sqlite3")
     cache = DictSharedCache()
