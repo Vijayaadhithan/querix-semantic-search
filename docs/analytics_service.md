@@ -629,7 +629,7 @@ Run against the configured company SQL database and publish to persistent
 storage:
 
 ```bash
-docker compose run --rm --no-deps analytics-api \
+docker compose run --rm --no-deps analytics-refresh \
   python -m analytics_service.refresh --company acme
 ```
 

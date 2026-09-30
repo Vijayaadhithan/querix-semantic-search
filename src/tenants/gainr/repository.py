@@ -323,7 +323,16 @@ class GainrDatabaseRepository:
                     category_type,
                 )
             elif category_type == 3:
-                conditions.append("sr.boost_ad_count > 0")
+                # The search-ready projection has no boost count. Match the
+                # authoritative, date-bounded boost rows used for promotion.
+                conditions.append(
+                    "sr.id IN ("
+                    f"SELECT boost.ads_id FROM {_BOOST_ADS_TABLE} AS boost "
+                    "WHERE boost.deleted_at IS NULL "
+                    "AND boost.start_date <= CURDATE() "
+                    "AND boost.end_date >= CURDATE()"
+                    ")"
+                )
         if request_filter.attribute_value:
             attribute_conditions = []
             for value in request_filter.attribute_value:

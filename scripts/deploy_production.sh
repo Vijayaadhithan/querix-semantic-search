@@ -96,7 +96,7 @@ docker compose run --rm --no-deps telemetry-uploader \
   python scripts/flush_search_analytics.py \
     --company "$COMPANY_ID"
 if [[ "$RUN_ANALYTICS_INITIAL_REFRESH" == "true" ]]; then
-  docker compose run --rm --no-deps analytics-api \
+  docker compose run --rm --no-deps analytics-refresh \
     python -m analytics_service.refresh \
       --company "$COMPANY_ID" \
       --if-missing

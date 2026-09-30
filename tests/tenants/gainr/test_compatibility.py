@@ -1123,6 +1123,31 @@ def test_search_ready_catalog_promotes_boosts_before_price_sort_and_paging(
     assert executions[1][1] == ("Car", "1", "2", "25", 20, 20)
 
 
+@pytest.mark.parametrize("serves_cards_from_search_ready", [True, False])
+def test_boosted_category_filter_uses_live_boost_dates(
+    tmp_path, serves_cards_from_search_ready
+):
+    repository = GainrDatabaseRepository(
+        profile(
+            tmp_path,
+            serves_cards_from_search_ready=serves_cards_from_search_ready,
+        )
+    )
+
+    where_clause, params = repository._where_clause(
+        {"categorical": {"city_id": 798}},
+        GainrSearchFilter(category_type=3),
+        allowed_ad_types={"1"},
+    )
+
+    assert "sr.boost_ad_count" not in where_clause
+    assert "SELECT boost.ads_id FROM `boost_ads` AS boost" in where_clause
+    assert "boost.deleted_at IS NULL" in where_clause
+    assert "boost.start_date <= CURDATE()" in where_clause
+    assert "boost.end_date >= CURDATE()" in where_clause
+    assert params == [798, "1"]
+
+
 def test_search_ready_catalog_retries_one_transient_mysql_disconnect(
     tmp_path,
     monkeypatch,

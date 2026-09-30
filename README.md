@@ -140,7 +140,7 @@ docker compose build analytics-api
 docker compose up -d --no-deps --force-recreate analytics-api
 
 # Build a snapshot manually.
-docker compose run --rm --no-deps analytics-api \
+docker compose run --rm --no-deps analytics-refresh \
   python -m analytics_service.refresh --company acme
 
 # Status, last 500 API log lines, and live logs.

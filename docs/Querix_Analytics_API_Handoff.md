@@ -622,7 +622,7 @@ when that company's data semantics and business requirement justify them.
 Example refresh:
 
 ```bash
-docker compose run --rm --no-deps analytics-api \
+docker compose run --rm --no-deps analytics-refresh \
   python -m analytics_service.refresh --company acme
 ```
 
@@ -711,7 +711,7 @@ curl -fsS http://127.0.0.1:8010/api/v1/live | jq
 curl -fsS http://127.0.0.1:8010/api/v1/ready | jq
 
 # Manual refresh for one company.
-docker compose run --rm --no-deps analytics-api \
+docker compose run --rm --no-deps analytics-refresh \
   python -m analytics_service.refresh --company acme
 
 # Session cleanup.

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import replace
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pandas as pd
@@ -1365,6 +1365,42 @@ def test_startup_reconciliation_closes_only_stale_running_refreshes(tmp_path):
     assert rows[stale_run]["completed_at"] == "2026-08-30T10:00:00+00:00"
     assert rows[stale_run]["error_type"] == "process_interrupted"
     assert rows[recent_run]["status"] == "running"
+
+
+def test_worker_exit_marks_only_its_company_refresh_interrupted(tmp_path):
+    path = tmp_path / "snapshots.sqlite3"
+    store = AnalyticsSnapshotStore(path)
+    old_run = store.begin_refresh("gainr")
+    cutoff = datetime.now(UTC) - timedelta(minutes=1)
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            "UPDATE analytics_refresh_runs SET started_at = ? WHERE run_id = ?",
+            ((cutoff - timedelta(hours=1)).isoformat(), old_run),
+        )
+    current_run = store.begin_refresh("gainr")
+    other_company_run = store.begin_refresh("other")
+
+    assert (
+        store.interrupt_refreshes_started_since(
+            "gainr", cutoff, error_type="refresh_exit_137"
+        )
+        == 1
+    )
+
+    with sqlite3.connect(path) as connection:
+        rows = dict(
+            connection.execute(
+                "SELECT run_id, status FROM analytics_refresh_runs"
+            ).fetchall()
+        )
+        error = connection.execute(
+            "SELECT error_type FROM analytics_refresh_runs WHERE run_id = ?",
+            (current_run,),
+        ).fetchone()[0]
+    assert rows[old_run] == "running"
+    assert rows[current_run] == "interrupted"
+    assert rows[other_company_run] == "running"
+    assert error == "refresh_exit_137"
 
 
 def test_analytics_readiness_requires_snapshot_store_and_auth_db(

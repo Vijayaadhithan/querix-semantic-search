@@ -1,3 +1,24 @@
+x-analytics-runtime: &analytics-runtime
+  image: ${ANALYTICS_IMAGE_NAME:-personal-rag-analytics}:${ANALYTICS_IMAGE_TAG:-local}
+  env_file:
+    - path: .runtime/env/analytics-api.env
+      required: true
+  environment:
+    ANALYTICS_API_HOST: 0.0.0.0
+    ANALYTICS_API_PORT: 8010
+    ANALYTICS_SNAPSHOT_DB_PATH: /app/storage/analytics/snapshots.sqlite3
+    ANALYTICS_TENANT_CONFIG_DIR: /app/configs/tenants
+    MYSQL_HOST: ${DOCKER_MYSQL_HOST:-host.docker.internal}
+  volumes:
+    - ./storage/analytics:/app/storage/analytics
+    - ./configs/tenants:/app/configs/tenants:ro
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
+  pids_limit: 256
+  init: true
+  security_opt:
+    - no-new-privileges:true
+
 services:
   api:
     image: ${API_IMAGE_NAME:-personal-rag-api}:${API_IMAGE_TAG:-local}
@@ -44,36 +65,26 @@ services:
     restart: unless-stopped
 
   analytics-api:
+    <<: *analytics-runtime
     build:
       context: .
       dockerfile: Dockerfile.analytics
-    env_file:
-      - path: .runtime/env/analytics-api.env
-        required: true
-    environment:
-      ANALYTICS_API_HOST: 0.0.0.0
-      ANALYTICS_API_PORT: 8010
-      ANALYTICS_SNAPSHOT_DB_PATH: /app/storage/analytics/snapshots.sqlite3
-      ANALYTICS_TENANT_CONFIG_DIR: /app/configs/tenants
-      MYSQL_HOST: ${DOCKER_MYSQL_HOST:-host.docker.internal}
     ports:
       - "127.0.0.1:${ANALYTICS_API_PORT:-8010}:8010"
-    volumes:
-      - ./storage/analytics:/app/storage/analytics
-      - ./configs/tenants:/app/configs/tenants:ro
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     mem_limit: 1g
-    pids_limit: 256
-    init: true
-    security_opt:
-      - no-new-privileges:true
     logging:
       driver: json-file
       options:
         max-size: 10m
         max-file: "3"
     restart: unless-stopped
+
+  analytics-refresh:
+    <<: *analytics-runtime
+    profiles:
+      - operations
+    # Full-source batch analytics needs more headroom than the serving API.
+    mem_limit: 2g
 
   pgvector:
     image: pgvector/pgvector:0.8.5-pg16-bookworm@sha256:1d533553fefe4f12e5d80c7b80622ba0c382abb5758856f52983d8789179f0fb

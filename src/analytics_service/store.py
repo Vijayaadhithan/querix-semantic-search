@@ -413,6 +413,32 @@ class AnalyticsSnapshotStore:
                 ),
             )
 
+    def interrupt_refreshes_started_since(
+        self,
+        company_id: str,
+        started_at: datetime,
+        *,
+        error_type: str = "process_interrupted",
+    ) -> int:
+        """Close runs whose worker exited before it could record a failure."""
+        if started_at.tzinfo is None:
+            raise ValueError("started_at must include a timezone")
+        cutoff = started_at.astimezone(UTC).isoformat()
+        with self._connection() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE analytics_refresh_runs
+                SET status = 'interrupted',
+                    completed_at = ?,
+                    error_type = ?
+                WHERE company_id = ?
+                  AND status = 'running'
+                  AND started_at >= ?
+                """,
+                (utc_now_iso(), error_type[:191], company_id, cutoff),
+            )
+        return max(int(cursor.rowcount), 0)
+
     def publish(
         self,
         *,

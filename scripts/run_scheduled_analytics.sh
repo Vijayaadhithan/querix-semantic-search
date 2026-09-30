@@ -28,8 +28,19 @@ if ! docker compose run --rm --no-deps telemetry-uploader \
 fi
 
 echo "Building the analytics snapshot for ${COMPANY_ID}."
-if ! docker compose run --rm --no-deps analytics-api \
+refresh_started_at="$(date -u '+%Y-%m-%dT%H:%M:%S+00:00')"
+if docker compose run --rm --no-deps analytics-refresh \
   python -m analytics_service.refresh --company "$COMPANY_ID"; then
+  :
+else
+  refresh_exit_code=$?
+  if ! docker compose exec -T analytics-api \
+    python -m analytics_service.mark_interrupted \
+      --company "$COMPANY_ID" \
+      --started-after "$refresh_started_at" \
+      --exit-code "$refresh_exit_code"; then
+    echo "Could not record the interrupted analytics refresh." >&2
+  fi
   echo "Analytics refresh failed; the previous snapshot remains active." >&2
   exit 1
 fi

@@ -42,7 +42,7 @@ curl -fsS http://127.0.0.1:8000/api/v1/ready | jq
 
 # Daily analytics readiness and manual refresh.
 curl -fsS http://127.0.0.1:8010/api/v1/ready | jq
-docker compose run --rm --no-deps analytics-api \
+docker compose run --rm --no-deps analytics-refresh \
   python -m analytics_service.refresh --company acme
 
 # Analytics-only users (interactive hidden password prompts).
