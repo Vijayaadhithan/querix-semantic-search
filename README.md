@@ -12,8 +12,8 @@ A tenant-isolated semantic search service for product and classified catalogues.
 - Tenant-scoped API keys, rate limits, caches, indexes, and database configuration.
 - Cursor-based search pagination and monthly usage reporting.
 - Optional durable MySQL search history and per-provider API/token analytics.
-- A separate two-hour analytics image serving company-safe and internal
-  dashboards from atomic snapshots.
+- A separate analytics image serving company-safe and internal dashboards from
+  atomic snapshots refreshed every four hours.
 - Redis result caching plus graceful vector, BM25, and reranker degradation.
 - Docker deployment with persistent pgvector, Redis, Ollama, and application data.
 - Optional tenant compatibility pagination with a ranked first page and
@@ -119,6 +119,8 @@ embeddings and indexes untouched.
 
 Run these from the repository root. The production command includes the Ollama
 profile; local macOS may use host Ollama as described in the local workflow.
+The default local stack has four persistent containers (`api`, `analytics-api`,
+`pgvector`, and `redis`); `analytics-refresh` runs only for a refresh job.
 Render the ignored, mode-0600 workload env files after every `.env` or
 `.env.keys` change and before running Compose directly:
 

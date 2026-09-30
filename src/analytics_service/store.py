@@ -665,6 +665,31 @@ class AnalyticsSnapshotStore:
         internal: bool,
         version: str | None = None,
     ) -> tuple[dict[str, Any], ...]:
+        return tuple(
+            self.iter_dashboard_activity_records(
+                company_id, internal=internal, version=version
+            )
+        )
+
+    def count_dashboard_activity_records(self, company_id: str, version: str) -> int:
+        with self._connection() as connection:
+            return int(
+                connection.execute(
+                    "SELECT COUNT(*) FROM analytics_query_records "
+                    "WHERE company_id = ? AND snapshot_version = ?",
+                    (company_id, version),
+                ).fetchone()[0]
+            )
+
+    def iter_dashboard_activity_records(
+        self,
+        company_id: str,
+        *,
+        internal: bool,
+        version: str | None = None,
+    ) -> Iterator[dict[str, Any]]:
+        """Decode compact activity records one at a time for refresh jobs."""
+
         field = "internal_json" if internal else "company_json"
         with self._connection() as connection:
             snapshot = connection.execute(
@@ -676,7 +701,7 @@ class AnalyticsSnapshotStore:
                 (company_id,),
             ).fetchone()
             if snapshot is None and version is None:
-                return ()
+                return
             version = version or str(snapshot["active_version"])
             rows = connection.execute(
                 f"""
@@ -688,18 +713,11 @@ class AnalyticsSnapshotStore:
                 """,
                 (company_id, version),
             )
-            # Iterate the SQLite cursor instead of fetchall(). The internal
-            # payloads are much larger than the compact dashboard projection;
-            # retaining every JSON string while decoding every record causes a
-            # large transient allocation and pushes the constrained analytics
-            # container into swap.
-            return tuple(
-                self._dashboard_activity_record(
+            for row in rows:
+                yield self._dashboard_activity_record(
                     row["payload_json"],
                     internal=internal,
                 )
-                for row in rows
-            )
 
     def query_records(
         self,

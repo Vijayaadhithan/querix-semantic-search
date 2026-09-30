@@ -49,7 +49,7 @@ Production uses `SEARCH_ANALYTICS_DELIVERY_MODE=daily_spool`. The same bounded
 request-path queue writes to `storage/search_analytics_spool.sqlite3` using
 SQLite WAL. New spool records use the same minimized field set and do not
 retain user IDs, route reasons, or arbitrary request fields. The independent
-two-hour analytics timer runs:
+four-hour analytics timer runs:
 
 ```bash
 python scripts/flush_search_analytics.py --company acme

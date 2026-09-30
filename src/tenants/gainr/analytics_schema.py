@@ -158,6 +158,12 @@ GAINR_DATASET_SPECS: dict[str, DatasetSpec] = {
         ("id", "user_id", "category_id", "title", "created_at"),
         usecols=ADS_COLUMNS,
         dtypes={"status": "str"},
+        # Reports need only presence/length, not the full listing blobs.
+        lightweight_columns={
+            "photos": "presence",
+            "keywords": "presence",
+            "description": "length",
+        },
         numeric_columns=(
             "id",
             "user_id",

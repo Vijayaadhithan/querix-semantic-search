@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+from contextlib import contextmanager
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -28,7 +29,11 @@ from analytics_service.config import (
 from analytics_service.filters import DashboardFilters
 from analytics_service.prepared_views import activity_view_key
 from analytics_service.service import AnalyticsRefreshService
-from analytics_service.source import SqlAnalyticsDataSource, _validate_frame
+from analytics_service.source import (
+    SqlAnalyticsDataSource,
+    SqlAnalyticsStage,
+    _validate_frame,
+)
 from analytics_service.store import AnalyticsSnapshotStore, _query_record_batches
 from tenants.gainr.analytics import (
     GAINR_ANALYTICS_CONTRACT,
@@ -49,13 +54,17 @@ from verticals.marketplace.analytics.domain import (
     process_part_c,
     process_part_d,
 )
-from verticals.marketplace.analytics.domain.search.records import build_query_records
+from verticals.marketplace.analytics.domain.search.records import (
+    build_query_records,
+    iter_query_records,
+)
 from verticals.marketplace.analytics.metrics import (
     COMPANY_DEEP_METRICS,
     COMPANY_MARKET_METRICS,
     COMPANY_SEARCH_METRICS,
     INTERNAL_API_METRICS,
 )
+from verticals.marketplace.analytics.query_spool import QueryRecordSpool
 
 
 def analytics_company(tmp_path: Path, company_id: str = "gainr"):
@@ -481,6 +490,9 @@ analytics:
     )
     assert "`listing_id` AS `id`" in sql
     assert "`listing_title` AS `title`" in sql
+    assert "CASE WHEN `photos` IS NULL THEN NULL ELSE 1 END AS `photos`" in sql
+    assert "CASE WHEN `keywords` IS NULL THEN NULL ELSE 1 END AS `keywords`" in sql
+    assert "CHAR_LENGTH(`description`) AS `description`" in sql
     assert "FROM `listings`" in sql
     history_sql = SqlAnalyticsDataSource._select_sql(
         config.database,
@@ -782,6 +794,40 @@ def test_daily_refresh_publishes_both_audiences_and_queries(tmp_path):
     assert "token_usage" not in company_queries["items"][0]
 
 
+def test_staged_sql_refresh_matches_in_memory_refresh(tmp_path):
+    company = analytics_company(tmp_path)
+    data = analytics_data()
+    old_store = AnalyticsSnapshotStore(tmp_path / "old.sqlite3")
+    AnalyticsRefreshService(FakeSource(data), old_store).refresh(company)
+
+    class FixtureSqlSource(SqlAnalyticsDataSource):
+        @contextmanager
+        def stage(self, configured_company):
+            stage = SqlAnalyticsStage(tmp_path / "staged.sqlite3", configured_company)
+            try:
+                for name, frame in data.items():
+                    stage.replace(name, iter((frame.copy(),)))
+                yield stage
+            finally:
+                stage.close()
+
+    new_store = AnalyticsSnapshotStore(tmp_path / "new.sqlite3")
+    AnalyticsRefreshService(FixtureSqlSource(), new_store).refresh(company)
+
+    for internal in (False, True):
+        old_dashboard = old_store.dashboard("gainr", internal=internal)
+        new_dashboard = new_store.dashboard("gainr", internal=internal)
+        assert old_dashboard is not None and new_dashboard is not None
+        for dashboard in (old_dashboard, new_dashboard):
+            dashboard.pop("snapshot")
+            dashboard["metadata"].pop("generated_at")
+        assert new_dashboard == old_dashboard
+        assert (
+            new_store.query_records("gainr", internal=internal, limit=10)["items"]
+            == old_store.query_records("gainr", internal=internal, limit=10)["items"]
+        )
+
+
 def test_query_record_serialization_is_lazy_and_batched():
     consumed: list[int] = []
 
@@ -810,6 +856,48 @@ def test_query_record_serialization_is_lazy_and_batched():
     assert len(first_batch) == 2
     assert [len(batch) for batch in batches] == [2, 1]
     assert consumed == [0, 1, 2, 3, 4]
+
+
+def test_query_projection_batches_keep_latest_duplicate_telemetry():
+    data = analytics_data()
+    replacement = data["api_usage"].iloc[[0]].copy()
+    replacement["id"] = 99
+    replacement["created_at"] = "2026-07-29 12:00:00"
+    replacement["total_results"] = 0
+    data["api_usage"] = pd.concat([data["api_usage"], replacement], ignore_index=True)
+
+    records = list(iter_query_records(data, batch_size=1))
+
+    assert len(records) == 2
+    assert records[0]["request_id"] == "req-1"
+    assert records[0]["outcome"] == "zero_result"
+    assert records[0]["api"]["total_results"] == 0
+    assert records[1]["request_id"] == "req-2"
+
+
+def test_lightweight_listing_projection_preserves_deep_metrics():
+    data = analytics_data()
+    expected = process_part_c(data, scope=GAINR_MARKETPLACE_SCOPE)
+    projected = {name: frame.copy() for name, frame in data.items()}
+    ads = projected["ads"]
+    for column in ("photos", "keywords"):
+        ads[column] = ads[column].where(ads[column].isna(), 1)
+    ads["description"] = ads["description"].fillna("").str.len()
+
+    assert process_part_c(projected, scope=GAINR_MARKETPLACE_SCOPE) == expected
+
+
+def test_query_record_spool_replays_without_retaining_records():
+    spool = QueryRecordSpool()
+    try:
+        for index in range(3):
+            spool.append({"request_id": f"request-{index}", "value": index})
+        expected = [f"request-{index}" for index in range(3)]
+        assert len(spool) == 3
+        assert [record["request_id"] for record in spool] == expected
+        assert [record["request_id"] for record in spool] == expected
+    finally:
+        spool.close()
 
 
 def test_query_stream_count_mismatch_rolls_back_publication(tmp_path):

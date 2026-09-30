@@ -681,9 +681,10 @@ dependencies or leave an orphan that overlaps tomorrow's run. Candidate
 ingestion state is stored beside the candidate BM25 file and does not make the
 active service unready.
 
-### Two-hour analytics refresh
+### Four-hour analytics refresh
 
-Analytics runs independently at every even-hour `:30` in `Asia/Kolkata`. It
+Analytics runs independently at 00:00, 04:00, 08:00, 12:00, 16:00, and 20:00
+in `Asia/Kolkata`. It
 uploads the stable analytics spool, atomically publishes a new snapshot, and
 prunes expired analytics sessions. It does not run ingestion or restart either
 API.

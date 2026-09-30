@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import logging
+import sqlite3
 import ssl
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any, Protocol
 
 import pandas as pd
@@ -16,6 +18,7 @@ from .config import CompanyAnalyticsConfig, DatabaseTarget, DatasetMapping
 from .source_schema import DatasetContractError, DatasetSpec
 
 LOGGER = logging.getLogger(__name__)
+SOURCE_BATCH_SIZE = 2_000
 
 
 class AnalyticsDataSource(Protocol):
@@ -170,10 +173,21 @@ class SqlAnalyticsDataSource:
         selected = []
         for canonical in canonical_columns:
             source = mapping.columns.get(canonical, canonical)
+            quoted_source = quote(source)
+            projection = spec.lightweight_columns.get(canonical)
+            if projection == "presence":
+                selected.append(
+                    f"CASE WHEN {quoted_source} IS NULL THEN NULL ELSE 1 END "
+                    f"AS {quote(canonical)}"
+                )
+                continue
+            if projection == "length":
+                selected.append(f"CHAR_LENGTH({quoted_source}) AS {quote(canonical)}")
+                continue
             selected.append(
-                f"{quote(source)} AS {quote(canonical)}"
+                f"{quoted_source} AS {quote(canonical)}"
                 if source != canonical
-                else quote(source)
+                else quoted_source
             )
         table = quote(mapping.table)
         if target.backend == "postgres":
@@ -257,3 +271,137 @@ class SqlAnalyticsDataSource:
                     )
                 )
         return data
+
+    @contextmanager
+    def stage(self, company: CompanyAnalyticsConfig) -> Iterator[SqlAnalyticsStage]:
+        """Copy read-only SQL results to a temporary local store in batches."""
+
+        with TemporaryDirectory(prefix="analytics-source-") as directory:
+            stage = SqlAnalyticsStage(Path(directory) / "source.sqlite3", company)
+            try:
+                stage.ingest(self)
+                yield stage
+            finally:
+                stage.close()
+
+
+class SqlAnalyticsStage:
+    def __init__(self, path: Path, company: CompanyAnalyticsConfig) -> None:
+        self.company = company
+        self.connection = sqlite3.connect(path)
+        self.source_rows: dict[str, int] = {}
+        self.watermarks: list[pd.Timestamp] = []
+
+    def _replace_chunks(self, name: str, chunks: Iterator[pd.DataFrame]) -> None:
+        spec = self.company.dataset_specs[name]
+        quoted_name = '"' + name.replace('"', '""') + '"'
+        self.connection.execute(f"DROP TABLE IF EXISTS {quoted_name}")
+        lightweight_dtypes = dict.fromkeys(spec.lightweight_columns, "INTEGER")
+        count = 0
+        for chunk in chunks:
+            _validate_frame(name, chunk, spec)
+            chunk.to_sql(
+                name,
+                self.connection,
+                if_exists="append",
+                index=False,
+                dtype=lightweight_dtypes,
+            )
+            count += len(chunk)
+        if count == 0:
+            columns = spec.usecols or spec.required_columns
+            pd.DataFrame(columns=columns).to_sql(
+                name,
+                self.connection,
+                if_exists="replace",
+                index=False,
+                dtype=lightweight_dtypes,
+            )
+        self.source_rows[name] = count
+        LOGGER.info(
+            "Staged analytics dataset company=%s dataset=%s rows=%d",
+            self.company.company_id,
+            name,
+            count,
+        )
+
+    def replace(self, name: str, chunks: Iterator[pd.DataFrame]) -> None:
+        """Replace a staged dataset; useful for isolated synthetic benchmarks."""
+
+        if name not in self.company.dataset_specs:
+            raise ValueError(f"Unknown analytics dataset: {name}")
+        self._replace_chunks(name, chunks)
+
+    def ingest(self, source: SqlAnalyticsDataSource) -> None:
+        for database_name, target in (
+            ("company", self.company.database),
+            ("telemetry", self.company.telemetry_database),
+        ):
+            names = tuple(
+                name
+                for name, spec in self.company.dataset_specs.items()
+                if spec.database == database_name
+            )
+            if not names:
+                continue
+            with _connection(target) as connection:
+                for name in names:
+                    spec = self.company.dataset_specs[name]
+                    sql = source._select_sql(
+                        target,
+                        self.company.datasets[name],
+                        spec,
+                        history_days=(
+                            self.company.history_days if spec.history_window else None
+                        ),
+                    )
+                    try:
+                        streaming = connection.execution_options(stream_results=True)
+                        chunks = pd.read_sql_query(
+                            text(sql), streaming, chunksize=SOURCE_BATCH_SIZE
+                        )
+                        self._replace_chunks(name, chunks)
+                    except Exception as exc:
+                        raise RuntimeError(
+                            f"Unable to stage analytics dataset {name!r} "
+                            f"for company {self.company.company_id!r}"
+                        ) from exc
+
+    def load(
+        self,
+        names: tuple[str, ...],
+        *,
+        normalize: Any,
+    ) -> dict[str, pd.DataFrame]:
+        frames = {
+            name: _validate_frame(
+                name,
+                pd.read_sql_query(
+                    'SELECT * FROM "' + name.replace('"', '""') + '"',
+                    self.connection,
+                ),
+                self.company.dataset_specs[name],
+            )
+            for name in names
+        }
+        frames = normalize(
+            frames,
+            timezone_name=self.company.timezone,
+            dataset_specs=self.company.dataset_specs,
+        )
+        for frame in frames.values():
+            if frame.empty or "created_at" not in frame:
+                continue
+            parsed = pd.to_datetime(
+                frame["created_at"], utc=True, errors="coerce"
+            ).dropna()
+            if not parsed.empty:
+                self.watermarks.append(parsed.max())
+        return frames
+
+    @property
+    def source_watermark(self) -> str | None:
+        return max(self.watermarks).isoformat() if self.watermarks else None
+
+    def close(self) -> None:
+        self.connection.close()

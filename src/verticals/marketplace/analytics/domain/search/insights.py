@@ -213,7 +213,24 @@ def _provider_reliability(merged: pd.DataFrame) -> dict[str, Any]:
 def build_additional_search_insights(
     data: dict[str, pd.DataFrame],
 ) -> dict[str, dict[str, Any]]:
-    merged = merge_search_api(data)
+    # These five aggregates need only a small projection of the source frames.
+    # Merging every telemetry column duplicates many large JSON/text values.
+    merged = merge_search_api(
+        {
+            "search_history": data["search_history"][["request_id", "query_text"]],
+            "api_usage": data["api_usage"][
+                [
+                    "request_id",
+                    "created_at",
+                    "total_results",
+                    "duration_ms",
+                    "status",
+                    "execution_path",
+                    "attempts_json",
+                ]
+            ],
+        }
+    )
     return {
         "q88_repeat_demand": _repeat_demand(merged),
         "q89_category_fulfillment": _category_fulfillment(merged),

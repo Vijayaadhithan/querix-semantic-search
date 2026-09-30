@@ -35,7 +35,7 @@ normalized table/column mappings. Company business data and search history
 come from the company database. Internal API telemetry may use the same
 database today or a separate Querix database later.
 
-Every two hours at `:30` Asia/Kolkata, the independent analytics timer:
+Every four hours at `:00` Asia/Kolkata, the independent analytics timer:
 
 1. flushes pending search telemetry;
 2. reads SQL and atomically publishes a new analytics snapshot;
@@ -141,7 +141,7 @@ snapshot/authentication database is readable and writable:
   "status": "ok",
   "configured_companies": 1,
   "companies_with_snapshots": 1,
-  "refresh_schedule": "every 2 hours at :30 Asia/Kolkata"
+  "refresh_schedule": "every 4 hours at :00 Asia/Kolkata"
 }
 ```
 
@@ -242,7 +242,7 @@ Response `200`:
     "schema_version": "2.0",
     "company_id": "acme",
     "generated_at": "2026-07-30T17:00:00+00:00",
-    "refresh_schedule": "every 2 hours at :30 Asia/Kolkata",
+    "refresh_schedule": "every 4 hours at :00 Asia/Kolkata",
     "source_rows": {
       "search_history": 365,
       "api_usage": 365,
@@ -277,7 +277,7 @@ Response `200`:
     "generated_at": "2026-07-30T17:00:00+00:00",
     "source_watermark": "2026-07-29T23:59:59+00:00",
     "source_rows": {},
-    "refresh_schedule": "every 2 hours at :30 Asia/Kolkata"
+    "refresh_schedule": "every 4 hours at :00 Asia/Kolkata"
   }
 }
 ```
@@ -416,7 +416,7 @@ Response `200`:
       "users": 340601
     }
   },
-  "refresh_schedule": "every 2 hours at :30 Asia/Kolkata"
+  "refresh_schedule": "every 4 hours at :00 Asia/Kolkata"
 }
 ```
 
@@ -435,10 +435,10 @@ Response `200`:
       "has_snapshot": true,
       "snapshot": {},
       "latest_run": {},
-      "refresh_schedule": "every 2 hours at :30 Asia/Kolkata"
+      "refresh_schedule": "every 4 hours at :00 Asia/Kolkata"
     }
   ],
-  "refresh_schedule": "every 2 hours at :30 Asia/Kolkata"
+  "refresh_schedule": "every 4 hours at :00 Asia/Kolkata"
 }
 ```
 
@@ -683,7 +683,7 @@ Isolation controls:
 - separate `analytics-api` container and port 8010;
 - separate process memory limit of 1 GiB;
 - dashboard/query requests read a local snapshot;
-- two-hour calculations run outside user requests;
+- four-hour calculations run outside user requests;
 - analytics-only deployments recreate only `analytics-api`.
 
 Realistic caveat: each refresh must read source SQL. That creates a brief

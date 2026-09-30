@@ -10,6 +10,7 @@ import pandas as pd
 
 from .adapters import build_analytics_adapter
 from .config import CompanyAnalyticsConfig
+from .memory import log_refresh_memory
 from .metrics import (
     metric_counts,
     resolve_metric_profiles,
@@ -17,7 +18,7 @@ from .metrics import (
 )
 from .prepared_views import prepare_snapshot_views
 from .schedule import REFRESH_SCHEDULE
-from .source import AnalyticsDataSource
+from .source import AnalyticsDataSource, SqlAnalyticsDataSource
 from .source_schema import DatasetSpec
 from .store import AnalyticsSnapshotStore
 
@@ -99,15 +100,9 @@ class AnalyticsRefreshService:
     def refresh(self, company: CompanyAnalyticsConfig) -> dict[str, Any]:
         run_id = self.store.begin_refresh(company.company_id)
         source_rows: dict[str, int] = {}
+        computation = None
+        data = None
         try:
-            data = _normalize_source_timestamps(
-                self.source.load(company),
-                timezone_name=company.timezone,
-                dataset_specs=company.dataset_specs,
-            )
-            source_rows = {name: int(len(frame)) for name, frame in data.items()}
-            generated_at = datetime.now(UTC).isoformat()
-
             adapter = build_analytics_adapter(company.adapter, company)
             contract = adapter.analytics_contract
             company_profile, internal_profile = resolve_metric_profiles(
@@ -128,7 +123,42 @@ class AnalyticsRefreshService:
                 company.adapter,
                 ",".join(sorted(selected_modules)),
             )
-            computation = adapter.build_computation(data, selected_modules)
+            if isinstance(self.source, SqlAnalyticsDataSource) and hasattr(
+                adapter, "build_staged_computation"
+            ):
+                with self.source.stage(company) as stage:
+                    log_refresh_memory("source_staged")
+                    generated_at = datetime.now(UTC).isoformat()
+                    computation = adapter.build_staged_computation(
+                        stage,
+                        selected_modules,
+                        normalize=_normalize_source_timestamps,
+                    )
+                    source_rows = dict(stage.source_rows)
+                    source_watermark = stage.source_watermark
+            else:
+                data = _normalize_source_timestamps(
+                    self.source.load(company),
+                    timezone_name=company.timezone,
+                    dataset_specs=company.dataset_specs,
+                )
+                log_refresh_memory("source_loaded")
+                source_rows = {name: int(len(frame)) for name, frame in data.items()}
+                generated_at = datetime.now(UTC).isoformat()
+                watermarks = []
+                for frame in data.values():
+                    if frame.empty or "created_at" not in frame:
+                        continue
+                    parsed = pd.to_datetime(
+                        frame["created_at"], utc=True, errors="coerce"
+                    ).dropna()
+                    if not parsed.empty:
+                        watermarks.append(parsed.max())
+                source_watermark = max(watermarks).isoformat() if watermarks else None
+                frame = None
+                parsed = None
+                computation = adapter.build_computation(data, selected_modules)
+            log_refresh_memory("computation_built")
             reports = computation.reports
             company_sections = _dashboard_sections(
                 reports,
@@ -184,22 +214,11 @@ class AnalyticsRefreshService:
                 },
                 **internal_sections,
             }
-            watermarks = []
-            for frame in data.values():
-                if frame.empty or "created_at" not in frame:
-                    continue
-                parsed = pd.to_datetime(
-                    frame["created_at"],
-                    utc=True,
-                    errors="coerce",
-                ).dropna()
-                if not parsed.empty:
-                    watermarks.append(parsed.max())
-            source_watermark = max(watermarks).isoformat() if watermarks else None
-            # The query stream releases its source rows as it is consumed.
-            # Drop extraction frames before the candidate's summaries are built.
-            del data, computation, reports
-            frame = None
+            # The query stream now reads from a temporary file. Release all
+            # source frames before staging candidate rows and prepared views.
+            del data, reports
+            computation.reports = {}
+            log_refresh_memory("sources_released")
             version = self.store.publish(
                 run_id=run_id,
                 company_id=company.company_id,
@@ -218,6 +237,7 @@ class AnalyticsRefreshService:
                     generated_at=generated_at,
                 ),
             )
+            log_refresh_memory("snapshot_published")
         except Exception as exc:
             self.store.fail_refresh(
                 run_id,
@@ -230,6 +250,9 @@ class AnalyticsRefreshService:
                 type(exc).__name__,
             )
             raise
+        finally:
+            if computation is not None and computation.cleanup is not None:
+                computation.cleanup()
         return {
             "status": "complete",
             "company_id": company.company_id,

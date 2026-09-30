@@ -53,8 +53,8 @@ remain easy to locate.
 
 ## Analytics snapshot lifecycle
 
-The analytics service is not part of the search request lifecycle. Every two
-hours at `:30` Asia/Kolkata its independent timer reads the configured company
+The analytics service is not part of the search request lifecycle. Every four
+hours at `:00` Asia/Kolkata its independent timer reads the configured company
 database and API telemetry source, calculates every dashboard module, writes
 versioned individual-query records, and atomically switches the active
 snapshot. HTTP requests only read that completed snapshot.

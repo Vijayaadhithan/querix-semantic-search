@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -64,3 +64,4 @@ class AnalyticsComputation:
     query_pairs: Iterable[tuple[dict[str, Any], dict[str, Any]]]
     query_record_count: int
     company_overview: dict[str, Any]
+    cleanup: Callable[[], None] | None = None

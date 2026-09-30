@@ -480,7 +480,12 @@ def process_part_c(data, *, scope: MarketplaceScope):
     }
 
     # Q71: Description length
-    desc_lengths = ads["description"].fillna("").apply(len)
+    description = ads["description"]
+    desc_lengths = (
+        description.fillna(0)
+        if pd.api.types.is_numeric_dtype(description)
+        else description.fillna("").apply(len)
+    )
     results["q71_description_length"] = {
         "avg": round(float(desc_lengths.mean()), 0),
         "median": round(float(desc_lengths.median()), 0),

@@ -8,6 +8,7 @@ x-analytics-runtime: &analytics-runtime
     ANALYTICS_API_PORT: 8010
     ANALYTICS_SNAPSHOT_DB_PATH: /app/storage/analytics/snapshots.sqlite3
     ANALYTICS_TENANT_CONFIG_DIR: /app/configs/tenants
+    ANALYTICS_REFRESH_MEMORY_TRACE: ${ANALYTICS_REFRESH_MEMORY_TRACE:-0}
     MYSQL_HOST: ${DOCKER_MYSQL_HOST:-host.docker.internal}
   volumes:
     - ./storage/analytics:/app/storage/analytics
@@ -83,8 +84,8 @@ services:
     <<: *analytics-runtime
     profiles:
       - operations
-    # Full-source batch analytics needs more headroom than the serving API.
-    mem_limit: 2g
+    # SQL staging and replayable views keep the refresh within this limit.
+    mem_limit: ${ANALYTICS_REFRESH_MEMORY_LIMIT:-1g}
 
   pgvector:
     image: pgvector/pgvector:0.8.5-pg16-bookworm@sha256:1d533553fefe4f12e5d80c7b80622ba0c382abb5758856f52983d8789179f0fb

@@ -30,7 +30,7 @@ failed run but does not replace or delete the last completed dashboard.
 Each refresh prepares company and internal activity views for all five standard
 periods and three request scopes, plus the Query Explorer facets. Rolling periods
 are evaluated **as of the snapshot generation time**, so dashboards stay consistent
-with their source data until the next two-hour refresh. The applied `from`/`to`
+with their source data until the next four-hour refresh. The applied `from`/`to`
 boundaries and snapshot timestamp expose this time basis. Opening a page does not
 decode the query history, including after an API restart.
 
@@ -38,6 +38,19 @@ Candidate query rows are staged before preparing views, while the previous
 snapshot remains active. Preparation does not hold a SQLite write transaction,
 so login/session writes can continue. Activation publishes the candidate and all
 its prepared views together; preparation failures retain the previous snapshot.
+
+SQL refreshes read source tables in 2,000-row batches into a temporary local
+SQLite database. Search history and API usage are loaded and released before the
+catalogue is loaded; report modules run before individual query records are
+written to a replayable temporary spool. The ads SQL projection reads presence
+or length for large text fields when those are the only values the metrics need.
+Prepared activity views replay snapshot rows from SQLite instead of retaining
+all decoded query payloads. Exact latency percentiles still collect numeric
+values during each internal view. The temporary source and query spool are
+removed when the refresh ends. CSV refreshes retain the existing in-memory
+compatibility path. Search Intelligence and API Performance still materialize
+the configured history window while calculating their metrics, so peak memory
+can rise if request volume grows substantially.
 
 Custom filtered dashboard activity caches up to 32 completed summaries per API process.
 Uncached calculations run one at a time across company and internal dashboards,
@@ -222,9 +235,10 @@ The analytics service reads business data and tenant-facing query history from
 the company database. API telemetry can use the company database initially or
 a separate internal database. `request_id` correlates the two sources.
 
-## Two-hour refresh
+## Four-hour refresh
 
-All modules refresh every two hours at `:30` in `Asia/Kolkata`. The independent
+All modules refresh at 00:00, 04:00, 08:00, 12:00, 16:00, and 20:00 in
+`Asia/Kolkata`. The independent
 `semantic-search-analytics.timer` starts
 `scripts/run_scheduled_analytics.sh`, which performs these operations:
 
@@ -632,6 +646,23 @@ storage:
 docker compose run --rm --no-deps analytics-refresh \
   python -m analytics_service.refresh --company acme
 ```
+
+The refresh worker is a one-shot Compose service, so four running default
+containers are expected locally: search API, analytics API, pgvector, and Redis.
+The optional Ollama profile adds a fifth container; macOS can use host Ollama
+instead. The worker limit defaults to 1 GiB and can be overridden with
+`ANALYTICS_REFRESH_MEMORY_LIMIT`. Set
+`ANALYTICS_REFRESH_MEMORY_TRACE=1` to log process and cgroup memory at refresh
+phases. A local stress run can use the configured catalogue plus synthetic
+search/API history and an isolated temporary snapshot:
+
+```bash
+ANALYTICS_REFRESH_MEMORY_LIMIT=1g docker compose run --rm --no-deps \
+  -v "$PWD/scripts/benchmark_analytics_memory.py:/app/benchmark_analytics_memory.py:ro" \
+  analytics-refresh python /app/benchmark_analytics_memory.py --rows 306000
+```
+
+The benchmark does not publish to the normal snapshot or write the source DB.
 
 Start the API:
 

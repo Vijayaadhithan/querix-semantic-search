@@ -1,1 +1,1 @@
-REFRESH_SCHEDULE = "every 2 hours at :30 Asia/Kolkata"
+REFRESH_SCHEDULE = "every 4 hours at :00 Asia/Kolkata"

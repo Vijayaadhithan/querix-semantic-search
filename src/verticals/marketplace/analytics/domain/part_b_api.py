@@ -50,13 +50,11 @@ def process_part_b(data):
 
     total_requests = len(api)
 
-    # Parse attempts_json for all rows
-    LOGGER.debug("Parsing attempts_json")
-    all_attempts = []
-    for idx, row in api.iterrows():
-        attempts = parse_attempts_json(row.get("attempts_json", "[]"))
-        all_attempts.append(attempts)
-    api["parsed_attempts"] = all_attempts
+    # Reparse compact JSON during the few attempt metrics that need it. Holding
+    # one Python list/dict tree per request can exhaust the refresh worker.
+    def parsed_attempts():
+        for raw in api["attempts_json"]:
+            yield parse_attempts_json(raw)
 
     # Q21: Success vs failure rate
     status_counts = api["status"].value_counts().to_dict()
@@ -246,7 +244,7 @@ def process_part_b(data):
     total_reranking_requests = 0
     voyage_to_nemotron_rescue_requests = 0
 
-    for attempts in api["parsed_attempts"]:
+    for attempts in parsed_attempts():
         fallback_groups = set()
         has_reranking_attempt = False
         voyage_fell_back = False
@@ -581,7 +579,7 @@ def process_part_b(data):
     }
 
     # Q41: Requests with >3 attempts
-    multi_attempt = sum(1 for attempts in api["parsed_attempts"] if len(attempts) > 3)
+    multi_attempt = sum(1 for attempts in parsed_attempts() if len(attempts) > 3)
     results["q41_multi_attempt"] = {
         "count": multi_attempt,
         "percentage": (
@@ -614,7 +612,7 @@ def process_part_b(data):
 
     # Q44: Voyage rate limiting
     voyage_events = []
-    for idx, attempts in enumerate(api["parsed_attempts"]):
+    for attempts in parsed_attempts():
         for attempt in attempts:
             if isinstance(attempt, dict) and attempt.get("provider") == "voyage-2.5":
                 voyage_events.append(
@@ -642,7 +640,7 @@ def process_part_b(data):
 
     # Q45: Embedding latency distribution
     embed_latencies = []
-    for attempts in api["parsed_attempts"]:
+    for attempts in parsed_attempts():
         for attempt in attempts:
             if isinstance(attempt, dict) and attempt.get("operation") == "embedding":
                 embed_latencies.append(attempt.get("duration_ms", 0))
@@ -666,9 +664,10 @@ def process_part_b(data):
     # Q46: Query planning bottleneck
     qp_latencies = []
     total_latencies_for_qp = []
-    for idx, row in api.iterrows():
-        attempts = row["parsed_attempts"]
-        total_dur = row["duration_ms"]
+    for raw_attempts, total_dur in zip(
+        api["attempts_json"], api["duration_ms"], strict=True
+    ):
+        attempts = parse_attempts_json(raw_attempts)
         for attempt in attempts:
             if (
                 isinstance(attempt, dict)

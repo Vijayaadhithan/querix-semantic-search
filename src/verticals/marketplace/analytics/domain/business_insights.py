@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import Counter, defaultdict
+from collections.abc import Iterable
 from typing import Any
 
 import pandas as pd
@@ -63,10 +64,12 @@ def _city_label(record: dict[str, Any]) -> str:
     return f"City #{city_id}" if _is_present(city_id) else "No city selected"
 
 
-def _demand_records(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _demand_records(
+    records: Iterable[dict[str, Any]],
+) -> Iterable[dict[str, Any]]:
     # A category/location browse is an observed marketplace intent even when it
     # has no free-text query. Keep it in company demand totals.
-    return list(records)
+    return records
 
 
 def build_company_business_insights(

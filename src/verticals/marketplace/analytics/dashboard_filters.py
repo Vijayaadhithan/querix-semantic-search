@@ -211,12 +211,45 @@ def _matches(
     return True
 
 
+class _FilteredRecords:
+    """Replay a filtered snapshot without retaining matching records."""
+
+    def __init__(
+        self,
+        records: Iterable[dict[str, Any]],
+        *,
+        filters: DashboardFilters,
+        created_from: datetime | None,
+        created_to: datetime | None,
+        internal: bool,
+        request_scope: str,
+    ) -> None:
+        self.records = records
+        self.filters = filters
+        self.created_from = created_from
+        self.created_to = created_to
+        self.internal = internal
+        self.request_scope = request_scope
+
+    def __iter__(self):
+        for record in self.records:
+            if _matches(
+                record,
+                filters=self.filters,
+                created_from=self.created_from,
+                created_to=self.created_to,
+                internal=self.internal,
+                request_scope=self.request_scope,
+            ):
+                yield record
+
+
 def _sorted_values(values: Iterable[Any]) -> list[str]:
     normalized = {str(value).strip() for value in values if str(value or "").strip()}
     return sorted(normalized, key=str.casefold)
 
 
-def _filtered_company_insights(records: list[dict[str, Any]]) -> dict[str, Any]:
+def _filtered_company_insights(records: Iterable[dict[str, Any]]) -> dict[str, Any]:
     demand = Counter()
     unmet = defaultdict(Counter)
     ad_types = defaultdict(Counter)
@@ -315,38 +348,42 @@ def _filtered_company_insights(records: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def _available_filters(
-    records: list[dict[str, Any]], *, internal: bool
+def available_dashboard_filters(
+    records: Iterable[dict[str, Any]], *, internal: bool
 ) -> dict[str, Any]:
     categories: set[str] = set()
-    cities = []
+    cities: set[str] = set()
     city_options = {}
-    ad_types = []
-    providers = []
-    operations = []
-    execution_paths = []
+    ad_types: set[str] = set()
+    providers: set[str] = set()
+    operations: set[str] = set()
+    execution_paths: set[str] = set()
+    outcomes: set[str] = set()
+    languages: set[str] = set()
     for record in records:
         categories.update(_record_categories(record))
+        outcomes.add(str(record.get("outcome") or ""))
+        languages.add(str(record.get("language") or ""))
         applied = dict(record.get("filters") or {})
-        cities.append(applied.get("city"))
+        cities.add(str(applied.get("city") or ""))
         city_id = applied.get("city_id")
         city_label = str(applied.get("city") or "").strip()
         if city_id is not None:
             with contextlib.suppress(TypeError, ValueError):
                 city_options[int(city_id)] = city_label or str(city_id)
-        ad_types.append(applied.get("target_ad_type"))
+        ad_types.add(str(applied.get("target_ad_type") or ""))
         if internal:
             performance = dict(record.get("performance") or {})
-            execution_paths.append(performance.get("execution_path"))
+            execution_paths.add(str(performance.get("execution_path") or ""))
             for attempt in _record_attempts(record):
-                providers.append(attempt.get("provider"))
-                operations.append(attempt.get("operation"))
+                providers.add(str(attempt.get("provider") or ""))
+                operations.add(str(attempt.get("operation") or ""))
     available = {
         "periods": list(PERIOD_OPTIONS),
         "request_scopes": list(REQUEST_SCOPE_OPTIONS),
-        "outcomes": _sorted_values(record.get("outcome") for record in records),
+        "outcomes": _sorted_values(outcomes),
         "categories": _sorted_values(categories),
-        "languages": _sorted_values(record.get("language") for record in records),
+        "languages": _sorted_values(languages),
         "cities": _sorted_values(cities),
         "city_options": [
             {"id": city_id, "label": label}
@@ -387,19 +424,23 @@ def _percentile(values: list[float], percentile: float) -> float:
 
 
 def _bucket_spec(
-    dated_records: list[tuple[datetime, dict[str, Any]]],
+    records: Iterable[dict[str, Any]],
     *,
     created_from: datetime | None,
     created_to: datetime | None,
 ) -> str:
     if created_from is not None and created_to is not None:
         span = created_to - created_from
-    elif len(dated_records) >= 2:
-        span = max(item[0] for item in dated_records) - min(
-            item[0] for item in dated_records
-        )
     else:
-        span = timedelta(0)
+        earliest = None
+        latest = None
+        for record in records:
+            created_at = _record_datetime(record)
+            if created_at is None:
+                continue
+            earliest = created_at if earliest is None else min(earliest, created_at)
+            latest = created_at if latest is None else max(latest, created_at)
+        span = latest - earliest if earliest is not None else timedelta(0)
     if span <= timedelta(days=2):
         return "hour"
     if span <= timedelta(days=120):
@@ -417,7 +458,7 @@ def _bucket_label(value: datetime, granularity: str) -> str:
 
 
 def _activity_graph(
-    dated_records: list[tuple[datetime, dict[str, Any]]],
+    records: Iterable[dict[str, Any]],
     *,
     internal: bool,
     timezone: ZoneInfo,
@@ -425,12 +466,15 @@ def _activity_graph(
     created_to: datetime | None,
 ) -> dict[str, Any]:
     granularity = _bucket_spec(
-        dated_records,
+        records,
         created_from=created_from,
         created_to=created_to,
     )
     buckets: dict[str, Counter] = defaultdict(Counter)
-    for created_at, record in dated_records:
+    for record in records:
+        created_at = _record_datetime(record)
+        if created_at is None:
+            continue
         label = _bucket_label(created_at.astimezone(timezone), granularity)
         buckets[label]["total"] += 1
         if internal:
@@ -485,41 +529,37 @@ def _activity_graph(
     }
 
 
-def _company_overview(records: list[dict[str, Any]]) -> dict[str, Any]:
-    text_records = [
-        record for record in records if _record_request_kind(record) == "text_search"
-    ]
-    browse_records = [
-        record for record in records if _record_request_kind(record) != "text_search"
-    ]
-    outcomes = Counter(
-        str(record.get("outcome") or "unknown") for record in text_records
-    )
-    browse_outcomes = Counter(
-        str(record.get("outcome") or "unknown") for record in browse_records
-    )
-    request_kinds = Counter(_record_request_kind(record) for record in records)
-    categories = Counter(
-        category for record in text_records for category in _record_categories(record)
-    )
-    languages = Counter(
-        str(record.get("language") or "Unknown") for record in text_records
-    )
-    total = len(text_records)
+def _company_overview(records: Iterable[dict[str, Any]]) -> dict[str, Any]:
+    outcomes: Counter = Counter()
+    browse_outcomes: Counter = Counter()
+    request_kinds: Counter = Counter()
+    categories: Counter = Counter()
+    languages: Counter = Counter()
+    all_requests = 0
+    total = 0
+    returned_results_sum = 0
+    total_results_sum = 0
+    for record in records:
+        all_requests += 1
+        request_kind = _record_request_kind(record)
+        request_kinds[request_kind] += 1
+        outcome = str(record.get("outcome") or "unknown")
+        if request_kind != "text_search":
+            browse_outcomes[outcome] += 1
+            continue
+        total += 1
+        outcomes[outcome] += 1
+        categories.update(_record_categories(record))
+        languages[str(record.get("language") or "Unknown")] += 1
+        search = dict(record.get("search") or {})
+        returned_results_sum += int(search.get("result_count") or 0)
+        total_results_sum += int(search.get("total_results") or 0)
     fulfilled = outcomes.get("fulfilled", 0)
-    result_counts = [
-        int(dict(record.get("search") or {}).get("result_count") or 0)
-        for record in text_records
-    ]
-    total_results = [
-        int(dict(record.get("search") or {}).get("total_results") or 0)
-        for record in text_records
-    ]
     return {
         "summary": {
-            "all_requests": len(records),
+            "all_requests": all_requests,
             "searches": total,
-            "browse_requests": len(browse_records),
+            "browse_requests": all_requests - total,
             "fulfilled": int(fulfilled),
             "zero_results": int(outcomes.get("zero_result", 0)),
             "failures": int(outcomes.get("failure", 0)),
@@ -527,11 +567,11 @@ def _company_overview(records: list[dict[str, Any]]) -> dict[str, Any]:
             "browse_zero_results": int(browse_outcomes.get("zero_result", 0)),
             "browse_failures": int(browse_outcomes.get("failure", 0)),
             "fulfillment_rate": round(fulfilled / total * 100, 1) if total else 0,
-            "average_returned_results": round(mean(result_counts), 1)
-            if result_counts
+            "average_returned_results": round(returned_results_sum / total, 1)
+            if total
             else 0,
-            "average_total_results": round(mean(total_results), 1)
-            if total_results
+            "average_total_results": round(total_results_sum / total, 1)
+            if total
             else 0,
         },
         "breakdowns": {
@@ -559,7 +599,7 @@ def _operation_group(operation: str) -> str:
 
 
 def _internal_overview(
-    records: list[dict[str, Any]], filters: DashboardFilters
+    records: Iterable[dict[str, Any]], filters: DashboardFilters
 ) -> dict[str, Any]:
     paths: Counter = Counter()
     providers: Counter = Counter()
@@ -573,10 +613,12 @@ def _internal_overview(
     downstream_calls = 0
     diagnostics: Counter = Counter()
     outcomes: Counter = Counter()
+    total = 0
 
     provider_filter = _normalized_choice(filters.provider)
     operation_filter = _normalized_choice(filters.operation)
     for record in records:
+        total += 1
         performance = dict(record.get("performance") or {})
         api = dict(record.get("api") or {})
         path = str(performance.get("execution_path") or "unknown")
@@ -626,7 +668,6 @@ def _internal_overview(
             if nonzero_tokens:
                 group["attempts_with_reported_tokens"] += 1
 
-    total = len(records)
     successful = sum(
         count
         for status, count in statuses.items()
@@ -720,7 +761,7 @@ def _internal_overview(
 
 
 def build_dashboard_overview(
-    records: list[dict[str, Any]],
+    records: Iterable[dict[str, Any]],
     *,
     internal: bool,
     filters: DashboardFilters,
@@ -739,35 +780,30 @@ def build_dashboard_overview(
         timezone=timezone,
         now=now,
     )
-    filtered = [
-        record
-        for record in records
-        if _matches(
-            record,
-            filters=filters,
-            created_from=created_from,
-            created_to=created_to,
-            internal=internal,
-            request_scope=request_scope,
-        )
-    ]
-    dated_records = [
-        (created_at, record)
-        for record in filtered
-        if (created_at := _record_datetime(record)) is not None
-    ]
+    filtered = _FilteredRecords(
+        records,
+        filters=filters,
+        created_from=created_from,
+        created_to=created_to,
+        internal=internal,
+        request_scope=request_scope,
+    )
     overview = (
         _internal_overview(filtered, filters)
         if internal
         else _company_overview(filtered)
     )
     overview["main_graph"] = _activity_graph(
-        dated_records,
+        filtered,
         internal=internal,
         timezone=timezone,
         created_from=created_from,
         created_to=created_to,
     )
+    matched_records = overview["summary"]["requests" if internal else "all_requests"]
+    available = getattr(records, "available_filters", None)
+    if available is None:
+        available = available_dashboard_filters(records, internal=internal)
     return {
         "filtering": {
             "applied": {
@@ -792,7 +828,7 @@ def build_dashboard_overview(
                     else {}
                 ),
             },
-            "available": _available_filters(records, internal=internal),
+            "available": available,
             "scope": {
                 "filtered_overview": (
                     "All search activity includes text searches and structured "
@@ -808,7 +844,7 @@ def build_dashboard_overview(
                     "older records without filter context are excluded when selected."
                 ),
             },
-            "matched_records": len(filtered),
+            "matched_records": matched_records,
             "total_records": len(records),
         },
         "filtered_overview": overview,

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+from collections.abc import Iterator
 from datetime import UTC, datetime
 from typing import Any
 
@@ -488,47 +489,7 @@ def build_query_records(
     data: dict[str, pd.DataFrame],
     enrichments: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    merged = merge_search_api(data)
-    enrichment_map = enrichments or {}
-    records = [_build_record(row, enrichment_map) for _, row in merged.iterrows()]
-    city_names = {
-        int(row["id"]): str(row["city"])
-        for _, row in data.get("location", pd.DataFrame()).iterrows()
-        if _json_value(row.get("id")) is not None
-        and str(_json_value(row.get("city"), "")).strip()
-    }
-    subcategory_names = {
-        int(row["id"]): str(row["name"])
-        for _, row in data.get("sub_categories", pd.DataFrame()).iterrows()
-        if _json_value(row.get("id")) is not None
-        and str(_json_value(row.get("name"), "")).strip()
-    }
-    for record in records:
-        filters = record["filters"]
-        city_id = filters.get("city_id")
-        subcategory_id = filters.get("subcategory_id")
-        if city_id is not None and not filters.get("city"):
-            filters["city"] = city_names.get(int(city_id))
-        if subcategory_id is not None and not filters.get("subcategory"):
-            filters["subcategory"] = subcategory_names.get(int(subcategory_id))
-        record["filters"] = {
-            name: value
-            for name, value in filters.items()
-            if value is not None and value != ""
-        }
-        for name in ("main_category", "subcategory"):
-            value = record["filters"].get(name)
-            if value and value not in record["categories"]:
-                record["categories"].append(str(value))
-        for name in ("state", "city", "locality"):
-            value = record["filters"].get(name)
-            if value and value not in record["locations"]:
-                record["locations"].append(str(value))
-        if record["request_kind"] != "text_search":
-            record["query"] = _browse_label(
-                record["filters"],
-                record["request_kind"],
-            )
+    records = list(iter_query_records(data, enrichments))
     return {
         "metadata": {
             "schema_version": "2.0",
@@ -550,3 +511,80 @@ def build_query_records(
         },
         "queries": records,
     }
+
+
+def iter_query_records(
+    data: dict[str, pd.DataFrame],
+    enrichments: dict[str, dict[str, Any]] | None = None,
+    *,
+    batch_size: int = 1_000,
+) -> Iterator[dict[str, Any]]:
+    """Project query records without materializing the full joined history."""
+
+    if batch_size < 1:
+        raise ValueError("Analytics query batch size must be positive")
+    searches = data["search_history"]
+    api = data["api_usage"]
+    duplicate_count = int(api["request_id"].duplicated(keep=False).sum())
+    if duplicate_count:
+        LOGGER.warning(
+            "API telemetry contains %d duplicate request-id rows; keeping the latest",
+            duplicate_count,
+        )
+        api = api.copy()
+        api["_parsed_created_at"] = pd.to_datetime(api["created_at"], errors="coerce")
+        api = (
+            api.sort_values(["request_id", "_parsed_created_at"])
+            .drop_duplicates("request_id", keep="last")
+            .drop(columns="_parsed_created_at")
+        )
+    api_by_request = api.set_index("request_id")
+    enrichment_map = enrichments or {}
+    city_names = {
+        int(row["id"]): str(row["city"])
+        for _, row in data.get("location", pd.DataFrame()).iterrows()
+        if _json_value(row.get("id")) is not None
+        and str(_json_value(row.get("city"), "")).strip()
+    }
+    subcategory_names = {
+        int(row["id"]): str(row["name"])
+        for _, row in data.get("sub_categories", pd.DataFrame()).iterrows()
+        if _json_value(row.get("id")) is not None
+        and str(_json_value(row.get("name"), "")).strip()
+    }
+    for start in range(0, len(searches), batch_size):
+        merged = searches.iloc[start : start + batch_size].merge(
+            api_by_request,
+            left_on="request_id",
+            right_index=True,
+            how="left",
+            suffixes=("_query", "_api"),
+            validate="many_to_one",
+        )
+        for _, row in merged.iterrows():
+            record = _build_record(row, enrichment_map)
+            filters = record["filters"]
+            city_id = filters.get("city_id")
+            subcategory_id = filters.get("subcategory_id")
+            if city_id is not None and not filters.get("city"):
+                filters["city"] = city_names.get(int(city_id))
+            if subcategory_id is not None and not filters.get("subcategory"):
+                filters["subcategory"] = subcategory_names.get(int(subcategory_id))
+            record["filters"] = {
+                name: value
+                for name, value in filters.items()
+                if value is not None and value != ""
+            }
+            for name in ("main_category", "subcategory"):
+                value = record["filters"].get(name)
+                if value and value not in record["categories"]:
+                    record["categories"].append(str(value))
+            for name in ("state", "city", "locality"):
+                value = record["filters"].get(name)
+                if value and value not in record["locations"]:
+                    record["locations"].append(str(value))
+            if record["request_kind"] != "text_search":
+                record["query"] = _browse_label(
+                    record["filters"], record["request_kind"]
+                )
+            yield record
