@@ -21,6 +21,14 @@ from scripts.render_service_env import (
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def test_batch_services_do_not_inherit_api_http_healthchecks():
+    services = yaml.safe_load((ROOT / "docker-compose.yml").read_text())["services"]
+    for name in ("analytics-refresh", "telemetry-uploader"):
+        assert services[name]["healthcheck"]["disable"] is True
+    for name in ("api", "analytics-api"):
+        assert not services[name].get("healthcheck", {}).get("disable", False)
+
+
 def test_tenant_credentials_follow_declared_references(tmp_path):
     tenant_dir = tmp_path / "configs" / "tenants"
     tenant_dir.mkdir(parents=True)

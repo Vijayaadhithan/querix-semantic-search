@@ -12,6 +12,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from .query_facets import build_query_facets as build_facets
 from .schedule import REFRESH_SCHEDULE
 
 LOGGER = logging.getLogger(__name__)
@@ -196,6 +197,7 @@ class AnalyticsSnapshotStore:
                 for name in (
                     "main_category",
                     "subcategory",
+                    "subcategory_id",
                     "city",
                     "city_id",
                     "target_ad_type",
@@ -961,56 +963,8 @@ class AnalyticsSnapshotStore:
         *,
         internal: bool,
     ) -> dict[str, Any]:
-        field = "internal_json" if internal else "company_json"
         with self._connection() as connection:
-
-            def choices(path: str) -> list[str]:
-                rows = connection.execute(
-                    f"""
-                    SELECT DISTINCT json_extract(records.{field}, ?) AS value
-                    FROM analytics_query_records AS records
-                    WHERE records.company_id = ?
-                      AND records.snapshot_version = ?
-                      AND json_extract(records.{field}, ?) IS NOT NULL
-                    ORDER BY value COLLATE NOCASE
-                    """,
-                    (path, company_id, version, path),
-                ).fetchall()
-                return [str(row["value"]) for row in rows if str(row["value"] or "")]
-
-            def id_labels(id_path: str, label_path: str) -> list[dict[str, Any]]:
-                rows = connection.execute(
-                    f"""
-                    SELECT
-                        json_extract(records.{field}, ?) AS id,
-                        MAX(json_extract(records.{field}, ?)) AS label
-                    FROM analytics_query_records AS records
-                    WHERE records.company_id = ?
-                      AND records.snapshot_version = ?
-                      AND json_extract(records.{field}, ?) IS NOT NULL
-                    GROUP BY id
-                    ORDER BY label COLLATE NOCASE, id
-                    """,
-                    (id_path, label_path, company_id, version, id_path),
-                ).fetchall()
-                return [
-                    {
-                        "id": int(row["id"]),
-                        "label": str(row["label"] or f"ID {row['id']}"),
-                    }
-                    for row in rows
-                ]
-
-            facets = {
-                "request_kinds": choices("$.request_kind"),
-                "cities": id_labels("$.filters.city_id", "$.filters.city"),
-                "subcategories": id_labels(
-                    "$.filters.subcategory_id", "$.filters.subcategory"
-                ),
-                "ad_types": choices("$.filters.target_ad_type"),
-                "diagnostic_codes": (choices("$.diagnostics.code") if internal else []),
-            }
-        return facets
+            return build_facets(connection, company_id, version, internal=internal)
 
     def company_status(self, company_id: str) -> dict[str, Any]:
         with self._connection() as connection:

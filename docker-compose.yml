@@ -86,6 +86,8 @@ services:
       - operations
     # SQL staging and replayable views keep the refresh within this limit.
     mem_limit: ${ANALYTICS_REFRESH_MEMORY_LIMIT:-1g}
+    healthcheck:
+      disable: true
 
   pgvector:
     image: pgvector/pgvector:0.8.5-pg16-bookworm@sha256:1d533553fefe4f12e5d80c7b80622ba0c382abb5758856f52983d8789179f0fb
@@ -160,6 +162,8 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     mem_limit: 512m
+    healthcheck:
+      disable: true
     pids_limit: 128
     init: true
     security_opt:

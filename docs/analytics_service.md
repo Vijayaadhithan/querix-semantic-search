@@ -44,13 +44,21 @@ SQLite database. Search history and API usage are loaded and released before the
 catalogue is loaded; report modules run before individual query records are
 written to a replayable temporary spool. The ads SQL projection reads presence
 or length for large text fields when those are the only values the metrics need.
-Prepared activity views replay snapshot rows from SQLite instead of retaining
-all decoded query payloads. Exact latency percentiles still collect numeric
+Prepared activity views read snapshot rows once per audience into a temporary
+SQLite spool containing only dashboard fields. Facets and repeated activity
+passes read this smaller spool, avoiding repeated reads of large Explorer JSON
+payloads while retaining bounded memory. The spool is removed after each audience
+finishes, including on preparation failure. Per-view durations are logged.
+Exact latency percentiles still collect numeric
 values during each internal view. The temporary source and query spool are
 removed when the refresh ends. CSV refreshes retain the existing in-memory
 compatibility path. Search Intelligence and API Performance still materialize
 the configured history window while calculating their metrics, so peak memory
 can rise if request volume grows substantially.
+
+The `analytics-refresh` and `telemetry-uploader` batch services disable inherited
+HTTP health checks; their exit status reports success or failure. The long-running
+APIs retain their HTTP health checks.
 
 Custom filtered dashboard activity caches up to 32 completed summaries per API process.
 Uncached calculations run one at a time across company and internal dashboards,
