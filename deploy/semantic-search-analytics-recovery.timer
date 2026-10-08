@@ -1,0 +1,11 @@
+[Unit]
+Description=Check pending analytics catch-up every five minutes
+
+[Timer]
+OnBootSec=5m
+OnUnitInactiveSec=5m
+AccuracySec=30s
+Unit=semantic-search-analytics-recovery.service
+
+[Install]
+WantedBy=timers.target

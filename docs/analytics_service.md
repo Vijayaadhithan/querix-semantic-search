@@ -250,6 +250,24 @@ If step 2 fails, the script records the failure and keeps the prior snapshot
 active. Search ingestion remains on its separate daily 03:00 timer and does not
 run or restart as part of analytics refreshes.
 
+Transient database connection failures in steps 1 and 2 get three retries after
+60, 300, and 900 seconds. Authentication, SQL/schema, and other permanent errors
+fail immediately. A failed upload prevents publication of a snapshot with
+undelivered telemetry. `scripts/analytics_retry.py` classifies the database
+exception chain and returns exit code 75 only for transient failures; it is
+mounted read-only into the existing worker images.
+
+Exhausted transient retries leave a marker under
+`.runtime/analytics-recovery/<company>/`. The independent
+`semantic-search-analytics-recovery.timer` checks pending work every five minutes,
+using a bounded `SELECT 1` probe with existing analytics credentials. Once both
+source databases are reachable, it performs an upload and a full catch-up
+refresh. Regular and recovery runs share the same tenant lock. Markers survive
+reboot and clear after success or a permanent failure; no marker means the
+recovery check exits without starting a container. The main four-hour schedule
+is unchanged. Configure `ANALYTICS_RETRY_DELAYS` with up to three integer delays
+between 0 and 900 seconds if required.
+
 The production deployment builds both images. It performs an analytics refresh
 only when no prior snapshot exists, then starts the analytics API and verifies
 its readiness. Ordinary deployments do not recalculate an existing snapshot.

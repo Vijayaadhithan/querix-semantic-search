@@ -1,0 +1,17 @@
+[Unit]
+Description=Catch up analytics after transient source database failures
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/semantic-search
+Environment=PROJECT_DIR=/opt/semantic-search
+Environment=ANALYTICS_RECOVERY_ONLY=1
+EnvironmentFile=-/etc/semantic-search/tenant.env
+ExecStart=/opt/semantic-search/scripts/run_scheduled_analytics.sh
+TimeoutStartSec=2h
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7

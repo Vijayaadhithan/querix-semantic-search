@@ -695,14 +695,22 @@ sed "s|/opt/semantic-search|$PRODUCTION_REPO|g" \
   deploy/semantic-search-analytics.service | \
   sudo tee /etc/systemd/system/semantic-search-analytics.service >/dev/null
 sudo cp deploy/semantic-search-analytics.timer /etc/systemd/system/
+sed "s|/opt/semantic-search|$PRODUCTION_REPO|g" \
+  deploy/semantic-search-analytics-recovery.service | \
+  sudo tee /etc/systemd/system/semantic-search-analytics-recovery.service >/dev/null
+sudo cp deploy/semantic-search-analytics-recovery.timer /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable --now semantic-search-analytics.timer
-systemctl list-timers semantic-search-analytics.timer
+sudo systemctl enable --now semantic-search-analytics.timer \
+  semantic-search-analytics-recovery.timer
+systemctl list-timers 'semantic-search-analytics*'
 ```
 
 The timer uses `Persistent=true`, a five-minute randomized delay, and a host
 lock to prevent overlapping analytics refreshes. Failed spool uploads remain
 local for retry; failed snapshot builds keep the previous snapshot active.
+Transient connection failures retry after 1, 5, and 15 minutes; exhausted retries
+are picked up by the five-minute recovery timer after database connectivity
+returns. Permanent errors do not enter the automatic recovery loop.
 
 ### Periodic local search-path warm-up
 
