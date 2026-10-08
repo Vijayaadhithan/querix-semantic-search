@@ -67,6 +67,16 @@ def scheduled_runner(tmp_path):
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     (bin_dir / "flock").write_text("#!/bin/sh\nexit 0\n")
+    (bin_dir / "systemctl").write_text(
+        f"#!{sys.executable}\n"
+        "import json, os, sys\n"
+        "from pathlib import Path\n"
+        "path = Path(os.environ['FAKE_DOCKER_STATE'])\n"
+        "state = json.loads(path.read_text())\n"
+        "assert sys.argv[1:] == ['reset-failed', 'semantic-search-analytics.service']\n"
+        "state['calls'].append('clear-failed')\n"
+        "path.write_text(json.dumps(state))\n"
+    )
     (bin_dir / "docker").write_text(
         f"#!{sys.executable}\n"
         "import json, os, sys\n"
@@ -157,7 +167,7 @@ def test_recovery_waits_until_connection_returns(scheduled_runner):
     assert (recovery / "upload.pending").exists()
     result, calls, recovery = scheduled_runner({}, recovery_only=True)
     assert result.returncode == 0
-    assert calls == ["probe", "upload", "refresh", "other"]
+    assert calls == ["probe", "upload", "refresh", "other", "clear-failed"]
     assert not list(recovery.glob("*.pending"))
 
 

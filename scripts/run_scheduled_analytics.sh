@@ -131,4 +131,12 @@ if ! docker compose run --rm --no-deps analytics-api \
   echo "Expired analytics session cleanup failed; the snapshot is still current." >&2
 fi
 
+if [[ "$ANALYTICS_RECOVERY_ONLY" == "1" ]] && command -v systemctl >/dev/null; then
+  # A completed catch-up supersedes the earlier scheduled run's failure.
+  # Do not clear its failed state on a no-op or failed recovery check.
+  if ! systemctl reset-failed semantic-search-analytics.service; then
+    echo "Analytics caught up, but the earlier systemd failure could not be cleared." >&2
+  fi
+fi
+
 echo "Scheduled analytics refresh completed at $(date --iso-8601=seconds)."

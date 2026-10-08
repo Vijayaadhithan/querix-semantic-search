@@ -264,9 +264,10 @@ using a bounded `SELECT 1` probe with existing analytics credentials. Once both
 source databases are reachable, it performs an upload and a full catch-up
 refresh. Regular and recovery runs share the same tenant lock. Markers survive
 reboot and clear after success or a permanent failure; no marker means the
-recovery check exits without starting a container. The main four-hour schedule
-is unchanged. Configure `ANALYTICS_RETRY_DELAYS` with up to three integer delays
-between 0 and 900 seconds if required.
+recovery check exits without starting a container. Only a completed catch-up
+clears the earlier scheduled service's failed systemd state. The main four-hour
+schedule is unchanged. Configure `ANALYTICS_RETRY_DELAYS` with up to three integer
+delays between 0 and 900 seconds if required.
 
 The production deployment builds both images. It performs an analytics refresh
 only when no prior snapshot exists, then starts the analytics API and verifies
