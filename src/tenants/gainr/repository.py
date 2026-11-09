@@ -654,7 +654,10 @@ class GainrDatabaseRepository:
         page_size: int,
     ) -> tuple[list[dict], int]:
         """Filter ranked IDs, then hydrate only the requested semantic page."""
-        ranked_ids = _unique(product_ids)
+        # Retrieval and cached results can mix integer and string IDs. MariaDB
+        # cannot use the ID range lookup for a mixed-type IN list, so bind one
+        # consistent type while preserving the first occurrence of each ID.
+        ranked_ids = _unique([str(product_id) for product_id in product_ids])
         if not ranked_ids:
             return [], 0
         where_clause, where_params = self._where_clause(

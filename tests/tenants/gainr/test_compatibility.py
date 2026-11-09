@@ -927,13 +927,15 @@ def test_ranked_page_query_preserves_order_total_and_relations(
     assert "AS __rank_order" in executions[0][0]
     assert "JOIN `ads` AS page_ad" in executions[0][0]
     assert "`sr`.`is_search_active` = 1" in executions[0][0]
-    assert executions[0][1] == (2, 1, 456, "1", 2, 1, 20, 0)
+    assert executions[0][1] == ("2", "1", 456, "1", "2", "1", 20, 0)
     assert executions[1][1] == (2, 1)
 
 
+@pytest.mark.parametrize("product_ids", [[2, 1], ["2", "1"], [2, "1", "2", 1]])
 def test_search_ready_ranked_page_uses_one_query_and_embedded_card_relations(
     tmp_path,
     monkeypatch,
+    product_ids,
 ):
     repository = GainrDatabaseRepository(
         profile(tmp_path, serves_cards_from_search_ready=True)
@@ -981,7 +983,7 @@ def test_search_ready_ranked_page_uses_one_query_and_embedded_card_relations(
     monkeypatch.setattr(repository, "connection", connection)
 
     rows, total = repository.hydrate_ranked_page(
-        [2, 1],
+        product_ids,
         {"categorical": {"city_id": 456}},
         GainrSearchFilter(),
         {"1"},
@@ -995,7 +997,7 @@ def test_search_ready_ranked_page_uses_one_query_and_embedded_card_relations(
     assert "JOIN `ads`" not in executions[0][0]
     assert "FROM `users`" not in executions[0][0]
     assert "FROM `ads_attributes`" not in executions[0][0]
-    assert executions[0][1] == (2, 1, 456, "1", 2, 1, 20, 0)
+    assert executions[0][1] == ("2", "1", 456, "1", "2", "1", 20, 0)
     assert rows[0]["__ads_attributes"] == [
         {"ads_id": 2, "attribute_id": 959, "value": 12121}
     ]
