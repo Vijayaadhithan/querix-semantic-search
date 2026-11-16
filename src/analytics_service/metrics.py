@@ -6,6 +6,18 @@ from collections.abc import Mapping
 from typing import Any
 
 
+def operation_group(operation: Any) -> str:
+    """Use the same operation groups in snapshots and dashboard summaries."""
+    normalized = str(operation or "").strip().casefold()
+    if normalized in {"query_planning", "llm", "chat", "generation"}:
+        return "llm"
+    if normalized in {"reranking", "reranker", "rerank"}:
+        return "reranker"
+    if normalized == "embedding":
+        return "embedding"
+    return normalized or "other"
+
+
 def validate_metric_profile(
     raw_profile: Any,
     *,

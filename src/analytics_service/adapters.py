@@ -3,7 +3,6 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any, Protocol
 
-from analytics_service.adapters_base import PassthroughCompanyAnalyticsAdapter
 from analytics_service.contracts import AnalyticsComputation, AnalyticsContract
 from analytics_service.filters import DashboardFilters
 from tenants.plugin import AnalyticsAdapterRegistration
@@ -59,9 +58,6 @@ class CompanyAnalyticsAdapter(Protocol):
         self,
         status: dict[str, Any],
     ) -> dict[str, Any]: ...
-
-
-DefaultCompanyAnalyticsAdapter = PassthroughCompanyAnalyticsAdapter
 
 
 AnalyticsAdapterFactory = Callable[[Any], CompanyAnalyticsAdapter]

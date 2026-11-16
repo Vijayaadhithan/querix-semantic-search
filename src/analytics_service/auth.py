@@ -3,18 +3,26 @@
 from __future__ import annotations
 
 import hashlib
-import hmac
 import math
 import secrets
 import sqlite3
 import threading
 import uuid
-from collections.abc import Callable, Iterator
-from contextlib import contextmanager, suppress
+from collections.abc import Callable
+from contextlib import AbstractContextManager, suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Literal
+
+from analytics_service.passwords import (
+    _password_hash,
+    _password_needs_rehash,
+    _verify_password,
+)
+
+from .auth_schema import initialize_auth_schema
+from .sqlite import analytics_connection
 
 INTERNAL_ADMIN = "internal_admin"
 COMPANY_USER = "company_user"
@@ -22,10 +30,6 @@ VALID_ROLES = {INTERNAL_ADMIN, COMPANY_USER}
 COMPANY_PORTAL = "company"
 INTERNAL_PORTAL = "internal"
 PortalType = Literal["company", "internal"]
-SCRYPT_N = 2**15
-SCRYPT_R = 8
-SCRYPT_P = 3
-SCRYPT_MAXMEM = 128 * 1024 * 1024
 
 
 def _utc_now() -> datetime:
@@ -45,51 +49,6 @@ def _normalize_username(username: str) -> str:
 
 def _session_digest(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
-
-
-def _password_hash(password: str) -> str:
-    salt = secrets.token_bytes(16)
-    digest = hashlib.scrypt(
-        password.encode("utf-8"),
-        salt=salt,
-        n=SCRYPT_N,
-        r=SCRYPT_R,
-        p=SCRYPT_P,
-        maxmem=SCRYPT_MAXMEM,
-        dklen=32,
-    )
-    return f"scrypt${SCRYPT_N}${SCRYPT_R}${SCRYPT_P}${salt.hex()}${digest.hex()}"
-
-
-def _verify_password(encoded: str, password: str) -> bool:
-    try:
-        algorithm, raw_n, raw_r, raw_p, raw_salt, raw_digest = encoded.split("$", 5)
-        if algorithm != "scrypt":
-            return False
-        n, r, p = int(raw_n), int(raw_r), int(raw_p)
-        salt = bytes.fromhex(raw_salt)
-        expected = bytes.fromhex(raw_digest)
-        actual = hashlib.scrypt(
-            password.encode("utf-8"),
-            salt=salt,
-            n=n,
-            r=r,
-            p=p,
-            maxmem=SCRYPT_MAXMEM,
-            dklen=len(expected),
-        )
-        return hmac.compare_digest(actual, expected)
-    except (ValueError, TypeError):
-        return False
-
-
-def _password_needs_rehash(encoded: str) -> bool:
-    parts = encoded.split("$", 5)
-    return (
-        len(parts) != 6
-        or parts[0] != "scrypt"
-        or parts[1:4] != [str(SCRYPT_N), str(SCRYPT_R), str(SCRYPT_P)]
-    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -177,93 +136,12 @@ class AnalyticsAuthStore:
         self._dummy_password_hash = _password_hash(secrets.token_urlsafe(32))
         self._initialize()
 
-    @contextmanager
-    def _connection(self) -> Iterator[sqlite3.Connection]:
-        connection = sqlite3.connect(
-            self.path,
-            timeout=30,
-            isolation_level=None,
-        )
-        connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA busy_timeout=30000")
-        connection.execute("PRAGMA foreign_keys=ON")
-        try:
-            yield connection
-        finally:
-            connection.close()
+    def _connection(self) -> AbstractContextManager[sqlite3.Connection]:
+        return analytics_connection(self.path)
 
     def _initialize(self) -> None:
         with self._connection() as connection:
-            connection.execute("PRAGMA journal_mode=WAL")
-            connection.execute("PRAGMA synchronous=FULL")
-            connection.executescript(
-                """
-                CREATE TABLE IF NOT EXISTS analytics_users (
-                    user_id TEXT PRIMARY KEY,
-                    username TEXT NOT NULL,
-                    username_normalized TEXT NOT NULL,
-                    password_hash TEXT NOT NULL,
-                    role TEXT NOT NULL CHECK (
-                        role IN ('internal_admin', 'company_user')
-                    ),
-                    company_id TEXT,
-                    active INTEGER NOT NULL DEFAULT 1,
-                    failed_attempts INTEGER NOT NULL DEFAULT 0,
-                    locked_until TEXT,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    password_changed_at TEXT NOT NULL,
-                    last_login_at TEXT,
-                    CHECK (
-                        (role = 'internal_admin' AND company_id IS NULL)
-                        OR
-                        (role = 'company_user' AND company_id IS NOT NULL)
-                    )
-                );
-
-                CREATE TABLE IF NOT EXISTS analytics_sessions (
-                    session_hash TEXT PRIMARY KEY,
-                    user_id TEXT NOT NULL,
-                    portal_type TEXT NOT NULL CHECK (
-                        portal_type IN ('company', 'internal')
-                    ),
-                    role TEXT NOT NULL CHECK (
-                        role IN ('internal_admin', 'company_user')
-                    ),
-                    company_id TEXT,
-                    created_at TEXT NOT NULL,
-                    expires_at TEXT NOT NULL,
-                    last_seen_at TEXT NOT NULL,
-                    idle_expires_at TEXT NOT NULL,
-                    absolute_expires_at TEXT NOT NULL,
-                    revoked_at TEXT,
-                    FOREIGN KEY (user_id)
-                        REFERENCES analytics_users(user_id)
-                        ON DELETE CASCADE
-                );
-
-                CREATE INDEX IF NOT EXISTS idx_analytics_sessions_user
-                ON analytics_sessions (user_id, expires_at);
-
-                CREATE TABLE IF NOT EXISTS analytics_auth_events (
-                    event_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    user_id TEXT,
-                    username_normalized TEXT NOT NULL,
-                    company_id TEXT,
-                    event_type TEXT NOT NULL,
-                    remote_address TEXT,
-                    created_at TEXT NOT NULL
-                );
-
-                CREATE INDEX IF NOT EXISTS idx_analytics_auth_events_user
-                ON analytics_auth_events (
-                    username_normalized,
-                    created_at DESC
-                );
-                """
-            )
-            self._migrate_user_identity_scope(connection)
-            self._migrate_sessions(connection)
+            initialize_auth_schema(connection)
 
     def readiness(self) -> dict[str, object]:
         """Verify authentication state is readable and transactionally writable."""
@@ -289,153 +167,6 @@ class AnalyticsAuthStore:
             if connection is not None:
                 connection.close()
         return {"ok": True}
-
-    @staticmethod
-    def _create_user_identity_indexes(connection: sqlite3.Connection) -> None:
-        connection.executescript(
-            """
-            CREATE UNIQUE INDEX IF NOT EXISTS uq_analytics_internal_username
-            ON analytics_users (username_normalized)
-            WHERE role = 'internal_admin';
-
-            CREATE UNIQUE INDEX IF NOT EXISTS uq_analytics_company_username
-            ON analytics_users (company_id, username_normalized)
-            WHERE role = 'company_user';
-            """
-        )
-
-    @classmethod
-    def _migrate_user_identity_scope(cls, connection: sqlite3.Connection) -> None:
-        legacy_unique_username = False
-        for index in connection.execute("PRAGMA index_list(analytics_users)"):
-            if not bool(index[2]) or bool(index[4]):
-                continue
-            columns = tuple(
-                row[2] for row in connection.execute(f"PRAGMA index_info({index[1]!r})")
-            )
-            if columns == ("username_normalized",):
-                legacy_unique_username = True
-                break
-        if not legacy_unique_username:
-            cls._create_user_identity_indexes(connection)
-            return
-
-        connection.execute("PRAGMA foreign_keys=OFF")
-        try:
-            connection.execute("BEGIN IMMEDIATE")
-            connection.execute(
-                """
-                CREATE TABLE analytics_users_scoped (
-                    user_id TEXT PRIMARY KEY,
-                    username TEXT NOT NULL,
-                    username_normalized TEXT NOT NULL,
-                    password_hash TEXT NOT NULL,
-                    role TEXT NOT NULL CHECK (
-                        role IN ('internal_admin', 'company_user')
-                    ),
-                    company_id TEXT,
-                    active INTEGER NOT NULL DEFAULT 1,
-                    failed_attempts INTEGER NOT NULL DEFAULT 0,
-                    locked_until TEXT,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    password_changed_at TEXT NOT NULL,
-                    last_login_at TEXT,
-                    CHECK (
-                        (role = 'internal_admin' AND company_id IS NULL)
-                        OR
-                        (role = 'company_user' AND company_id IS NOT NULL)
-                    )
-                )
-                """
-            )
-            connection.execute(
-                """
-                INSERT INTO analytics_users_scoped
-                SELECT * FROM analytics_users
-                """
-            )
-            connection.execute("DROP TABLE analytics_users")
-            connection.execute(
-                "ALTER TABLE analytics_users_scoped RENAME TO analytics_users"
-            )
-            connection.commit()
-        except Exception:
-            connection.rollback()
-            raise
-        finally:
-            connection.execute("PRAGMA foreign_keys=ON")
-        cls._create_user_identity_indexes(connection)
-
-    @staticmethod
-    def _migrate_sessions(connection: sqlite3.Connection) -> None:
-        """Add portal and sliding-expiry claims to pre-rollout databases."""
-
-        columns = {
-            row["name"]
-            for row in connection.execute(
-                "PRAGMA table_info(analytics_sessions)"
-            ).fetchall()
-        }
-        additions = {
-            "portal_type": "TEXT",
-            "role": "TEXT",
-            "company_id": "TEXT",
-            "idle_expires_at": "TEXT",
-            "absolute_expires_at": "TEXT",
-        }
-        for name, sql_type in additions.items():
-            if name not in columns:
-                connection.execute(
-                    f"ALTER TABLE analytics_sessions ADD COLUMN {name} {sql_type}"
-                )
-        connection.execute(
-            """
-            UPDATE analytics_sessions
-            SET portal_type = COALESCE(
-                    portal_type,
-                    CASE (
-                        SELECT role
-                        FROM analytics_users
-                        WHERE analytics_users.user_id = analytics_sessions.user_id
-                    )
-                        WHEN 'company_user' THEN 'company'
-                        ELSE 'internal'
-                    END
-                ),
-                role = COALESCE(
-                    role,
-                    (
-                        SELECT role
-                        FROM analytics_users
-                        WHERE analytics_users.user_id = analytics_sessions.user_id
-                    )
-                ),
-                company_id = COALESCE(
-                    company_id,
-                    (
-                        SELECT company_id
-                        FROM analytics_users
-                        WHERE analytics_users.user_id = analytics_sessions.user_id
-                    )
-                ),
-                idle_expires_at = COALESCE(idle_expires_at, expires_at),
-                absolute_expires_at = COALESCE(
-                    absolute_expires_at,
-                    expires_at
-                )
-            """
-        )
-        connection.execute(
-            """
-            CREATE INDEX IF NOT EXISTS idx_analytics_sessions_expiration
-            ON analytics_sessions (
-                portal_type,
-                idle_expires_at,
-                absolute_expires_at
-            )
-            """
-        )
 
     def _now(self) -> datetime:
         value = self._clock()

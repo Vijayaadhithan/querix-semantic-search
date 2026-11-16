@@ -21,18 +21,24 @@ from api.contracts import (
     decode_cursor,
     encode_cursor,
 )
+from api.monitoring import monitor_timeline
+from api.telemetry import (
+    EXPLICIT_TIMING_FIELDS,
+    TIMING_SECONDS_FIELDS,
+    analytics_filter_context,
+    search_api_usage_events,
+    search_timings_ms,
+)
 from core.settings import (
     API_MAX_RESULTS,
     API_SEARCH_SLOT_TIMEOUT_SECONDS,
     API_TENANT_MAX_CONCURRENT_SEARCHES,
     APP_NAME,
-    EMBED_MODEL,
     RERANK_MODEL,
 )
 from ingestion.state import read_ingestion_state
 from search.engine import ProductSearchEngine
 from storage.search_analytics import (
-    SEARCH_ANALYTICS_TIMING_FIELDS,
     SearchAnalyticsEvent,
     SearchAnalyticsStore,
     SearchApiUsageEvent,
@@ -43,20 +49,8 @@ LOGGER = logging.getLogger("uvicorn.error")
 
 
 class ProductSearchService:
-    _TIMING_SECONDS_FIELDS = {
-        "planning_ms": "seconds",
-        "vector_search_ms": "vector_seconds",
-        "bm25_search_ms": "bm25_seconds",
-        "retrieval_ms": "retrieval_seconds",
-        "parallel_retrieval_ms": "parallel_retrieval_seconds",
-        "fusion_ms": "fusion_seconds",
-        "type_lookup_ms": "type_lookup_seconds",
-        "reranker_load_ms": "reranker_load_seconds",
-        "reranking_ms": "reranker_seconds",
-        "related_tail_ms": "related_tail_seconds",
-        "result_cache_ms": "result_cache_seconds",
-    }
-    _EXPLICIT_TIMING_FIELDS = SEARCH_ANALYTICS_TIMING_FIELDS
+    _TIMING_SECONDS_FIELDS = TIMING_SECONDS_FIELDS
+    _EXPLICIT_TIMING_FIELDS = EXPLICIT_TIMING_FIELDS
 
     def __init__(
         self,
@@ -241,183 +235,7 @@ class ProductSearchService:
         result: dict[str, Any],
         duration_ms: float,
     ) -> list[dict[str, Any]]:
-        query_plan = result.get("query_plan") or {}
-        query_metrics = result.get("query_model_metrics") or {}
-        embedding = result.get("embedding_model_metrics") or {}
-        execution_path = query_plan.get("execution_path", "semantic")
-        timeline: list[dict[str, Any]] = [
-            {
-                "step": "plan",
-                "status": ("cache_hit" if result.get("plan_cache_hit") else "complete"),
-                "duration_ms": round(
-                    float(result.get("seconds", 0.0)) * 1000,
-                    3,
-                ),
-                "execution_path": execution_path,
-                "model": query_metrics.get("model") or "none",
-                "resolved_filter_groups": len(result.get("resolved_filters") or {}),
-                "unresolved_filters": len(result.get("unresolved_filters") or {}),
-            }
-        ]
-        if result.get("result_cache_hit"):
-            timeline.append(
-                {
-                    "step": "result_cache",
-                    "status": "hit",
-                    "duration_ms": round(
-                        float(result.get("result_cache_seconds", 0.0)) * 1000,
-                        3,
-                    ),
-                    "products": len(result.get("products") or []),
-                }
-            )
-        elif execution_path == "deterministic_filter":
-            timeline.append(
-                {
-                    "step": "fast_filter",
-                    "status": "complete",
-                    "duration_ms": round(
-                        float(result.get("related_tail_seconds", 0.0)) * 1000,
-                        3,
-                    ),
-                    "products": len(result.get("products") or []),
-                }
-            )
-        else:
-            vector_results = result.get("vector_results") or []
-            bm25_results = result.get("bm25_results") or []
-            candidates = result.get("candidates") or []
-            timeline.extend(
-                [
-                    {
-                        "step": "retrieve",
-                        "status": (
-                            "degraded"
-                            if result.get("retrieval_degraded")
-                            else "complete"
-                        ),
-                        "duration_ms": round(
-                            float(
-                                result.get(
-                                    "retrieval_seconds",
-                                    max(
-                                        float(
-                                            result.get(
-                                                "vector_seconds",
-                                                0.0,
-                                            )
-                                        ),
-                                        float(
-                                            result.get(
-                                                "bm25_seconds",
-                                                0.0,
-                                            )
-                                        ),
-                                    ),
-                                )
-                            )
-                            * 1000,
-                            3,
-                        ),
-                        "vector_ms": round(
-                            float(result.get("vector_seconds", 0.0)) * 1000,
-                            3,
-                        ),
-                        "bm25_ms": round(
-                            float(result.get("bm25_seconds", 0.0)) * 1000,
-                            3,
-                        ),
-                        "embedding_total_ms": round(
-                            float(embedding.get("total_ms", 0.0)),
-                            3,
-                        ),
-                        "embedding_load_ms": round(
-                            float(embedding.get("load_ms", 0.0)),
-                            3,
-                        ),
-                        "parallel_ms": round(
-                            float(
-                                result.get(
-                                    "parallel_retrieval_seconds",
-                                    0.0,
-                                )
-                            )
-                            * 1000,
-                            3,
-                        ),
-                        "fusion_ms": round(
-                            float(result.get("fusion_seconds", 0.0)) * 1000,
-                            3,
-                        ),
-                        "type_lookup_ms": round(
-                            float(result.get("type_lookup_seconds", 0.0)) * 1000,
-                            3,
-                        ),
-                        "vector_query_metrics": result.get(
-                            "vector_query_metrics",
-                            {},
-                        ),
-                        "vector_results": len(vector_results),
-                        "bm25_results": len(bm25_results),
-                        "candidates": len(candidates),
-                        "degraded_stages": result.get(
-                            "degraded_stages",
-                            [],
-                        ),
-                        "error_type": result.get("retrieval_error_type"),
-                    },
-                    {
-                        "step": "rerank",
-                        "status": (
-                            "degraded"
-                            if result.get("reranker_degraded")
-                            else "complete"
-                            if candidates
-                            else "skipped"
-                        ),
-                        "duration_ms": round(
-                            float(result.get("reranker_seconds", 0.0)) * 1000,
-                            3,
-                        ),
-                        "provider": result.get(
-                            "reranker_provider",
-                            "none",
-                        ),
-                        "results": len(result.get("reranked") or []),
-                        "error_type": result.get("reranker_error_type"),
-                    },
-                    {
-                        "step": "related_tail",
-                        "status": "complete",
-                        "duration_ms": round(
-                            float(
-                                result.get(
-                                    "related_tail_seconds",
-                                    0.0,
-                                )
-                            )
-                            * 1000,
-                            3,
-                        ),
-                        "primary": len(result.get("primary_product_ids") or []),
-                        "related": len(result.get("related_product_ids") or []),
-                    },
-                    {
-                        "step": "database_map",
-                        "status": "complete",
-                        "products": len(result.get("products") or []),
-                    },
-                ]
-            )
-        timeline.append(
-            {
-                "step": "search",
-                "status": "complete",
-                "duration_ms": round(duration_ms, 3),
-                "products": len(result.get("products") or []),
-            }
-        )
-        return timeline
+        return monitor_timeline(result, duration_ms)
 
     @contextmanager
     def search_capacity_slot(self):
@@ -817,73 +635,7 @@ class ProductSearchService:
     def _search_api_usage_events(
         result: dict[str, Any],
     ) -> tuple[SearchApiUsageEvent, ...]:
-        events: list[SearchApiUsageEvent] = []
-        query_metrics = result.get("query_model_metrics") or {}
-        query_attempts = query_metrics.get("attempts") or (
-            [query_metrics] if query_metrics.get("model") else []
-        )
-        for attempt in query_attempts:
-            model = str(attempt.get("model") or "")
-            if not model:
-                continue
-            reason = str(attempt.get("reason") or "")
-            provider = str(attempt.get("provider") or "")
-            if not provider:
-                provider = "groq" if model.startswith("groq:") else "google"
-            events.append(
-                SearchApiUsageEvent(
-                    provider=provider,
-                    model=model,
-                    operation="query_planning",
-                    status=str(attempt.get("status") or "success"),
-                    api_calls=(
-                        0 if reason in {"missing_api_key", "local_rate_limit"} else 1
-                    ),
-                    input_tokens=int(attempt.get("input_tokens", 0) or 0),
-                    output_tokens=int(attempt.get("output_tokens", 0) or 0),
-                    thought_tokens=int(attempt.get("thought_tokens", 0) or 0),
-                    total_tokens=int(attempt.get("total_tokens", 0) or 0),
-                    duration_ms=float(attempt.get("total_ms", 0.0) or 0.0),
-                    failure_reason=reason,
-                )
-            )
-
-        embedding = result.get("embedding_model_metrics") or {}
-        if embedding and not result.get("result_cache_hit"):
-            events.append(
-                SearchApiUsageEvent(
-                    provider="ollama",
-                    model=EMBED_MODEL,
-                    operation="embedding",
-                    status="success",
-                    api_calls=1,
-                    duration_ms=float(embedding.get("total_ms", 0.0) or 0.0),
-                )
-            )
-
-        for attempt in result.get("reranker_attempts") or []:
-            reason = str(attempt.get("reason") or "")
-            local_rejection = (
-                "request budget exhausted" in reason
-                or "provider cooldown active" in reason
-            )
-            usage = attempt.get("usage") or {}
-            events.append(
-                SearchApiUsageEvent(
-                    provider=str(attempt.get("provider") or "unknown"),
-                    model=str(attempt.get("model") or ""),
-                    operation="reranking",
-                    status=str(attempt.get("status") or "success"),
-                    api_calls=0 if local_rejection else 1,
-                    input_tokens=int(usage.get("input_tokens", 0) or 0),
-                    output_tokens=int(usage.get("output_tokens", 0) or 0),
-                    thought_tokens=int(usage.get("thought_tokens", 0) or 0),
-                    total_tokens=int(usage.get("total_tokens", 0) or 0),
-                    duration_ms=float(attempt.get("duration_ms", 0.0) or 0.0),
-                    failure_reason=reason,
-                )
-            )
-        return tuple(events)
+        return search_api_usage_events(result)
 
     def record_search_analytics(
         self,
@@ -925,80 +677,7 @@ class ProductSearchService:
 
     @staticmethod
     def _analytics_filter_context(result: dict[str, Any]) -> dict[str, Any]:
-        """Project only resolved, non-sensitive request filters to analytics."""
-        resolved = dict(result.get("resolved_filters") or {})
-        categorical = dict(resolved.get("categorical") or {})
-        context = {}
-        for source, target in (
-            ("main_category_name", "main_category"),
-            ("main_category_id", "main_category_id"),
-            ("subcategory_id", "subcategory_id"),
-            ("subcategory_name", "subcategory"),
-            ("state_name", "state"),
-            ("city_id", "city_id"),
-            ("city_name", "city"),
-            ("locality_id", "locality_id"),
-            ("locality_name", "locality"),
-            ("rental_duration", "rental_duration"),
-        ):
-            value = categorical.get(source)
-            if isinstance(value, (str, int, float, bool)) and value != "":
-                context[target] = value
-        for name in ("min_rental_fee", "max_rental_fee"):
-            value = resolved.get(name)
-            if isinstance(value, (int, float)):
-                context[name] = value
-        target_ad_type = result.get("_analytics_target_ad_type") or dict(
-            result.get("query_plan") or {}
-        ).get("target_ad_type")
-        if isinstance(target_ad_type, (str, int, float, bool)) and (
-            target_ad_type != ""
-        ):
-            context["target_ad_type"] = target_ad_type
-        query_plan = dict(result.get("query_plan") or {})
-        route_reason = str(query_plan.get("route_reason") or "").strip()
-        if route_reason:
-            context["route_reason"] = route_reason
-        for name, value in dict(
-            result.get("_analytics_candidate_counts") or {}
-        ).items():
-            if name in {
-                "retrieved_candidates",
-                "eligible_candidates",
-                "hydrated_results",
-                "returned_results",
-            } and isinstance(value, (int, float)):
-                context[name] = max(int(value), 0)
-        for target, source in (
-            ("explicit_filters", "_analytics_explicit_filters"),
-            ("inferred_filters", "_analytics_inferred_filters"),
-        ):
-            values = result.get(source)
-            if isinstance(values, dict) and values:
-                context[target] = values
-        ignored = result.get("_analytics_ignored_filter_names")
-        if isinstance(ignored, (list, tuple)) and ignored:
-            context["ignored_filter_names"] = list(ignored)
-        filter_diagnostics = result.get("_analytics_filter_diagnostics")
-        if isinstance(filter_diagnostics, dict):
-            counts = {
-                str(name): max(int(value), 0)
-                for name, value in dict(
-                    filter_diagnostics.get("counterfactual_counts") or {}
-                ).items()
-                if isinstance(value, (int, float))
-            }
-            context["filter_diagnostics"] = {
-                "evidence_complete": bool(filter_diagnostics.get("evidence_complete")),
-                "diagnosis": str(filter_diagnostics.get("diagnosis") or ""),
-                "counterfactual_counts": counts,
-                "blocking_filters": [
-                    str(value)
-                    for value in filter_diagnostics.get("blocking_filters") or ()
-                    if isinstance(value, (str, int, float))
-                ],
-            }
-        return context
+        return analytics_filter_context(result)
 
     @classmethod
     def _search_timings_ms(
@@ -1006,49 +685,12 @@ class ProductSearchService:
         result: dict[str, Any],
         total_server_ms: float,
     ) -> dict[str, float]:
-        """Return safe measured stages; stages may overlap and are not totals."""
-        timings: dict[str, float] = {}
-
-        def add(name: str, value: Any, multiplier: float = 1.0) -> None:
-            try:
-                measured = float(value) * multiplier
-            except (TypeError, ValueError):
-                return
-            if measured >= 0:
-                timings[name] = round(measured, 3)
-
-        for canonical, source in cls._TIMING_SECONDS_FIELDS.items():
-            if source in result:
-                add(canonical, result[source], 1000.0)
-
-        query_metrics = result.get("query_model_metrics") or {}
-        embedding_metrics = result.get("embedding_model_metrics") or {}
-        for canonical, metrics, source in (
-            ("query_model_ms", query_metrics, "total_ms"),
-            ("query_model_load_ms", query_metrics, "load_ms"),
-            ("embedding_ms", embedding_metrics, "total_ms"),
-            ("embedding_load_ms", embedding_metrics, "load_ms"),
-        ):
-            if source in metrics:
-                add(canonical, metrics[source])
-        if "query_model_ms" not in timings:
-            query_attempts = query_metrics.get("attempts") or []
-            attempt_total_ms = sum(
-                max(float(attempt.get("total_ms", 0.0) or 0.0), 0.0)
-                for attempt in query_attempts
-            )
-            if query_attempts:
-                add("query_model_ms", attempt_total_ms)
-
-        for name, value in (result.get("_analytics_timings_ms") or {}).items():
-            if name in cls._EXPLICIT_TIMING_FIELDS:
-                add(name, value)
-
-        # This is the only authoritative whole-request duration. It always
-        # wins over caller-supplied stage data and must not be reconstructed
-        # by summing overlapping stages.
-        add("total_server_ms", total_server_ms)
-        return timings
+        return search_timings_ms(
+            result,
+            total_server_ms,
+            seconds_fields=cls._TIMING_SECONDS_FIELDS,
+            explicit_fields=cls._EXPLICIT_TIMING_FIELDS,
+        )
 
     def record_search_failure(
         self,

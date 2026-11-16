@@ -1,8 +1,3 @@
-import os
-
-DATA_DIR = os.path.dirname(os.path.abspath(__file__))
-OUTPUT_DIR = os.path.join(DATA_DIR, "dashboard")
-
 # ─────────────────────────────────────────────
 # CATEGORY KEYWORD MAPPINGS FOR SEARCH CLASSIFICATION
 # ─────────────────────────────────────────────
@@ -428,10 +423,4 @@ TYPO_INDICATORS = [
     ("prizm", "price"),
     ("fazed", "fazed"),
     ("laber", "labour"),
-]
-
-GIBBERISH_PATTERNS = [
-    r"^[a-z\s\.]{1,5}$",  # very short random chars
-    r"(.)\1{4,}",  # repeated characters
-    r"^[^a-zA-Z0-9\s]{3,}",  # special chars only
 ]

@@ -1,19 +1,35 @@
 from __future__ import annotations
 
-import base64
 import json
 import logging
 import sqlite3
 import threading
 import uuid
 from collections.abc import Callable, Iterable, Iterator
-from contextlib import contextmanager, suppress
+from contextlib import AbstractContextManager, suppress
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from analytics_service.serialization import (
+    json_dumps,
+)
+
+from .activity_records import dashboard_activity_record
 from .query_facets import build_query_facets as build_facets
+from .query_reader import query_records as read_query_records
 from .schedule import REFRESH_SCHEDULE
+from .snapshot_schema import initialize_snapshot_schema
+from .sqlite import analytics_connection
+
+__all__ = (
+    "AnalyticsSnapshotStore",
+    "LOGGER",
+    "QUERY_RECORD_BATCH_SIZE",
+    "STALE_REFRESH_AFTER",
+    "json_dumps",
+    "utc_now_iso",
+)
 
 LOGGER = logging.getLogger(__name__)
 STALE_REFRESH_AFTER = timedelta(hours=6)
@@ -59,102 +75,6 @@ def utc_now_iso() -> str:
     return datetime.now(UTC).isoformat()
 
 
-def _json_default(value: Any) -> Any:
-    if hasattr(value, "item"):
-        return value.item()
-    if isinstance(value, (datetime,)):
-        return value.isoformat()
-    return str(value)
-
-
-def json_dumps(value: Any) -> str:
-    return json.dumps(
-        value,
-        ensure_ascii=False,
-        separators=(",", ":"),
-        default=_json_default,
-    )
-
-
-def encode_query_cursor(created_at: str, request_id: str) -> str:
-    payload = json_dumps(
-        {"v": 1, "created_at": created_at, "request_id": request_id}
-    ).encode()
-    return base64.urlsafe_b64encode(payload).decode().rstrip("=")
-
-
-def decode_query_cursor(cursor: str) -> tuple[str, str]:
-    try:
-        padding = "=" * (-len(cursor) % 4)
-        payload = json.loads(base64.urlsafe_b64decode(cursor + padding).decode())
-        if payload.get("v") != 1:
-            raise ValueError("Unsupported cursor version")
-        created_at = str(payload["created_at"])
-        request_id = str(payload["request_id"])
-        if not created_at or not request_id:
-            raise ValueError("Incomplete cursor")
-        return created_at, request_id
-    except Exception as exc:
-        raise ValueError("Invalid analytics query cursor") from exc
-
-
-def encode_query_sort_cursor(sort_by: str, sort_direction: str, offset: int) -> str:
-    payload = json_dumps(
-        {
-            "v": 2,
-            "sort_by": sort_by,
-            "sort_direction": sort_direction,
-            "offset": offset,
-        }
-    ).encode()
-    return base64.urlsafe_b64encode(payload).decode().rstrip("=")
-
-
-def decode_query_sort_cursor(cursor: str) -> tuple[str, str, int]:
-    try:
-        padding = "=" * (-len(cursor) % 4)
-        payload = json.loads(base64.urlsafe_b64decode(cursor + padding).decode())
-        if payload.get("v") != 2:
-            raise ValueError("Unsupported cursor version")
-        sort_by = str(payload["sort_by"])
-        sort_direction = str(payload["sort_direction"])
-        offset = int(payload["offset"])
-        if not sort_by or sort_direction not in {"asc", "desc"} or offset < 0:
-            raise ValueError("Incomplete cursor")
-        return sort_by, sort_direction, offset
-    except Exception as exc:
-        raise ValueError("Invalid analytics query cursor") from exc
-
-
-def _query_sort_expression(sort_by: str, *, internal: bool) -> str:
-    common = {
-        "created_at": "records.created_at",
-        "outcome": "records.outcome",
-        "results": (
-            "json_extract(records.internal_json, '$.api.result_count')"
-            if internal
-            else "json_extract(records.company_json, '$.search.result_count')"
-        ),
-    }
-    internal_only = {
-        "execution_path": (
-            "NULLIF(json_extract(records.internal_json, "
-            "'$.performance.execution_path'), '')"
-        ),
-        "duration": (
-            "json_extract(records.internal_json, "
-            "'$.performance.total_server_duration_ms')"
-        ),
-        "tokens": "json_extract(records.internal_json, '$.token_usage.total_tokens')",
-    }
-    expressions = {**common, **(internal_only if internal else {})}
-    try:
-        return expressions[sort_by]
-    except KeyError as exc:
-        allowed = ", ".join(expressions)
-        raise ValueError(f"Query sort field must be one of: {allowed}") from exc
-
-
 class AnalyticsSnapshotStore:
     def __init__(self, path: str | Path):
         self.path = Path(path)
@@ -169,183 +89,14 @@ class AnalyticsSnapshotStore:
                 interrupted,
             )
 
-    @staticmethod
-    def _dashboard_activity_record(
-        payload_json: str,
-        *,
-        internal: bool,
-    ) -> dict[str, Any]:
-        """Return only the fields used to calculate dashboard activity views.
+    _dashboard_activity_record = staticmethod(dashboard_activity_record)
 
-        Query Explorer responses retain the complete, audience-specific payload in
-        SQLite. A large nested JSON document becomes many Python objects, so this
-        short-lived projection preserves the dashboard/filter contract without
-        carrying query text, enrichment, flags, or unused telemetry through the
-        aggregation step.
-        """
-        payload = json.loads(payload_json)
-        filters = dict(payload.get("filters") or {})
-        record: dict[str, Any] = {
-            "created_at": payload.get("created_at"),
-            "normalized_query": payload.get("normalized_query"),
-            "request_kind": payload.get("request_kind"),
-            "outcome": payload.get("outcome"),
-            "categories": list(payload.get("categories") or ()),
-            "language": payload.get("language"),
-            "filters": {
-                name: filters[name]
-                for name in (
-                    "main_category",
-                    "subcategory",
-                    "subcategory_id",
-                    "city",
-                    "city_id",
-                    "target_ad_type",
-                )
-                if name in filters
-            },
-        }
-        if not internal:
-            search = dict(payload.get("search") or {})
-            record["search"] = {
-                "result_count": search.get("result_count"),
-                "total_results": search.get("total_results"),
-            }
-            return record
-
-        api = dict(payload.get("api") or {})
-        performance = dict(payload.get("performance") or {})
-        cache = dict(performance.get("cache") or {})
-        record["api"] = {"status": api.get("status")}
-        record["performance"] = {
-            "execution_path": performance.get("execution_path"),
-            "total_server_duration_ms": performance.get("total_server_duration_ms"),
-            "downstream_api_calls": performance.get("downstream_api_calls"),
-            "cache": {
-                name: cache[name]
-                for name in ("plan_hit", "result_hit")
-                if cache.get(name) is not None
-            },
-            "stages_ms": {
-                str(name): value
-                for name, value in dict(performance.get("stages_ms") or {}).items()
-                if isinstance(value, (int, float))
-            },
-        }
-        record["attempts"] = [
-            {
-                name: attempt.get(name)
-                for name in (
-                    "provider",
-                    "operation",
-                    "api_calls",
-                    "input_tokens",
-                    "output_tokens",
-                    "thought_tokens",
-                    "total_tokens",
-                )
-            }
-            for attempt in payload.get("attempts") or ()
-            if isinstance(attempt, dict)
-        ]
-        diagnostics = dict(payload.get("diagnostics") or {})
-        record["diagnostics"] = {
-            "code": diagnostics.get("code"),
-            "evidence_complete": diagnostics.get("evidence_complete"),
-        }
-        return record
-
-    @contextmanager
-    def _connection(self) -> Iterator[sqlite3.Connection]:
-        connection = sqlite3.connect(
-            self.path,
-            timeout=30,
-            isolation_level=None,
-        )
-        connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA busy_timeout=30000")
-        connection.execute("PRAGMA foreign_keys=ON")
-        try:
-            yield connection
-        finally:
-            connection.close()
+    def _connection(self) -> AbstractContextManager[sqlite3.Connection]:
+        return analytics_connection(self.path)
 
     def _initialize(self) -> None:
         with self._connection() as connection:
-            connection.execute("PRAGMA journal_mode=WAL")
-            connection.execute("PRAGMA synchronous=FULL")
-            connection.executescript(
-                """
-                CREATE TABLE IF NOT EXISTS analytics_snapshots (
-                    company_id TEXT PRIMARY KEY,
-                    active_version TEXT NOT NULL,
-                    generated_at TEXT NOT NULL,
-                    source_watermark TEXT,
-                    source_rows_json TEXT NOT NULL,
-                    company_dashboard_json TEXT NOT NULL,
-                    internal_dashboard_json TEXT NOT NULL
-                );
-
-                CREATE TABLE IF NOT EXISTS analytics_query_records (
-                    company_id TEXT NOT NULL,
-                    snapshot_version TEXT NOT NULL,
-                    request_id TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    query_text TEXT NOT NULL,
-                    outcome TEXT NOT NULL,
-                    categories_text TEXT NOT NULL,
-                    language TEXT NOT NULL,
-                    company_json TEXT NOT NULL,
-                    internal_json TEXT NOT NULL,
-                    PRIMARY KEY (
-                        company_id,
-                        snapshot_version,
-                        request_id
-                    )
-                );
-
-                CREATE INDEX IF NOT EXISTS idx_analytics_queries_page
-                ON analytics_query_records (
-                    company_id,
-                    snapshot_version,
-                    created_at DESC,
-                    request_id DESC
-                );
-
-                CREATE INDEX IF NOT EXISTS idx_analytics_queries_outcome
-                ON analytics_query_records (
-                    company_id,
-                    snapshot_version,
-                    outcome,
-                    created_at DESC
-                );
-
-                CREATE TABLE IF NOT EXISTS analytics_refresh_runs (
-                    run_id TEXT PRIMARY KEY,
-                    company_id TEXT NOT NULL,
-                    status TEXT NOT NULL,
-                    started_at TEXT NOT NULL,
-                    completed_at TEXT,
-                    error_type TEXT,
-                    source_rows_json TEXT
-                );
-
-                CREATE INDEX IF NOT EXISTS idx_analytics_runs_company
-                ON analytics_refresh_runs (
-                    company_id,
-                    started_at DESC
-                );
-
-                CREATE TABLE IF NOT EXISTS analytics_prepared_views (
-                    company_id TEXT NOT NULL,
-                    snapshot_version TEXT NOT NULL,
-                    internal INTEGER NOT NULL,
-                    view_key TEXT NOT NULL,
-                    payload_json TEXT NOT NULL,
-                    PRIMARY KEY (company_id, snapshot_version, internal, view_key)
-                );
-                """
-            )
+            initialize_snapshot_schema(connection)
 
     def begin_refresh(self, company_id: str) -> str:
         run_id = uuid.uuid4().hex
@@ -673,16 +424,6 @@ class AnalyticsSnapshotStore:
             )
         )
 
-    def count_dashboard_activity_records(self, company_id: str, version: str) -> int:
-        with self._connection() as connection:
-            return int(
-                connection.execute(
-                    "SELECT COUNT(*) FROM analytics_query_records "
-                    "WHERE company_id = ? AND snapshot_version = ?",
-                    (company_id, version),
-                ).fetchone()[0]
-            )
-
     def iter_dashboard_activity_records(
         self,
         company_id: str,
@@ -746,163 +487,31 @@ class AnalyticsSnapshotStore:
         sort_direction: str = "desc",
         include_facets: bool = True,
     ) -> dict[str, Any]:
-        field = "internal_json" if internal else "company_json"
-        normalized_sort = str(sort_by or "created_at").strip().casefold()
-        normalized_direction = str(sort_direction or "desc").strip().casefold()
-        if normalized_direction not in {"asc", "desc"}:
-            raise ValueError("Query sort direction must be asc or desc")
-        sort_expression = _query_sort_expression(normalized_sort, internal=internal)
-        uses_default_cursor = (
-            normalized_sort == "created_at" and normalized_direction == "desc"
+        return read_query_records(
+            self._connection,
+            self.query_facets,
+            company_id,
+            internal=internal,
+            limit=limit,
+            cursor=cursor,
+            query=query,
+            outcome=outcome,
+            category=category,
+            execution_path=execution_path,
+            language=language,
+            created_from=created_from,
+            created_to=created_to,
+            include_filtered_results=include_filtered_results,
+            request_kind=request_kind,
+            city_id=city_id,
+            subcategory_id=subcategory_id,
+            ad_type=ad_type,
+            diagnostic_code=diagnostic_code,
+            has_filters=has_filters,
+            sort_by=sort_by,
+            sort_direction=sort_direction,
+            include_facets=include_facets,
         )
-        offset = 0
-        clauses = [
-            "records.company_id = ?",
-            "records.snapshot_version = snapshots.active_version",
-        ]
-        values: list[Any] = [company_id]
-        if not include_filtered_results:
-            # Keep ordinary catalogue/filter browsing out of the default Query
-            # Explorer, but never hide failed requests. A failed browse is an
-            # operational incident rather than demand noise and must remain
-            # visible without a frontend-only opt-in parameter.
-            clauses.append(
-                "("
-                f"COALESCE(json_extract(records.{field}, "
-                "'$.request_kind'), 'text_search') = 'text_search' "
-                "OR records.outcome = 'failure'"
-                ")"
-            )
-        if cursor and uses_default_cursor:
-            cursor_created, cursor_request = decode_query_cursor(cursor)
-            clauses.append(
-                """
-                (
-                    records.created_at < ?
-                    OR (
-                        records.created_at = ?
-                        AND records.request_id < ?
-                    )
-                )
-                """
-            )
-            values.extend([cursor_created, cursor_created, cursor_request])
-        elif cursor:
-            cursor_sort, cursor_direction, offset = decode_query_sort_cursor(cursor)
-            if (cursor_sort, cursor_direction) != (
-                normalized_sort,
-                normalized_direction,
-            ):
-                raise ValueError("Analytics query cursor does not match sorting")
-        if query:
-            clauses.append("LOWER(records.query_text) LIKE ? ESCAPE '\\'")
-            escaped = (
-                query.casefold()
-                .replace("\\", "\\\\")
-                .replace("%", "\\%")
-                .replace("_", "\\_")
-            )
-            values.append(f"%{escaped}%")
-        if outcome:
-            clauses.append("records.outcome = ?")
-            values.append(outcome)
-        if category:
-            clauses.append("records.categories_text LIKE ?")
-            values.append(f"%|{category}|%")
-        if execution_path:
-            clauses.append(
-                "LOWER(json_extract(records.internal_json, "
-                "'$.performance.execution_path')) = ?"
-            )
-            values.append(execution_path.casefold())
-        if language:
-            clauses.append("records.language = ?")
-            values.append(language)
-        for json_path, expected in (
-            ("$.request_kind", request_kind),
-            ("$.filters.city_id", city_id),
-            ("$.filters.subcategory_id", subcategory_id),
-            ("$.filters.target_ad_type", ad_type),
-        ):
-            if expected is not None and expected != "":
-                clauses.append(f"json_extract(records.{field}, '{json_path}') = ?")
-                values.append(expected)
-        if diagnostic_code and internal:
-            clauses.append(
-                "json_extract(records.internal_json, '$.diagnostics.code') = ?"
-            )
-            values.append(diagnostic_code)
-        if has_filters is not None:
-            operator = "!=" if has_filters else "="
-            clauses.append(
-                f"COALESCE(json_extract(records.{field}, '$.filters'), '{{}}') "
-                f"{operator} '{{}}'"
-            )
-        if created_from:
-            clauses.append("records.created_at >= ?")
-            values.append(created_from)
-        if created_to:
-            clauses.append("records.created_at <= ?")
-            values.append(created_to)
-        order_clause = (
-            "records.created_at DESC, records.request_id DESC"
-            if uses_default_cursor
-            else (
-                f"({sort_expression} IS NULL) ASC, "
-                f"{sort_expression} {normalized_direction.upper()}, "
-                "records.created_at DESC, records.request_id DESC"
-            )
-        )
-        values.append(limit + 1)
-        if not uses_default_cursor:
-            values.append(offset)
-        with self._connection() as connection:
-            rows = connection.execute(
-                f"""
-                SELECT
-                    records.request_id,
-                    records.created_at,
-                    records.{field} AS payload_json
-                FROM analytics_query_records AS records
-                INNER JOIN analytics_snapshots AS snapshots
-                    ON snapshots.company_id = records.company_id
-                WHERE {" AND ".join(clauses)}
-                ORDER BY {order_clause}
-                LIMIT ?
-                {"OFFSET ?" if not uses_default_cursor else ""}
-                """,
-                tuple(values),
-            ).fetchall()
-        has_more = len(rows) > limit
-        visible = rows[:limit]
-        next_cursor = None
-        if has_more and visible:
-            next_cursor = (
-                encode_query_cursor(
-                    visible[-1]["created_at"],
-                    visible[-1]["request_id"],
-                )
-                if uses_default_cursor
-                else encode_query_sort_cursor(
-                    normalized_sort,
-                    normalized_direction,
-                    offset + len(visible),
-                )
-            )
-        result = {
-            "company_id": company_id,
-            "items": [json.loads(row["payload_json"]) for row in visible],
-            "returned": len(visible),
-            "has_more": has_more,
-            "next_cursor": next_cursor,
-            "sorting": {
-                "sort_by": normalized_sort,
-                "sort_direction": normalized_direction,
-            },
-        }
-        if include_facets:
-            result["facets"] = self.query_facets(company_id, internal=internal)
-        return result
 
     def query_facets(self, company_id: str, *, internal: bool) -> dict[str, Any]:
         """Return snapshot-wide Query Explorer choices, not page-local options."""

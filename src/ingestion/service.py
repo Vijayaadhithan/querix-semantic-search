@@ -1,17 +1,20 @@
 import time
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
 
 from core.settings import (
-    EMBED_MODEL,
-    EMBED_MODEL_REVISION,
     MYSQL_BM25_COLUMN,
     MYSQL_CONTENT_COLUMN,
     MYSQL_DATABASE,
     MYSQL_TABLE,
 )
 from core.tenant_config import TenantIngestionConfig, TenantProfile
-from ingestion.documents import metadata_hash, prepare_bm25_index_row, prepare_mysql_row
+from ingestion.batch import IngestionBatch
+from ingestion.change_detection import (
+    DatabaseRowChanges,
+    database_current_ids,
+    database_row_changes,
+)
+from ingestion.documents import prepare_bm25_index_row, prepare_mysql_row
 from ingestion.mapping import canonicalize_search_ready_row
 from ingestion.state import (
     begin_ingestion,
@@ -31,6 +34,20 @@ from storage.database import (
     iter_database_rows,
 )
 from storage.vector import get_tenant_vector_collection
+
+__all__ = (
+    "DatabaseRowChanges",
+    "EMBED_BATCH_SIZE",
+    "MYSQL_BATCH_SIZE",
+    "check_mysql_source",
+    "database_current_ids",
+    "database_row_changes",
+    "embed_for_upsert",
+    "format_duration",
+    "ingest_mysql_source",
+    "rebuild_mysql_bm25_index",
+    "reconcile_deleted_documents",
+)
 
 EMBED_BATCH_SIZE = 32
 MYSQL_BATCH_SIZE = 500
@@ -144,80 +161,6 @@ def reconcile_deleted_documents(
     return len(stale_vector_ids), deleted_bm25
 
 
-@dataclass(frozen=True)
-class DatabaseRowChanges:
-    current_ids: set[str]
-    metadata_only_ids: set[str]
-
-
-def database_row_changes(
-    collection,
-    ids: list[str],
-    documents: list[str],
-    metadatas: list[dict],
-    embedding_model_revision: str = EMBED_MODEL_REVISION,
-) -> DatabaseRowChanges:
-    """Classify rows without re-embedding metadata-only source changes."""
-    if not ids:
-        return DatabaseRowChanges(set(), set())
-    existing = collection.get(ids=ids, include=["documents", "metadatas"])
-    expected = {
-        doc_id: {
-            "document": document,
-            "hash": metadata.get("source_content_hash"),
-            "metadata": metadata,
-        }
-        for doc_id, document, metadata in zip(ids, documents, metadatas)
-    }
-    current: set[str] = set()
-    metadata_only: set[str] = set()
-    for doc_id, document, metadata in zip(
-        existing["ids"], existing["documents"], existing["metadatas"]
-    ):
-        if metadata.get("embedding_model") != EMBED_MODEL:
-            continue
-        stored_revision = metadata.get("embedding_model_revision")
-        if stored_revision not in {None, embedding_model_revision}:
-            continue
-        expected_row = expected.get(doc_id, {})
-        content_is_current = metadata.get("source_content_hash") == expected_row.get(
-            "hash"
-        ) or document == expected_row.get("document")
-        if not content_is_current:
-            continue
-        expected_metadata = expected_row.get("metadata", {})
-        expected_metadata_hash = expected_metadata.get("source_metadata_hash")
-        stored_metadata_hash = metadata.get("source_metadata_hash") or metadata_hash(
-            metadata
-        )
-        if (
-            stored_revision == embedding_model_revision
-            and stored_metadata_hash == expected_metadata_hash
-            and metadata.get("source_metadata_hash") == expected_metadata_hash
-        ):
-            current.add(doc_id)
-        else:
-            metadata_only.add(doc_id)
-    return DatabaseRowChanges(current, metadata_only)
-
-
-def database_current_ids(
-    collection,
-    ids: list[str],
-    documents: list[str],
-    metadatas: list[dict],
-    embedding_model_revision: str = EMBED_MODEL_REVISION,
-) -> set[str]:
-    changes = database_row_changes(
-        collection,
-        ids,
-        documents,
-        metadatas,
-        embedding_model_revision,
-    )
-    return changes.current_ids | changes.metadata_only_ids
-
-
 def _ingest_mysql_source(
     limit: int | None = None,
     batch_size: int = MYSQL_BATCH_SIZE,
@@ -267,221 +210,123 @@ def _ingest_mysql_source(
         raise RuntimeError("Tenant profile is required for pgvector ingestion.")
     collection = get_tenant_vector_collection(tenant, create=True)
     bm25_index = PersistentBM25Index(tenant.storage.bm25_path)
-    source_name = database_source_name(mysql_config)
-    active_embedding_revision = resolve_embedding_model_revision()
-    consistency_path = ingestion_state_path(tenant.storage.bm25_path)
-    consistency_active = read_ingestion_state(consistency_path) is not None
-    if consistency_active:
-        begin_ingestion(consistency_path, company_id=tenant.company_id)
-
-    def ensure_consistency_gate() -> None:
-        nonlocal consistency_active
+    try:
+        source_name = database_source_name(mysql_config)
+        active_embedding_revision = resolve_embedding_model_revision()
+        consistency_path = ingestion_state_path(tenant.storage.bm25_path)
+        consistency_active = read_ingestion_state(consistency_path) is not None
         if consistency_active:
-            return
-        begin_ingestion(consistency_path, company_id=tenant.company_id)
-        consistency_active = True
+            begin_ingestion(consistency_path, company_id=tenant.company_id)
 
-    print(f"Processing {database_backend(mysql_config)} table: {database}.{table}")
-    if tenant:
-        print(f"Company: {tenant.company_id}")
-    print(f"Content column: {content_column}")
-    print(f"BM25 column: {bm25_column}")
-    print(f"Primary key column: {detected_primary_key or 'none detected'}")
-    print(f"Rows planned for ingestion: {planned_rows}")
+        def ensure_consistency_gate() -> None:
+            nonlocal consistency_active
+            if consistency_active:
+                return
+            begin_ingestion(consistency_path, company_id=tenant.company_id)
+            consistency_active = True
 
-    if replace_source:
-        ensure_consistency_gate()
-        existing = collection.get(where={"source_file": source_name}, include=[])
-        if existing["ids"]:
-            collection.delete(where={"source_file": source_name})
-            print(f"Deleted {len(existing['ids'])} existing chunks for {source_name}.")
-        bm25_index.clear()
-        print("Cleared the persistent BM25 product index.")
+        print(f"Processing {database_backend(mysql_config)} table: {database}.{table}")
+        if tenant:
+            print(f"Company: {tenant.company_id}")
+        print(f"Content column: {content_column}")
+        print(f"BM25 column: {bm25_column}")
+        print(f"Primary key column: {detected_primary_key or 'none detected'}")
+        print(f"Rows planned for ingestion: {planned_rows}")
 
-    ids: list[str] = []
-    documents: list[str] = []
-    metadatas: list[dict] = []
-    bm25_rows: list[dict] = []
-    indexed = 0
-    processed = 0
-    skipped_empty = 0
-    skipped_current = 0
-    metadata_updated = 0
-    seen_ids: set[str] = set()
-    started_at = time.monotonic()
-
-    def flush_batch() -> None:
-        nonlocal \
-            ids, \
-            documents, \
-            metadatas, \
-            bm25_rows, \
-            indexed, \
-            skipped_current, \
-            metadata_updated
-        if not documents:
-            return
-        batch_start = processed - len(documents) + 1
-        batch_end = processed
-        total_label = planned_rows if planned_rows else "unknown"
-        if force_reembed:
-            metadata_only_ids: set[str] = set()
-            upsert_ids = ids
-            upsert_documents = documents
-            upsert_metadatas = metadatas
-        else:
-            changes = database_row_changes(
-                collection,
-                ids,
-                documents,
-                metadatas,
-                active_embedding_revision,
-            )
-            current_ids = changes.current_ids
-            metadata_only_ids = changes.metadata_only_ids
-            skipped_current += len(current_ids)
-            upsert_ids = []
-            upsert_documents = []
-            upsert_metadatas = []
-            for doc_id, document, metadata in zip(ids, documents, metadatas):
-                if doc_id in current_ids or doc_id in metadata_only_ids:
-                    continue
-                upsert_ids.append(doc_id)
-                upsert_documents.append(document)
-                upsert_metadatas.append(metadata)
-
-        if upsert_documents or metadata_only_ids:
+        if replace_source:
             ensure_consistency_gate()
+            existing = collection.get(where={"source_file": source_name}, include=[])
+            if existing["ids"]:
+                collection.delete(where={"source_file": source_name})
+                print(
+                    f"Deleted {len(existing['ids'])} existing chunks for {source_name}."
+                )
+            bm25_index.clear()
+            print("Cleared the persistent BM25 product index.")
 
-        if metadata_only_ids:
-            metadata_ids = []
-            updated_metadatas = []
-            for doc_id, metadata in zip(ids, metadatas):
-                if doc_id in metadata_only_ids:
-                    metadata_ids.append(doc_id)
-                    updated_metadatas.append(metadata)
-            collection.update_metadatas(
-                ids=metadata_ids,
-                metadatas=updated_metadatas,
-            )
-            metadata_updated += len(metadata_ids)
-
-        if not upsert_documents:
-            bm25_index.upsert(bm25_rows)
-            print(
-                f"  Rows {batch_start}-{batch_end}/{total_label} "
-                "unchanged for embeddings; "
-                f"metadata-updated {len(metadata_only_ids)}.",
-                flush=True,
-            )
-            ids = []
-            documents = []
-            metadatas = []
-            bm25_rows = []
-            return
-
-        print(
-            f"  Preparing rows {batch_start}-{batch_end}/{total_label} for "
-            "pgvector "
-            f"({len(upsert_documents)} changed/new)",
-            flush=True,
-        )
-        embeddings = embed_for_upsert(
-            upsert_documents,
-            embed_batch_size,
-            progress_prefix=f"    rows {batch_start}-{batch_end}",
-        )
-        collection.upsert(
-            ids=upsert_ids,
-            documents=upsert_documents,
-            embeddings=embeddings,
-            metadatas=upsert_metadatas,
-        )
-        bm25_index.upsert(bm25_rows)
-        indexed += len(upsert_documents)
-        elapsed = time.monotonic() - started_at
-        rate = processed / elapsed if elapsed else 0
-        remaining = max(planned_rows - processed, 0)
-        eta = remaining / rate if rate else 0
-        print(
-            f"  Indexed/updated {indexed} rows; skipped unchanged {skipped_current}; "
-            f"processed {processed}/{total_label}; ETA {format_duration(eta)}",
-            flush=True,
-        )
-        ids = []
-        documents = []
-        metadatas = []
-        bm25_rows = []
-
-    for row in iter_database_rows(
-        content_column,
-        detected_primary_key,
-        limit,
-        mysql_config,
-        fetch_batch_size=batch_size,
-    ):
-        index_row = canonicalize_search_ready_row(
-            row,
-            getattr(tenant, "ingestion", TenantIngestionConfig()),
-        )
-        prepared = prepare_mysql_row(
-            index_row,
-            content_column,
-            detected_primary_key,
-            mysql_config=mysql_config,
-            company_id=tenant.company_id if tenant else None,
-            embedding_model_revision=active_embedding_revision,
-        )
-        if prepared is None:
-            skipped_empty += 1
-            continue
-
-        doc_id, document, metadata = prepared
-        seen_ids.add(str(doc_id))
-        ids.append(doc_id)
-        documents.append(document)
-        metadatas.append(metadata)
-        bm25_row = prepare_bm25_index_row(
-            index_row,
-            bm25_column,
-            detected_primary_key,
-            mysql_config=mysql_config,
-            company_id=tenant.company_id if tenant else None,
-        )
-        if bm25_row is not None:
-            bm25_rows.append(bm25_row)
-        processed += 1
-        if len(documents) >= batch_size:
-            flush_batch()
-
-    flush_batch()
-    deleted_vectors = 0
-    deleted_bm25 = 0
-    if reconcile_deletions:
-        ensure_consistency_gate()
-        deleted_vectors, deleted_bm25 = reconcile_deleted_documents(
+        processed = 0
+        skipped_empty = 0
+        seen_ids: set[str] = set()
+        started_at = time.monotonic()
+        batch = IngestionBatch(
             collection,
             bm25_index,
-            source_name,
-            seen_ids,
+            ensure_consistency=ensure_consistency_gate,
+            row_changes=database_row_changes,
+            embedder=embed_for_upsert,
+            format_duration=format_duration,
+            embedding_revision=active_embedding_revision,
+            force_reembed=force_reembed,
+            embed_batch_size=embed_batch_size,
+            started_at=started_at,
         )
+
+        for row in iter_database_rows(
+            content_column,
+            detected_primary_key,
+            limit,
+            mysql_config,
+            fetch_batch_size=batch_size,
+        ):
+            index_row = canonicalize_search_ready_row(
+                row,
+                getattr(tenant, "ingestion", TenantIngestionConfig()),
+            )
+            prepared = prepare_mysql_row(
+                index_row,
+                content_column,
+                detected_primary_key,
+                mysql_config=mysql_config,
+                company_id=tenant.company_id if tenant else None,
+                embedding_model_revision=active_embedding_revision,
+            )
+            if prepared is None:
+                skipped_empty += 1
+                continue
+
+            doc_id, document, metadata = prepared
+            seen_ids.add(str(doc_id))
+            bm25_row = prepare_bm25_index_row(
+                index_row,
+                bm25_column,
+                detected_primary_key,
+                mysql_config=mysql_config,
+                company_id=tenant.company_id if tenant else None,
+            )
+            batch.add(doc_id, document, metadata, bm25_row)
+            processed += 1
+            if len(batch) >= batch_size:
+                batch.flush(processed, planned_rows)
+
+        batch.flush(processed, planned_rows)
+        deleted_vectors = 0
+        deleted_bm25 = 0
+        if reconcile_deletions:
+            ensure_consistency_gate()
+            deleted_vectors, deleted_bm25 = reconcile_deleted_documents(
+                collection,
+                bm25_index,
+                source_name,
+                seen_ids,
+            )
+            print(
+                "Deletion reconciliation complete. "
+                f"Removed {deleted_vectors} vectors and "
+                f"{deleted_bm25} BM25 rows.",
+                flush=True,
+            )
+        bm25_count = bm25_index.count()
         print(
-            "Deletion reconciliation complete. "
-            f"Removed {deleted_vectors} vectors and "
-            f"{deleted_bm25} BM25 rows.",
-            flush=True,
+            f"\n{database_backend(mysql_config).title()} ingestion complete. "
+            f"Indexed/updated {batch.indexed} rows; "
+            f"metadata-updated {batch.metadata_updated} rows; "
+            f"skipped unchanged {batch.skipped_current} rows; "
+            f"skipped empty {skipped_empty} rows. "
+            f"Collection contains {collection.count()} chunks. "
+            f"BM25 index contains {bm25_count} products."
         )
-    bm25_count = bm25_index.count()
-    bm25_index.close()
-    print(
-        f"\n{database_backend(mysql_config).title()} ingestion complete. "
-        f"Indexed/updated {indexed} rows; "
-        f"metadata-updated {metadata_updated} rows; "
-        f"skipped unchanged {skipped_current} rows; "
-        f"skipped empty {skipped_empty} rows. "
-        f"Collection contains {collection.count()} chunks. "
-        f"BM25 index contains {bm25_count} products."
-    )
+    finally:
+        bm25_index.close()
 
 
 def ingest_mysql_source(
@@ -561,43 +406,45 @@ def rebuild_mysql_bm25_index(
     planned_rows = min(row_count, limit) if limit is not None else row_count
 
     index = PersistentBM25Index(tenant.storage.bm25_path)
-    index.clear()
-    batch = []
-    processed = 0
+    try:
+        index.clear()
+        batch = []
+        processed = 0
 
-    print(
-        f"Rebuilding BM25 index from {database_backend(mysql_config)} "
-        f"{database}.{table}"
-    )
-    if tenant:
-        print(f"Company: {tenant.company_id}")
-    print(f"BM25 column: {bm25_column}")
-    print(f"Rows planned: {planned_rows}")
-
-    for row in iter_database_rows(
-        content_column,
-        detected_primary_key,
-        limit,
-        mysql_config,
-        fetch_batch_size=batch_size,
-    ):
-        entry = prepare_bm25_index_row(
-            row,
-            bm25_column,
-            detected_primary_key,
-            mysql_config=mysql_config,
-            company_id=tenant.company_id if tenant else None,
+        print(
+            f"Rebuilding BM25 index from {database_backend(mysql_config)} "
+            f"{database}.{table}"
         )
-        if entry is None:
-            continue
-        batch.append(entry)
-        processed += 1
-        if len(batch) >= batch_size:
-            index.upsert(batch)
-            batch = []
-            print(f"  Indexed {processed}/{planned_rows}", end="\r", flush=True)
+        if tenant:
+            print(f"Company: {tenant.company_id}")
+        print(f"BM25 column: {bm25_column}")
+        print(f"Rows planned: {planned_rows}")
 
-    index.upsert(batch)
-    count = index.count()
-    index.close()
-    print(f"\nBM25 rebuild complete. Indexed {count} products.")
+        for row in iter_database_rows(
+            content_column,
+            detected_primary_key,
+            limit,
+            mysql_config,
+            fetch_batch_size=batch_size,
+        ):
+            entry = prepare_bm25_index_row(
+                row,
+                bm25_column,
+                detected_primary_key,
+                mysql_config=mysql_config,
+                company_id=tenant.company_id if tenant else None,
+            )
+            if entry is None:
+                continue
+            batch.append(entry)
+            processed += 1
+            if len(batch) >= batch_size:
+                index.upsert(batch)
+                batch = []
+                print(f"  Indexed {processed}/{planned_rows}", end="\r", flush=True)
+
+        index.upsert(batch)
+        count = index.count()
+        print(f"\nBM25 rebuild complete. Indexed {count} products.")
+    finally:
+        index.close()

@@ -15,6 +15,7 @@ Docker images; shared infrastructure must not turn them into a single runtime.
 | `src/verticals/<vertical>/` | Reusable domain behavior shared by tenants |
 | `src/tenants/<tenant>/` | Client-specific compatibility contracts and policies |
 | `src/core/` | Validated process configuration and tenant configuration |
+| `src/operations/` | Reusable workload configuration, without CLI/file-I/O coupling |
 | `scripts/` | Operator commands and repository validation utilities |
 | `tests/` | Tests arranged to mirror runtime package ownership |
 
@@ -76,3 +77,34 @@ application factory.
 Refactors must pass the full gate and should not trigger ingestion, index
 rebuilds, migrations, or unrelated container recreation unless the changed
 contract explicitly requires one.
+
+## Refactoring boundaries
+
+The analytics application factory wires dependencies and middleware. HTTP
+handlers live in `src/analytics_service/routes/`, grouped by authentication,
+company, internal, and system responsibilities. Shared portal authorization
+and cookie policy live in `access.py`; prepared dashboard views, fallback
+calculations, and query responses live in `dashboard.py`. Each application owns
+its dashboard cache and dependencies, keeping tenant and test instances isolated.
+
+Both analytics stores use `src/analytics_service/sqlite.py` for connection
+configuration and cleanup. Connections use autocommit; callers retain ownership
+of explicit transactions. Cleanup also runs when connection configuration fails.
+
+Search orchestration stays in `src/api/service.py`. Pure operator timelines and
+telemetry projections live in `monitoring.py` and `telemetry.py`; existing service
+methods delegate to them. MySQL telemetry DDL and schema checks live in
+`src/storage/search_analytics_schema.py`, with public provisioning functions
+re-exported from `search_analytics.py` for existing operator commands.
+
+The cleanup removed an uncalled dashboard count method, the unused default
+adapter alias, and obsolete dashboard-output and gibberish-pattern settings.
+Framework callbacks, Pydantic validators, protocol methods, and documented
+compatibility exports remain even when text searches find no direct callers.
+
+The [repository-wide audit](repository_audit.md) records the completed source,
+script, test, and deployment-configuration review, extracted responsibilities,
+validation evidence, and reasons for retaining large cohesive components. Public
+facades use explicit exports so moving implementations does not break existing
+imports or test seams. Further changes should follow these ownership boundaries
+and validate public schemas as well as runtime behavior.

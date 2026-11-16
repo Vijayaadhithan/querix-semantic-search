@@ -11,10 +11,10 @@ import time
 from typing import Any
 
 from core.tenant_config import TenantProfile
+from tenants.gainr.cards import _card, _integer, _number, _user_payload
+from tenants.gainr.filter_diagnostics import zero_result_filter_diagnostics
+from tenants.gainr.filtered_page import GainrPageExecutor
 from tenants.gainr.models import (
-    GAINR_CARD_INTEGER_FIELDS,
-    GAINR_USER_FIELDS,
-    GAINR_USER_INTEGER_FIELDS,
     GainrFilterDataRequest,
     GainrFilterResultRequest,
     GainrSuggestionRequest,
@@ -66,6 +66,13 @@ class GainrCompatibilityService:
         self._diagnostics_lock = threading.Lock()
         self._diagnostics_worker: threading.Thread | None = None
         self._diagnostics_closed = False
+        self._pages = GainrPageExecutor(
+            self.profile,
+            self.product_search_service,
+            self.repository,
+            self._indexed_catalog_filters,
+            self._active_boosted_ad_ids,
+        )
 
     def parse_filter_result(
         self,
@@ -360,13 +367,6 @@ class GainrCompatibilityService:
                     _request_started=request_started,
                 )
         planning_started = time.perf_counter()
-        engine_ms = 0.0
-        database_ms = 0.0
-        eligibility_ms = 0.0
-        hydration_ms = 0.0
-        usage_ms = 0.0
-        trace_id = "-"
-        eligibility_source = "database"
         speculative_starter = getattr(
             self.engine,
             "start_speculative_embedding",
@@ -404,218 +404,89 @@ class GainrCompatibilityService:
             or request.filter.fee
             or request.filter.attribute_value
         )
-        if execution_path == "deterministic_filter":
-            if speculative_embedding_future is not None:
-                speculative_embedding_future.cancel()
-            database_started = time.perf_counter()
-            repository_filters = self._indexed_catalog_filters(effective)
-            rows, total = self.repository.search_catalog(
-                repository_filters,
-                request.filter,
-                search_term=request.searchTerm,
-                page=request.page,
-                page_size=page_size,
-                sort_order=planned["query_plan"].get("sort_order"),
-                allowed_ad_types=allowed_ad_types,
-                boosted_ids=self._active_boosted_ad_ids(),
-            )
-            database_ms = (time.perf_counter() - database_started) * 1000
-            route = "deterministic"
-            usage_store = self.product_search_service.usage_store
-            usage_started = time.perf_counter()
-            if usage_store is not None:
-                usage_store.record(
-                    company_id=self.profile.company_id,
-                    provider="internal",
-                    model="deterministic_filter",
-                    operation="search",
-                    status="success",
-                )
-            usage_ms = (time.perf_counter() - usage_started) * 1000
-            usage = {
-                "tracked": usage_store is not None,
-                "model_requests": 0,
-                "input_tokens": 0,
-                "output_tokens": 0,
-                "total_tokens": 0,
-                "breakdown": [],
-            }
-            analytics_result = {
-                **planned,
-                "result_cache_hit": False,
-                "embedding_model_metrics": {},
-                "reranker_attempts": [],
-            }
-            window_limited = False
-        else:
-            engine_started = time.perf_counter()
-            result = self.product_search_service.run_engine_search(
-                request.searchTerm,
-                capacity_acquired=True,
-                limit=self.product_search_service.max_results,
-                ranking_window=(self.profile.compatibility.semantic_ranked_window),
-                planned_result=planned,
-                resolved_filters=effective,
-                allowed_ad_types=allowed_ad_types,
-                **(
-                    {"speculative_embedding_future": (speculative_embedding_future)}
-                    if speculative_embedding_future is not None
-                    else {}
-                ),
-                # The compatibility repository checks current eligibility and
-                # hydrates the requested 20-row page from the enriched
-                # search-ready projection. Avoid the engine's earlier generic
-                # MySQL hydration unless a price sort needs complete rows. This
-                # removes one remote database round trip from normal semantic
-                # searches without changing ranking or live-ad validation.
-                hydrate_products=(
-                    planned["query_plan"].get("sort_order")
-                    in {"price_asc", "price_desc"}
-                ),
-            )
-            engine_ms = (time.perf_counter() - engine_started) * 1000
-            boosted_ids = self._active_boosted_ad_ids()
-            if boosted_ids:
-                result["product_ids"] = sorted(
-                    result.get("product_ids", []),
-                    key=lambda product_id: str(product_id) not in boosted_ids,
-                )
-            trace_id = str(result.get("trace_id") or "-")
-            if database_only_filters or not result.get("products"):
-                eligibility_source = "ranked_page"
-                hydration_started = time.perf_counter()
-                rows, total = self.repository.hydrate_ranked_page(
-                    result.get("product_ids", []),
-                    effective,
-                    request.filter,
-                    allowed_ad_types,
-                    page=request.page,
-                    page_size=page_size,
-                )
-                hydration_ms = (time.perf_counter() - hydration_started) * 1000
-            else:
-                eligibility_source = "engine_rows"
-                eligibility_started = time.perf_counter()
-                id_column = self.repository.config.result_id_column
-                current_rows = {
-                    str(row[id_column]): row
-                    for row in result.get("products", [])
-                    if row.get(id_column) is not None
-                }
-                eligible_ids = []
-                for product_id in result.get("product_ids", []):
-                    row = current_rows.get(str(product_id))
-                    if row is None:
-                        continue
-                    deleted_at = row.get("deleted_at")
-                    if deleted_at is not None and str(deleted_at).strip():
-                        continue
-                    if (
-                        allowed_ad_types is not None
-                        and str(row.get("type")) not in allowed_ad_types
-                    ):
-                        continue
-                    eligible_ids.append(product_id)
-                eligibility_ms = (time.perf_counter() - eligibility_started) * 1000
-                total = len(eligible_ids)
-                start = (request.page - 1) * page_size
-                hydration_started = time.perf_counter()
-                rows = self.repository.hydrate_filtered(
-                    eligible_ids[start : start + page_size],
-                    effective,
-                    request.filter,
-                    allowed_ad_types,
-                )
-                hydration_ms = (time.perf_counter() - hydration_started) * 1000
-            window_limited = (
-                len(result.get("product_ids", []))
-                >= self.product_search_service.max_results
-            )
-            route = execution_path
-            usage_started = time.perf_counter()
-            usage = self.product_search_service._record_usage(result)
-            usage_ms = (time.perf_counter() - usage_started) * 1000
-            analytics_result = {
-                **result,
-                "query_model_metrics": (
-                    result.get("query_model_metrics")
-                    or planned.get("query_model_metrics")
-                    or {}
-                ),
-                "plan_cache_hit": bool(planned.get("plan_cache_hit")),
-            }
+        page = self._pages.execute(
+            request,
+            planned,
+            effective,
+            allowed_ad_types,
+            page_size=page_size,
+            execution_path=execution_path,
+            database_only_filters=database_only_filters,
+            speculative_embedding_future=speculative_embedding_future,
+        )
         card_mapping_started = time.perf_counter()
-        cards = [self._card(row) for row in rows]
+        cards = [self._card(row) for row in page.rows]
         card_mapping_ms = (time.perf_counter() - card_mapping_started) * 1000
         response: dict[str, Any] = {
             "status": True,
             "message": "",
             "data": cards,
             "current_page": request.page,
-            "last_page": max(1, math.ceil(total / page_size)),
+            "last_page": max(1, math.ceil(page.total / page_size)),
             "image_path": self.profile.compatibility.image_path,
         }
         if self.profile.compatibility.emit_search_meta:
             response["search_meta"] = {
-                "route": route,
+                "route": page.route,
                 **meta,
                 "explicit_filters": request.filter.model_dump(),
                 "effective_filters": effective,
-                "total_results": total,
+                "total_results": page.total,
                 "result_window_limited": (
-                    route in {"semantic", "direct_semantic"} and window_limited
+                    page.route in {"semantic", "direct_semantic"}
+                    and page.window_limited
                 ),
-                "usage": usage,
+                "usage": page.usage,
             }
         recent_started = time.perf_counter()
         if request.page == 1 and request.searchTerm:
             self.remember_search(user_id, request.searchTerm)
         recent_ms = (time.perf_counter() - recent_started) * 1000
         duration_ms = (time.perf_counter() - request_started) * 1000
-        analytics_result["_analytics_timings_ms"] = {
+        page.analytics_result["_analytics_timings_ms"] = {
             "total_server_ms": duration_ms,
             "planning_ms": planning_ms,
-            "engine_total_ms": engine_ms,
-            "database_filter_ms": database_ms,
-            "eligibility_ms": eligibility_ms,
-            "hydration_ms": hydration_ms,
+            "engine_total_ms": page.engine_ms,
+            "database_filter_ms": page.database_ms,
+            "eligibility_ms": page.eligibility_ms,
+            "hydration_ms": page.hydration_ms,
             "response_mapping_ms": card_mapping_ms,
-            "usage_recording_ms": usage_ms,
+            "usage_recording_ms": page.usage_ms,
             "recent_search_ms": recent_ms,
         }
         # Analytics uses client-selected structured filters, never location
         # terms inferred from chat text.
-        analytics_result["resolved_filters"] = copy.deepcopy(effective)
-        analytics_result["_analytics_target_ad_type"] = (
+        page.analytics_result["resolved_filters"] = copy.deepcopy(effective)
+        page.analytics_result["_analytics_target_ad_type"] = (
             "offer"
             if allowed_ad_types == {"1"}
             else "wanted"
             if allowed_ad_types == {"2"}
             else "offer_and_wanted"
         )
-        analytics_result["_analytics_explicit_filters"] = (
+        page.analytics_result["_analytics_explicit_filters"] = (
             self.analytics_failure_context(request)["explicit_filters"]
         )
-        analytics_result["_analytics_inferred_filters"] = (
+        page.analytics_result["_analytics_inferred_filters"] = (
             self.product_search_service._analytics_filter_context(
                 {"resolved_filters": copy.deepcopy(meta["auto_filters"])}
             )
         )
-        analytics_result["_analytics_ignored_filter_names"] = sorted(
+        page.analytics_result["_analytics_ignored_filter_names"] = sorted(
             str(name) for name in meta["ignored_auto_filters"]
         )
-        analytics_result["_analytics_candidate_counts"] = {
+        page.analytics_result["_analytics_candidate_counts"] = {
             "retrieved_candidates": (
-                int(total)
+                int(page.total)
                 if execution_path == "deterministic_filter"
-                else len(analytics_result.get("product_ids") or ())
+                else len(page.analytics_result.get("product_ids") or ())
             ),
-            "eligible_candidates": int(total),
+            "eligible_candidates": int(page.total),
             "hydrated_results": len(cards),
             "returned_results": len(cards),
         }
         analytics_deferred = (
-            total == 0
+            page.total == 0
             and request.page == 1
             and (
                 self._defer_zero_result_analytics(
@@ -625,23 +496,23 @@ class GainrCompatibilityService:
                     product_ids=(
                         None
                         if execution_path == "deterministic_filter"
-                        else list(analytics_result.get("product_ids") or ())
+                        else list(page.analytics_result.get("product_ids") or ())
                     ),
-                    analytics_result=analytics_result,
+                    analytics_result=page.analytics_result,
                     duration_ms=duration_ms,
                     result_count=len(cards),
-                    total_results=total,
-                    trace_id=trace_id,
+                    total_results=page.total,
+                    trace_id=page.trace_id,
                 )
             )
         )
         if not analytics_deferred:
             self.product_search_service.record_search_analytics(
                 request.searchTerm,
-                analytics_result,
+                page.analytics_result,
                 duration_ms=duration_ms,
                 result_count=len(cards),
-                total_results=total,
+                total_results=page.total,
             )
 
         route_reason = planned["query_plan"].get("route_reason") or "none"
@@ -654,23 +525,23 @@ class GainrCompatibilityService:
             "eligibility_ms=%.0f "
             "hydration_ms=%.0f response_map_ms=%.0f usage_ms=%.0f "
             "recent_ms=%.0f products=%d duration_ms=%.0f",
-            trace_id,
-            route,
+            page.trace_id,
+            page.route,
             route_reason,
             query_words,
             planning_ms,
-            engine_ms,
-            database_ms,
-            eligibility_source,
-            eligibility_ms,
-            hydration_ms,
+            page.engine_ms,
+            page.database_ms,
+            page.eligibility_source,
+            page.eligibility_ms,
+            page.hydration_ms,
             card_mapping_ms,
-            usage_ms,
+            page.usage_ms,
             recent_ms,
             len(cards),
             duration_ms,
         )
-        if route == "deterministic":
+        if page.route == "deterministic":
             self.product_search_service.record_external_search(
                 request.searchTerm,
                 execution_path="deterministic_filter",
@@ -686,9 +557,9 @@ class GainrCompatibilityService:
                     {
                         "step": "database_filter",
                         "status": "complete",
-                        "duration_ms": round(database_ms, 3),
-                        "page_rows": len(rows),
-                        "total_results": total,
+                        "duration_ms": round(page.database_ms, 3),
+                        "page_rows": len(page.rows),
+                        "total_results": page.total,
                     },
                     {
                         "step": "response_map",
@@ -856,119 +727,13 @@ class GainrCompatibilityService:
         *,
         product_ids: list[Any] | None,
     ) -> dict[str, Any]:
-        """Measure which applied filter can recover candidates when removed."""
-        variants: dict[str, tuple[dict, GainrSearchFilter, set[str] | None]] = {}
-
-        def without_categorical(*names: str) -> dict:
-            relaxed = copy.deepcopy(effective)
-            categorical = relaxed.setdefault("categorical", {})
-            for name in names:
-                categorical.pop(name, None)
-            return relaxed
-
-        category_names = (
-            "main_category_name",
-            "main_category_id",
-            "subcategory_name",
-            "subcategory_id",
-        )
-        if (
-            any(
-                name in dict(effective.get("categorical") or {})
-                for name in category_names
-            )
-            or request.filter.category_id not in (None, "")
-            or (request.filter.subcategory_id not in (None, ""))
-        ):
-            variants["without_category"] = (
-                without_categorical(*category_names),
-                request.filter.model_copy(
-                    update={
-                        "category_id": "",
-                        "subcategory_id": "",
-                        "category_type": "",
-                    }
-                ),
-                allowed_ad_types,
-            )
-
-        location_names = (
-            "state_name",
-            "state_id",
-            "city_name",
-            "city_id",
-            "locality_name",
-            "locality_id",
-        )
-        if (
-            any(
-                name in dict(effective.get("categorical") or {})
-                for name in location_names
-            )
-            or request.filter.city_id is not None
-            or request.filter.locality_id
-        ):
-            variants["without_location"] = (
-                without_categorical(*location_names),
-                request.filter.model_copy(update={"city_id": None, "locality_id": []}),
-                allowed_ad_types,
-            )
-
-        if allowed_ad_types != {"1", "2"} or request.filter.ad_type:
-            variants["without_ad_type"] = (
-                copy.deepcopy(effective),
-                request.filter.model_copy(update={"ad_type": []}),
-                {"1", "2"},
-            )
-
-        if (
-            effective.get("min_rental_fee") is not None
-            or effective.get("max_rental_fee") is not None
-            or request.filter.fee
-        ):
-            relaxed = copy.deepcopy(effective)
-            relaxed.pop("min_rental_fee", None)
-            relaxed.pop("max_rental_fee", None)
-            variants["without_price"] = (
-                relaxed,
-                request.filter.model_copy(
-                    update={"min_fee": None, "max_fee": None, "fee": []}
-                ),
-                allowed_ad_types,
-            )
-
-        if request.filter.attribute_value:
-            variants["without_attributes"] = (
-                copy.deepcopy(effective),
-                request.filter.model_copy(update={"attribute_value": []}),
-                allowed_ad_types,
-            )
-
-        if not variants:
-            return {
-                "evidence_complete": True,
-                "diagnosis": "no_structured_filter_blocker",
-                "counterfactual_counts": {},
-                "blocking_filters": [],
-            }
-        counts = self.repository.count_filter_variants(
-            variants,
+        return zero_result_filter_diagnostics(
+            self.repository.count_filter_variants,
+            request,
+            effective,
+            allowed_ad_types,
             product_ids=product_ids,
-            fallback_term=(request.searchTerm if product_ids is None else ""),
         )
-        blocking = [
-            name.removeprefix("without_") for name, count in counts.items() if count > 0
-        ]
-        return {
-            "evidence_complete": True,
-            "diagnosis": (
-                "filter_blocked_candidates"
-                if blocking
-                else "no_candidates_after_relaxing_single_filters"
-            ),
-            "counterfactual_counts": counts,
-            "blocking_filters": blocking,
-        }
 
     @staticmethod
     def analytics_failure_context(request: GainrFilterResultRequest) -> dict[str, Any]:
@@ -992,129 +757,13 @@ class GainrCompatibilityService:
             context["target_ad_type"] = list(explicit.ad_type)
         return {"explicit_filters": context, **context}
 
-    @staticmethod
-    def _integer(value):
-        if value in (None, ""):
-            return None
-        try:
-            return int(value)
-        except (TypeError, ValueError):
-            return value
+    _integer = staticmethod(_integer)
 
-    @staticmethod
-    def _number(value):
-        if value in (None, ""):
-            return None
-        try:
-            number = float(value)
-        except (TypeError, ValueError):
-            return value
-        return int(number) if number.is_integer() else number
+    _number = staticmethod(_number)
 
-    def _user_payload(
-        self,
-        raw_user: dict[str, Any] | None,
-    ) -> dict[str, Any] | None:
-        if not raw_user:
-            return None
-        user = {}
-        for field in GAINR_USER_FIELDS:
-            value = raw_user.get(field)
-            if isinstance(value, str) and value.strip().upper() == "NULL":
-                value = None
-            if field in GAINR_USER_INTEGER_FIELDS:
-                value = self._integer(value)
-            elif field == "available_credit":
-                value = self._number(value)
-            user[field] = value
-        return user
+    _user_payload = staticmethod(_user_payload)
 
-    def _card(self, row: dict[str, Any]) -> dict[str, Any]:
-        card = {
-            field: row.get(field)
-            for field in (
-                "id",
-                "type",
-                "user_id",
-                "category_type",
-                "parent_id",
-                "slug",
-                "category_id",
-                "title",
-                "rental_duration",
-                "rental_fee",
-                "is_rent_negotiable",
-                "city_id",
-                "locality_id",
-                "description",
-                "photos",
-                "total_favorite",
-                "total_like",
-                "status",
-                "service_ad_count",
-                "users_rating_count",
-                "rating_avg",
-                "boost_ad_count",
-                "is_aadhar_gst_verified_count",
-            )
-        }
-        for field in GAINR_CARD_INTEGER_FIELDS:
-            card[field] = self._integer(card.get(field))
-        for field in ("rental_fee", "rating_avg"):
-            card[field] = self._number(card.get(field))
-        card["service_ad_count"] = card.get("service_ad_count") or 0
-        card["boost_ad_count"] = card.get("boost_ad_count") or 0
-        card["is_aadhar_gst_verified_count"] = (
-            card.get("is_aadhar_gst_verified_count") or 0
-        )
-        city_id = card.get("city_id")
-        locality_id = card.get("locality_id")
-        city_name = row.get("__city_name")
-        locality_name = row.get("__locality_name")
-        attributes = [
-            {
-                "ads_id": self._integer(attribute.get("ads_id")),
-                "attribute_id": self._integer(attribute.get("attribute_id")),
-                "value": self._integer(attribute.get("value")),
-            }
-            for attribute in row.get("__ads_attributes", [])
-        ]
-        verified_user = self._user_payload(row.get("__user"))
-        compact_user = None
-        is_verified = False
-        if verified_user is not None:
-            is_verified = (
-                self._integer(verified_user.get("is_aadhaar_gst_verified")) == 1
-            )
-            compact_user = {
-                "prosper_id": verified_user.get("prosper_id"),
-                "id": verified_user.get("id"),
-                "is_aadhaar_gst_verified": (
-                    verified_user.get("is_aadhaar_gst_verified")
-                ),
-            }
-            card["is_aadhar_gst_verified_count"] = 1 if is_verified else 0
-        card.update(
-            {
-                "ads_attributes": attributes,
-                "city": (
-                    {"id": city_id, "city": city_name}
-                    if city_id is not None and city_name
-                    else None
-                ),
-                "locality": (
-                    {"id": locality_id, "area": locality_name}
-                    if locality_id is not None and locality_name
-                    else None
-                ),
-                "favorites": None,
-                "ads_likes": None,
-                "user": compact_user,
-                "boost_ad": None,
-                "is_aadhar_gst_verified": (verified_user if is_verified else None),
-            }
-        )
-        return card
+    _card = staticmethod(_card)
 
     @staticmethod
     def _recent_scope(user_id: str | None) -> str | None:

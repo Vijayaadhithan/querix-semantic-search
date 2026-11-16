@@ -1,4 +1,3 @@
-import json
 import logging
 import threading
 import time
@@ -17,10 +16,11 @@ from storage.mysql import (
 )
 from tenants.gainr.models import (
     DURATION_ORDER,
-    GAINR_USER_FIELDS,
     GainrSearchFilter,
     _unique,
 )
+from tenants.gainr.relations import GainrRelationHydrator
+from tenants.gainr.sql_filters import build_where_clause
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -97,7 +97,11 @@ class GainrDatabaseRepository:
         self._parallel_catalog_slots = threading.BoundedSemaphore(
             min(2, max(1, self.config.pool_max_size // 2))
         )
-        self._users_table_available: bool | None = None
+        self._relations = GainrRelationHydrator(
+            profile,
+            lambda: self.connection(),
+            database_pool,
+        )
 
     @contextmanager
     def connection(self):
@@ -111,14 +115,6 @@ class GainrDatabaseRepository:
             config=self.config,
         ) as connection:
             yield connection
-
-    @contextmanager
-    def _connection_scope(self, connection=None):
-        if connection is not None:
-            yield connection
-            return
-        with self.connection() as active_connection:
-            yield active_connection
 
     @retry_transient_mysql_read
     def active_boosted_ad_ids(self) -> set[str]:
@@ -238,24 +234,6 @@ class GainrDatabaseRepository:
         )
         return durations, localities
 
-    @staticmethod
-    def _append_condition(
-        conditions: list[str],
-        params: list[Any],
-        expression: str,
-        value,
-    ) -> None:
-        if isinstance(value, (list, tuple, set)):
-            values = list(dict.fromkeys(value))
-            if not values:
-                return
-            placeholders = ", ".join("%s" for _ in values)
-            conditions.append(f"{expression} IN ({placeholders})")
-            params.extend(values)
-            return
-        conditions.append(f"{expression} = %s")
-        params.append(value)
-
     def _where_clause(
         self,
         resolved_filters: dict,
@@ -265,139 +243,17 @@ class GainrDatabaseRepository:
         fallback_term: str = "",
         allowed_ad_types: set[str] | None = None,
     ) -> tuple[str, list[Any]]:
-        conditions = []
-        card_alias = "sr" if self.serves_cards_from_search_ready else "a"
-        if self.serves_cards_from_search_ready:
-            # Search-ready is an ETL projection and can briefly remain active
-            # after the authoritative ad has been disabled or deleted. Every
-            # client-facing card query must recheck the live ad row.
-            conditions.append(
-                "EXISTS ("
-                f"SELECT 1 FROM {self.result_table} AS live_ad "
-                "WHERE live_ad.id = sr.id "
-                "AND live_ad.status = 1 "
-                "AND (live_ad.deleted_at IS NULL "
-                "OR TRIM(live_ad.deleted_at) = '')"
-                ")"
-            )
-        else:
-            conditions.extend(
-                (
-                    "a.status = 1",
-                    "(a.deleted_at IS NULL OR TRIM(a.deleted_at) = '')",
-                )
-            )
-        if self.search_active_qualified_condition:
-            conditions.insert(0, self.search_active_qualified_condition)
-        params: list[Any] = []
-        column_map = {
-            "main_category_name": "sr.main_category_name",
-            "subcategory_name": "sr.subcategory_name",
-            "state_name": "sr.state_name",
-            "city_name": "sr.city_name",
-            "locality_name": "sr.locality_name",
-            "rental_duration": "sr.rental_duration",
-            "main_category_id": "sr.main_category_id",
-            "subcategory_id": "sr.subcategory_id",
-            "state_id": "sr.state_id",
-            "city_id": "sr.city_id",
-            "locality_id": "sr.locality_id",
-            "user_gender": "sr.user_gender",
-        }
-        for key, value in resolved_filters.get("categorical", {}).items():
-            expression = column_map.get(key)
-            if expression is not None:
-                self._append_condition(
-                    conditions,
-                    params,
-                    expression,
-                    value,
-                )
-        category_type = request_filter.category_type
-        if category_type not in ("", None):
-            if category_type in (1, 2):
-                self._append_condition(
-                    conditions,
-                    params,
-                    "sr.category_type",
-                    category_type,
-                )
-            elif category_type == 3:
-                # The search-ready projection has no boost count. Match the
-                # authoritative, date-bounded boost rows used for promotion.
-                conditions.append(
-                    "sr.id IN ("
-                    f"SELECT boost.ads_id FROM {_BOOST_ADS_TABLE} AS boost "
-                    "WHERE boost.deleted_at IS NULL "
-                    "AND boost.start_date <= CURDATE() "
-                    "AND boost.end_date >= CURDATE()"
-                    ")"
-                )
-        if request_filter.attribute_value:
-            attribute_conditions = []
-            for value in request_filter.attribute_value:
-                attribute_conditions.append("JSON_CONTAINS(sr.ads_attributes_json, %s)")
-                params.append(json.dumps({"value": value}, ensure_ascii=False))
-            conditions.append(f"({' OR '.join(attribute_conditions)})")
-        minimum = resolved_filters.get("min_rental_fee")
-        maximum = resolved_filters.get("max_rental_fee")
-        if minimum is not None or maximum is not None:
-            priced_conditions = ["sr.rental_fee > 1"]
-            priced_params = []
-            if minimum is not None:
-                priced_conditions.append("sr.rental_fee >= %s")
-                priced_params.append(minimum)
-            if maximum is not None:
-                priced_conditions.append("sr.rental_fee <= %s")
-                priced_params.append(maximum)
-            priced_clause = " AND ".join(priced_conditions)
-            if allowed_ad_types is not None and "2" in allowed_ad_types:
-                conditions.append(
-                    f"(({card_alias}.type = %s AND "
-                    "(sr.rental_fee IS NULL OR sr.rental_fee <= 1)) "
-                    f"OR ({priced_clause}))"
-                )
-                params.append("2")
-            else:
-                conditions.append(f"({priced_clause})")
-            params.extend(priced_params)
-        if allowed_ad_types is not None:
-            self._append_condition(
-                conditions,
-                params,
-                f"{card_alias}.type",
-                sorted(allowed_ad_types),
-            )
-        if request_filter.fee:
-            compatibility = self.profile.compatibility
-            negotiable_values = []
-            for value in request_filter.fee:
-                if value == compatibility.fixed_fee_id:
-                    negotiable_values.append(0)
-                elif value == compatibility.negotiable_fee_id:
-                    negotiable_values.append(1)
-            if negotiable_values:
-                self._append_condition(
-                    conditions,
-                    params,
-                    f"{card_alias}.is_rent_negotiable",
-                    negotiable_values,
-                )
-        if product_ids is not None:
-            if not product_ids:
-                conditions.append("1 = 0")
-            else:
-                self._append_condition(
-                    conditions,
-                    params,
-                    "sr.id",
-                    product_ids,
-                )
-        elif fallback_term and not resolved_filters.get("categorical"):
-            contains = f"%{fallback_term}%"
-            conditions.append("(sr.title LIKE %s OR sr.bm25_content LIKE %s)")
-            params.extend((contains, contains))
-        return " AND ".join(conditions), params
+        return build_where_clause(
+            resolved_filters,
+            request_filter,
+            serves_cards_from_search_ready=self.serves_cards_from_search_ready,
+            result_table=self.result_table,
+            search_active_qualified_condition=self.search_active_qualified_condition,
+            compatibility=self.profile.compatibility,
+            product_ids=product_ids,
+            fallback_term=fallback_term,
+            allowed_ad_types=allowed_ad_types,
+        )
 
     @retry_transient_mysql_read
     def search_catalog(
@@ -499,7 +355,7 @@ class GainrDatabaseRepository:
             finally:
                 if parallel:
                     self._parallel_catalog_slots.release()
-            self._attach_search_ready_relations(rows)
+            self._relations.attach_search_ready(rows)
             return rows, total
 
         def fetch_total(connection) -> int:
@@ -634,7 +490,7 @@ class GainrDatabaseRepository:
                 if str(product_id) in rows_by_id
             ]
             if self.serves_cards_from_search_ready:
-                self._attach_search_ready_relations(ordered)
+                self._relations.attach_search_ready(ordered)
             else:
                 # Reuse the connection that just completed the main hydration.
                 # Opening relation work across three pooled remote connections can
@@ -812,7 +668,7 @@ class GainrDatabaseRepository:
                 total = int(cursor.fetchone()["total"])
                 query_ms += (time.perf_counter() - count_started) * 1000
         decode_started = time.perf_counter()
-        self._attach_search_ready_relations(rows)
+        self._relations.attach_search_ready(rows)
         relation_decode_ms = (time.perf_counter() - decode_started) * 1000
         total_ms = (time.perf_counter() - started) * 1000
         logger.info(
@@ -827,228 +683,7 @@ class GainrDatabaseRepository:
         )
         return rows, total
 
-    @staticmethod
-    def _json_list(value: Any) -> list[dict]:
-        if isinstance(value, list):
-            return [dict(item) for item in value if isinstance(item, dict)]
-        if not isinstance(value, str) or not value.strip():
-            return []
-        try:
-            parsed = json.loads(value)
-        except (TypeError, ValueError):
-            logger.warning("Gainr search-ready relation JSON is invalid")
-            return []
-        if not isinstance(parsed, list):
-            return []
-        return [dict(item) for item in parsed if isinstance(item, dict)]
-
-    def _attach_search_ready_relations(self, rows: list[dict]) -> None:
-        for row in rows:
-            row["__ads_attributes"] = self._json_list(
-                row.pop("ads_attributes_json", None)
-            )
-            user_id = row.get("user_id")
-            if user_id in (None, ""):
-                row["__user"] = None
-                continue
-            row["__user"] = {
-                "id": user_id,
-                "prosper_id": row.pop("user_prosper_id", None),
-                "name": row.pop("user_name", None),
-                "photo": row.pop("user_photo", None),
-                "is_aadhaar_gst_verified": row.pop(
-                    "user_is_aadhaar_gst_verified",
-                    None,
-                ),
-            }
-
     def _attach_attributes(
-        self,
-        rows: list[dict],
-        *,
-        connection=None,
+        self, rows: list[dict], *, connection=None
     ) -> dict[str, int]:
-        if self.serves_cards_from_search_ready:
-            self._attach_search_ready_relations(rows)
-            return {}
-        product_ids = [
-            row.get(self.config.result_id_column)
-            for row in rows
-            if row.get(self.config.result_id_column) is not None
-        ]
-        if not product_ids:
-            return {}
-        placeholders = ", ".join("%s" for _ in product_ids)
-        attributes = []
-        service_counts = []
-        users = []
-        timings: dict[str, int] = {}
-        user_ids = _unique(
-            [row.get("user_id") for row in rows if row.get("user_id") not in (None, "")]
-        )
-
-        def fetch_attributes(active_connection) -> list[dict]:
-            started = time.perf_counter()
-            try:
-                with active_connection.cursor() as cursor:
-                    cursor.execute(
-                        f"""
-                        SELECT ads_id, attribute_id, value
-                        FROM {quote_mysql_identifier("ads_attributes")}
-                        WHERE ads_id IN ({placeholders})
-                          AND (deleted_at IS NULL OR TRIM(deleted_at) = '')
-                        ORDER BY id
-                        """,
-                        product_ids,
-                    )
-                    return list(cursor.fetchall())
-            finally:
-                timings["attributes"] = round((time.perf_counter() - started) * 1000)
-
-        def fetch_service_counts(active_connection) -> list[dict]:
-            if not user_ids:
-                return []
-            user_placeholders = ", ".join("%s" for _ in user_ids)
-            started = time.perf_counter()
-            try:
-                with active_connection.cursor() as cursor:
-                    cursor.execute(
-                        f"""
-                        SELECT user_id, COUNT(*) AS service_ad_count
-                        FROM {self.result_table}
-                        WHERE user_id IN ({user_placeholders})
-                          AND category_type = 2
-                          AND status = 1
-                          AND (
-                              deleted_at IS NULL
-                              OR TRIM(deleted_at) = ''
-                          )
-                        GROUP BY user_id
-                        """,
-                        user_ids,
-                    )
-                    return list(cursor.fetchall())
-            finally:
-                timings["service_counts"] = round(
-                    (time.perf_counter() - started) * 1000
-                )
-
-        def fetch_users(active_connection) -> list[dict]:
-            if not user_ids or self._users_table_available is False:
-                return []
-            user_placeholders = ", ".join("%s" for _ in user_ids)
-            selected_fields = ", ".join(
-                quote_mysql_identifier(field) for field in GAINR_USER_FIELDS
-            )
-            started = time.perf_counter()
-            try:
-                with active_connection.cursor() as cursor:
-                    cursor.execute(
-                        f"""
-                        SELECT {selected_fields}
-                        FROM {self.users_table}
-                        WHERE id IN ({user_placeholders})
-                        """,
-                        user_ids,
-                    )
-                    return list(cursor.fetchall())
-            finally:
-                timings["users"] = round((time.perf_counter() - started) * 1000)
-
-        def run_with_connection(fetcher) -> list[dict]:
-            with self.connection() as active_connection:
-                return fetcher(active_connection)
-
-        if self.database_pool is not None and connection is None:
-            with ThreadPoolExecutor(
-                max_workers=3,
-                thread_name_prefix="gainr-relations",
-            ) as executor:
-                attributes_future = executor.submit(
-                    run_with_connection,
-                    fetch_attributes,
-                )
-                service_counts_future = (
-                    executor.submit(
-                        run_with_connection,
-                        fetch_service_counts,
-                    )
-                    if user_ids
-                    else None
-                )
-                users_future = (
-                    executor.submit(
-                        run_with_connection,
-                        fetch_users,
-                    )
-                    if user_ids and self._users_table_available is not False
-                    else None
-                )
-                try:
-                    attributes = attributes_future.result()
-                except Exception:
-                    logger.exception("Gainr ad attribute hydration failed")
-                if service_counts_future is not None:
-                    try:
-                        service_counts = service_counts_future.result()
-                    except Exception:
-                        logger.exception("Gainr service count hydration failed")
-                if users_future is not None:
-                    try:
-                        users = users_future.result()
-                        self._users_table_available = True
-                    except Exception as exc:
-                        self._handle_user_hydration_error(exc)
-        else:
-            try:
-                with self._connection_scope(connection) as active_connection:
-                    attributes = fetch_attributes(active_connection)
-                    service_counts = fetch_service_counts(active_connection)
-            except Exception:
-                logger.exception("Gainr ad relation hydration failed")
-            if user_ids and self._users_table_available is not False:
-                try:
-                    with self._connection_scope(connection) as active_connection:
-                        users = fetch_users(active_connection)
-                    self._users_table_available = True
-                except Exception as exc:
-                    self._handle_user_hydration_error(exc)
-
-        by_product: dict[str, list[dict]] = {}
-        for attribute in attributes:
-            by_product.setdefault(
-                str(attribute.get("ads_id")),
-                [],
-            ).append(dict(attribute))
-        counts_by_user = {
-            str(item.get("user_id")): item.get("service_ad_count", 0)
-            for item in service_counts
-        }
-        users_by_id = {
-            str(item.get("id")): dict(item)
-            for item in users
-            if item.get("id") not in (None, "")
-        }
-        for row in rows:
-            row["__ads_attributes"] = by_product.get(
-                str(row.get(self.config.result_id_column)),
-                [],
-            )
-            row["service_ad_count"] = counts_by_user.get(
-                str(row.get("user_id")),
-                0,
-            )
-            row["__user"] = users_by_id.get(str(row.get("user_id")))
-        return timings
-
-    def _handle_user_hydration_error(self, exc: Exception) -> None:
-        if exc.args and exc.args[0] == 1146:
-            self._users_table_available = False
-            logger.warning(
-                "Gainr users table %s is missing; user fields "
-                "will remain null until it is imported and the "
-                "API is restarted",
-                self.profile.compatibility.users_table,
-            )
-        else:
-            logger.exception("Gainr user hydration failed")
+        return self._relations.attach(rows, connection=connection)
