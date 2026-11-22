@@ -23,6 +23,7 @@ def query_records(
     limit: int,
     cursor: str | None = None,
     query: str | None = None,
+    exact_phrase: bool = False,
     outcome: str | None = None,
     category: str | None = None,
     execution_path: str | None = None,
@@ -88,7 +89,10 @@ def query_records(
             normalized_direction,
         ):
             raise ValueError("Analytics query cursor does not match sorting")
-    if query:
+    if query and exact_phrase:
+        clauses.append(f"trim(json_extract(records.{field}, '$.normalized_query')) = ?")
+        values.append(query)
+    elif query:
         clauses.append("LOWER(records.query_text) LIKE ? ESCAPE '\\'")
         escaped = (
             query.casefold()

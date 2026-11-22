@@ -140,7 +140,7 @@ def activity_view_key(filters: DashboardFilters) -> str | None:
         period=filters.period, request_scope=filters.request_scope
     ):
         return None
-    return f"activity:{filters.period}:{filters.request_scope}"
+    return f"activity:v2:{filters.period}:{filters.request_scope}"
 
 
 def prepare_snapshot_views(

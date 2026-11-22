@@ -78,6 +78,7 @@ from verticals.marketplace.analytics.dashboard_summaries import (
 
 
 def _filtered_company_insights(records: Iterable[dict[str, Any]]) -> dict[str, Any]:
+    phrases = Counter()
     demand = Counter()
     unmet = defaultdict(Counter)
     ad_types = defaultdict(Counter)
@@ -105,6 +106,10 @@ def _filtered_company_insights(records: Iterable[dict[str, Any]]) -> dict[str, A
         )
         outcome = str(record.get("outcome") or "telemetry_missing")
         ad_type = str(applied.get("target_ad_type") or "not recorded")
+        if outcome == "zero_result" and _record_request_kind(record) == "text_search":
+            phrase = str(record.get("normalized_query") or "").strip()
+            if phrase:
+                phrases[phrase] += 1
         demand[category] += 1
         unmet[(city, category)][outcome] += 1
         unmet[(city, category)]["searches"] += 1
@@ -140,6 +145,16 @@ def _filtered_company_insights(records: Iterable[dict[str, Any]]) -> dict[str, A
         demand.items(), key=lambda item: (-item[1], item[0].casefold())
     )[:20]
     return {
+        "filtered_no_result_phrases": {
+            "title": "Top searches with no results",
+            "chart_type": "table",
+            "data": [
+                {"query": phrase, "count": count}
+                for phrase, count in sorted(
+                    phrases.items(), key=lambda item: (-item[1], item[0])
+                )[:10]
+            ],
+        },
         "filtered_catalog_demand": {
             "title": "What did customers look for in this filtered scope?",
             "chart_type": "bar",

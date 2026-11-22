@@ -198,3 +198,33 @@ def test_custom_period_requires_boundary():
 def test_language_detection_uses_cautious_latin_tamil_label():
     assert detect_language("enakku bike venum") == "Likely Tamil (Latin script)"
     assert detect_language("house in anna nagar") == "English"
+
+
+def test_drilldown_buckets_clip_dst_hours_and_share_failure_outcomes():
+    records = [
+        _record("one", "2026-11-01T05:45:00Z", outcome="failure"),
+        _record("two", "2026-11-01T06:15:00Z", outcome="telemetry_missing"),
+    ]
+    filters = DashboardFilters(
+        period="custom",
+        created_from=datetime.fromisoformat("2026-11-01T05:40:00.123456+00:00"),
+        created_to=datetime.fromisoformat("2026-11-01T06:20:00.654321+00:00"),
+    )
+    overview = build_dashboard_overview(
+        records,
+        internal=True,
+        filters=filters,
+        timezone_name="America/New_York",
+    )["filtered_overview"]
+    graph = overview["main_graph"]
+    assert overview["summary"]["failed_outcomes"] == 1
+    assert next(
+        s["values"] for s in graph["series"] if s["name"] == "Failed outcomes"
+    ) == [1, 0]
+    assert graph["intervals"] == [
+        {
+            "from": "2026-11-01T05:40:00.123456+00:00",
+            "to": "2026-11-01T05:59:59.999999+00:00",
+        },
+        {"from": "2026-11-01T06:00:00+00:00", "to": "2026-11-01T06:20:00.654321+00:00"},
+    ]

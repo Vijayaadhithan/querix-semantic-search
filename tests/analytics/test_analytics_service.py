@@ -1609,6 +1609,26 @@ def test_api_enforces_company_and_internal_field_boundaries(
             "/api/v1/gainr/analytics/queries?outcome=zero_result",
             headers={"X-API-Key": "gainr-analytics-secret"},
         )
+        phrase = company_result.json()["filtered_insights"][
+            "filtered_no_result_phrases"
+        ]["data"][0]
+        query_params = {
+            "query": phrase["query"],
+            "exact_phrase": True,
+            "outcome": "zero_result",
+            "request_kind": "text_search",
+        }
+        for text, count in [
+            (phrase["query"], phrase["count"]),
+            (phrase["query"][:-1], 0),
+        ]:
+            matching = client.get(
+                "/api/v1/gainr/analytics/queries",
+                params={**query_params, "query": text},
+                headers={"X-API-Key": "gainr-analytics-secret"},
+            )
+            assert matching.status_code == 200
+            assert matching.json()["returned"] == count
         compact_page = client.get(
             "/api/v1/gainr/analytics/queries?include_facets=false",
             headers={"X-API-Key": "gainr-analytics-secret"},

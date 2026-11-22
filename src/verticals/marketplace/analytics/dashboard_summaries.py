@@ -214,6 +214,7 @@ def _internal_overview(
             "requests": total,
             "successful": int(successful),
             "failed": int(total - successful),
+            "failed_outcomes": int(outcomes["failure"]),
             "zero_results": int(outcomes["zero_result"]),
             "success_rate": round(successful / total * 100, 1) if total else 0,
             "average_latency_ms": round(mean(durations), 1) if durations else 0,

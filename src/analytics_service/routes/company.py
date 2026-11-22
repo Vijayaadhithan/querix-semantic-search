@@ -97,6 +97,7 @@ def register_company_routes(
         ),
         sort_direction: str = Query(default="desc", pattern="^(asc|desc)$"),
         query: str | None = Query(default=None, max_length=1000),
+        exact_phrase: bool = Query(default=False),
         outcome: str | None = Query(
             default=None,
             pattern="^(fulfilled|zero_result|failure|telemetry_missing)$",
@@ -134,6 +135,7 @@ def register_company_routes(
                 limit=limit,
                 cursor=cursor,
                 query=query,
+                exact_phrase=exact_phrase,
                 outcome=outcome,
                 category=category,
                 execution_path=None,

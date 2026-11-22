@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections import Counter, defaultdict
 from collections.abc import Iterable
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -73,6 +73,8 @@ def _activity_graph(
             status = str(dict(record.get("api") or {}).get("status") or "")
             key = "success" if status.casefold() in _SUCCESS_STATUSES else "failure"
             buckets[label][key] += 1
+            if record.get("outcome") == "failure":
+                buckets[label]["failed_outcome"] += 1
         else:
             outcome = str(record.get("outcome") or "unknown").casefold()
             if _record_request_kind(record) == "text_search":
@@ -87,12 +89,30 @@ def _activity_graph(
                 buckets[label]["browse"] += 1
                 if outcome == "failure":
                     buckets[label]["failure"] += 1
-    labels = sorted(buckets)
+    labels = sorted(buckets, key=datetime.fromisoformat)
+    intervals = []
+    for label in labels:
+        start = datetime.fromisoformat(label)
+        if granularity == "hour":
+            start = start.astimezone(UTC)
+            stop = start + timedelta(hours=1)
+        else:
+            start = start.replace(tzinfo=timezone)
+            stop = start + timedelta(days=7 if granularity == "week" else 1)
+        start = start.astimezone(UTC)
+        end = stop.astimezone(UTC) - timedelta(microseconds=1)
+        intervals.append(
+            {
+                "from": max(start, created_from or start).isoformat(),
+                "to": min(end, created_to or end).isoformat(),
+            }
+        )
     series_names = (
         (
             ("Requests", "total"),
             ("Successful", "success"),
             ("Failed", "failure"),
+            ("Failed outcomes", "failed_outcome"),
         )
         if internal
         else (
@@ -110,6 +130,7 @@ def _activity_graph(
         "granularity": granularity,
         "timezone": str(timezone),
         "labels": labels,
+        "intervals": intervals,
         "values": [int(buckets[label]["total"]) for label in labels],
         "series": [
             {
