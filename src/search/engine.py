@@ -377,7 +377,7 @@ class ProductSearchEngine(SearchEngineSupportMixin, SearchRankingMixin):
             "vector_count_ms=%.0f vector_embed_ms=%.0f vector_db_ms=%.0f "
             "vector_filter_ms=%.0f vector_strategy=%s vector_eligible=%s "
             "vector_eligible_capped=%s "
-            "vector_query_mode=%s vector_shadow_equal=%s "
+            "vector_query_mode=%s vector_shared_query=%s vector_shadow_equal=%s "
             "vector_shadow_error=%s "
             "vector_shadow_ms=%.0f vector_optimized_ms=%.0f "
             "parallel_ms=%.0f fusion_ms=%.0f type_lookup_ms=%.0f "
@@ -400,6 +400,7 @@ class ProductSearchEngine(SearchEngineSupportMixin, SearchRankingMixin):
             vector_metrics.get("eligible_rows", "unknown"),
             vector_metrics.get("eligible_rows_capped", False),
             vector_metrics.get("query_mode", "legacy"),
+            vector_metrics.get("shared_query", False),
             vector_metrics.get("shadow_equal", "not_run"),
             vector_metrics.get("shadow_error", "none"),
             vector_metrics.get("shadow_ms", 0.0),

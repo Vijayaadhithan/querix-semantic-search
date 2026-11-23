@@ -2,11 +2,18 @@
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from typing import Any
 
 from storage.vector_filters import (
     _filter_uses_index,
 )
+
+
+def _has_city_filter(where: dict[str, Any]) -> bool:
+    if "$and" in where:
+        return any(_has_city_filter(child) for child in where["$and"])
+    return "city_id" in where
 
 
 def _legacy_query_rows(
@@ -136,19 +143,26 @@ def _optimized_query_rows(
         and _filter_uses_index(where)
     )
     if indexed_filter:
-        cursor.execute(
-            f"""
-            SELECT COUNT(*) AS eligible_count
-            FROM (
-                SELECT 1
-                FROM {table_sql}
-                {where_clause}
-                LIMIT %s
-            ) AS eligible
-            """,
-            (*filter_params, exact_filter_max_rows + 1),
-        )
-        eligible_rows = int(cursor.fetchone()["eligible_count"])
+        # On broad cities a sequential scan detoasts thousands of metadata
+        # values just to choose a ranking strategy. Scope the index preference
+        # to this probe on the query's dedicated autocommit connection.
+        city_probe = _has_city_filter(where)
+        with cursor.connection.transaction() if city_probe else nullcontext():
+            if city_probe:
+                cursor.execute("SET LOCAL enable_seqscan = off")
+            cursor.execute(
+                f"""
+                SELECT COUNT(*) AS eligible_count
+                FROM (
+                    SELECT 1
+                    FROM {table_sql}
+                    {where_clause}
+                    LIMIT %s
+                ) AS eligible
+                """,
+                (*filter_params, exact_filter_max_rows + 1),
+            )
+            eligible_rows = int(cursor.fetchone()["eligible_count"])
         if eligible_rows <= exact_filter_max_rows:
             strategy = "exact_filtered"
             cursor.execute("SET enable_indexscan = off")

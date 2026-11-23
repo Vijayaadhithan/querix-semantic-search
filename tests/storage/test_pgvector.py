@@ -1,5 +1,7 @@
 import json
 import threading
+from concurrent.futures import Future, ThreadPoolExecutor
+from contextlib import contextmanager
 
 import pytest
 
@@ -387,6 +389,74 @@ def test_pgvector_broad_filter_can_use_bounded_unfiltered_hnsw(monkeypatch):
     assert query_params[-1] == 800
 
 
+def optimized_collection(monkeypatch):
+    monkeypatch.setattr(PgVectorCollection, "_require_table", lambda self: None)
+    config = PostgresRuntimeConfig("localhost", 5432, "vectors", "reader", "secret")
+    return PgVectorCollection(config, "gainr_vectors", 2, query_mode="optimized")
+
+
+@pytest.mark.parametrize("fail", [False, True])
+def test_filtered_query_shares_only_overlapping_identical_sql(monkeypatch, fail):
+    collection = optimized_collection(monkeypatch)
+    started = threading.Event()
+    joined = threading.Event()
+    calls = []
+
+    class WatchedFuture(Future):
+        def result(self, timeout=None):
+            joined.set()
+            return super().result(timeout=5)
+
+    def query_rows(table, cursor, **params):
+        vector = params["vector_literal"]
+        calls.append((vector, tuple(params["filter_params"])))
+        if len(calls) == 1:
+            started.set()
+            assert joined.wait(5)
+            if fail:
+                raise ValueError("query failed")
+        return [{"metadata": {"city": "A"}}], "hnsw_filtered", 101
+
+    monkeypatch.setattr(pgvector_store, "Future", WatchedFuture)
+    monkeypatch.setattr(pgvector_store, "_optimized_query_rows", query_rows)
+
+    def run(vector="[1,0]", city="A"):
+        return collection._optimized_query_rows(
+            None,
+            vector_literal=vector,
+            n_results=10,
+            where_clause="WHERE city = %s",
+            filter_clause="city = %s",
+            filter_params=[city],
+            where={"city_id": city},
+            exact_filter_max_rows=100,
+            post_filter_n_results=None,
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(run)
+        assert started.wait(5)
+        run(vector="[0,1]")
+        run(city="B")
+        second = pool.submit(run)
+        if fail:
+            for task in (first, second):
+                with pytest.raises(ValueError, match="query failed"):
+                    task.result(timeout=5)
+        else:
+            original, shared = first.result(timeout=5), second.result(timeout=5)
+            assert original == shared
+            original[0][0]["metadata"].clear()
+            assert shared[0][0]["metadata"] == {"city": "A"}
+    run()
+    assert calls == [
+        ("[1,0]", ("A",)),
+        ("[0,1]", ("A",)),
+        ("[1,0]", ("B",)),
+        ("[1,0]", ("A",)),
+    ]
+
+
 def test_pgvector_optimized_exact_filter_avoids_id_rejoin(monkeypatch):
     statements = []
 
@@ -441,19 +511,7 @@ def test_pgvector_optimized_exact_filter_avoids_id_rejoin(monkeypatch):
         "postgres_connection",
         lambda *_args, **_kwargs: FakeConnection(),
     )
-    collection = PgVectorCollection.__new__(PgVectorCollection)
-    collection.config = PostgresRuntimeConfig(
-        host="localhost",
-        port=5432,
-        database="vectors",
-        user="vectors",
-        password="secret",
-    )
-    collection.table = "gainr_vectors"
-    collection.dimensions = 2
-    collection.hnsw_ef_search = 100
-    collection.query_mode = "optimized"
-    collection._query_state = threading.local()
+    collection = optimized_collection(monkeypatch)
 
     results = collection.query(
         query_embeddings=[[0.1, 0.2]],
@@ -513,6 +571,12 @@ def test_pgvector_optimized_broad_filter_uses_iterative_hnsw(
             return self.rows
 
     class FakeConnection:
+        @contextmanager
+        def transaction(self):
+            statements.append(("BEGIN", None))
+            yield
+            statements.append(("COMMIT", None))
+
         def __enter__(self):
             return self
 
@@ -520,31 +584,21 @@ def test_pgvector_optimized_broad_filter_uses_iterative_hnsw(
             return False
 
         def cursor(self):
-            return FakeCursor()
+            cursor = FakeCursor()
+            cursor.connection = self
+            return cursor
 
     monkeypatch.setattr(
         pgvector_store,
         "postgres_connection",
         lambda *_args, **_kwargs: FakeConnection(),
     )
-    collection = PgVectorCollection.__new__(PgVectorCollection)
-    collection.config = PostgresRuntimeConfig(
-        host="localhost",
-        port=5432,
-        database="vectors",
-        user="vectors",
-        password="secret",
-    )
-    collection.table = "gainr_vectors"
-    collection.dimensions = 2
-    collection.hnsw_ef_search = 100
-    collection.query_mode = "optimized"
-    collection._query_state = threading.local()
+    collection = optimized_collection(monkeypatch)
 
     results = collection.query(
         query_embeddings=[[0.1, 0.2]],
         n_results=80,
-        where={"state_name": "Tamil Nadu"},
+        where={"$and": [{"state_name": "Tamil Nadu"}, {"city_id": 129}]},
         include=["documents", "metadatas", "distances"],
         exact_filter_max_rows=100,
         post_filter_n_results=800,
@@ -559,7 +613,13 @@ def test_pgvector_optimized_broad_filter_uses_iterative_hnsw(
         for entry in statements
         if entry[0].startswith("SELECT id, document, metadata")
     )
-    assert "WHERE metadata ->> 'state_name' = %s" in optimized_sql
+    assert "(metadata ->> 'state_name' = %s)" in optimized_sql
+    assert "(metadata ->> 'city_id' = %s)" in optimized_sql
+    commands = [sql for sql, _ in statements]
+    start = commands.index("BEGIN")
+    assert commands[start + 1] == "SET LOCAL enable_seqscan = off"
+    assert commands[start + 2].startswith("SELECT COUNT(*)")
+    assert commands[start + 3 : start + 5] == ["COMMIT", optimized_sql]
     assert "LIMIT %s" in optimized_sql
     assert optimized_params[-1] == 80
     assert not any(

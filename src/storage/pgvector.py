@@ -5,6 +5,8 @@ import json
 import threading
 import time
 from collections.abc import Callable
+from concurrent.futures import Future
+from copy import deepcopy
 from typing import Any
 
 from storage.postgres import (
@@ -58,6 +60,8 @@ class PgVectorCollection:
             raise ValueError("pgvector query_mode must be legacy, shadow, or optimized")
         self.query_mode = normalized_query_mode
         self._query_state = threading.local()
+        self._pending_lock = threading.Lock()
+        self._pending_filtered: dict[tuple, Future] = {}
         if create:
             self.initialize()
         else:
@@ -569,18 +573,50 @@ class PgVectorCollection:
         exact_filter_max_rows: int | None,
         post_filter_n_results: int | None,
     ) -> tuple[list[dict[str, Any]], str, int | None]:
-        return _optimized_query_rows(
-            self._qualified(),
-            cursor,
-            vector_literal=vector_literal,
-            n_results=n_results,
-            where_clause=where_clause,
-            filter_clause=filter_clause,
-            filter_params=filter_params,
-            where=where,
-            exact_filter_max_rows=exact_filter_max_rows,
-            post_filter_n_results=post_filter_n_results,
+        def execute():
+            return _optimized_query_rows(
+                self._qualified(),
+                cursor,
+                vector_literal=vector_literal,
+                n_results=n_results,
+                where_clause=where_clause,
+                filter_clause=filter_clause,
+                filter_params=filter_params,
+                where=where,
+                exact_filter_max_rows=exact_filter_max_rows,
+                post_filter_n_results=post_filter_n_results,
+            )
+
+        if self.query_mode != "optimized" or not filter_clause:
+            return execute()
+        # One collection belongs to one physical generation. Share only
+        # concurrent identical SQL inputs, including the actual embedding.
+        key = (
+            vector_literal,
+            n_results,
+            filter_clause,
+            tuple(filter_params),
+            exact_filter_max_rows,
+            post_filter_n_results,
         )
+        with self._pending_lock:
+            pending = self._pending_filtered.get(key)
+            owner = pending is None
+            if owner:
+                pending = self._pending_filtered[key] = Future()
+        if not owner:
+            self._query_state.shared_query = True
+            return deepcopy(pending.result())
+        try:
+            result = execute()
+            pending.set_result(deepcopy(result))
+            return result
+        except BaseException as exc:
+            pending.set_exception(exc)
+            raise
+        finally:
+            with self._pending_lock:
+                del self._pending_filtered[key]
 
     def query(
         self,
@@ -607,6 +643,7 @@ class PgVectorCollection:
         shadow_error = "none"
         shadow_legacy_rows = 0
         shadow_optimized_rows = 0
+        self._query_state.shared_query = False
         with postgres_connection(self.config, dict_rows=True) as connection:
             with connection.cursor() as cursor:
                 cursor.execute("SET hnsw.iterative_scan = strict_order")
@@ -691,6 +728,7 @@ class PgVectorCollection:
                 and eligible_rows == exact_filter_max_rows + 1
             ),
             "query_mode": query_mode,
+            "shared_query": self._query_state.shared_query,
             "database_ms": (optimized_ms if query_mode == "optimized" else legacy_ms),
             "legacy_ms": legacy_ms,
             "optimized_ms": optimized_ms,
