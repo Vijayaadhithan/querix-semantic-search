@@ -189,8 +189,8 @@ storage:
     table: gainr_search_vectors
     # Serve the reduced-payload SQL path after production shadow verification.
     query_mode: optimized
-    # Use the per-generation city lookup for broad city-only vector queries.
-    city_membership: true
+    # Enable after preparing and validating the PostgreSQL lookup tables.
+    city_membership: false
     # Block API readiness until the vector heap and HNSW index have been loaded
     # into PostgreSQL's fixed buffer pool. Broad HNSW queries otherwise pay
     # repeated buffer promotion costs after idle periods.
