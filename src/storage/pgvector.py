@@ -15,6 +15,11 @@ from storage.postgres import (
     qualified_table,
     quote_postgres_identifier,
 )
+from storage.vector_city_membership import (
+    city_membership_table,
+    ensure_city_membership,
+    has_city_membership,
+)
 from storage.vector_filters import (
     FILTER_INDEX_KEYS,
     _filter_uses_index,
@@ -47,6 +52,7 @@ class PgVectorCollection:
         hnsw_ef_construction: int = 64,
         hnsw_ef_search: int = 100,
         query_mode: str = "legacy",
+        use_city_membership: bool = False,
         create: bool = False,
     ):
         self.config = config
@@ -59,6 +65,8 @@ class PgVectorCollection:
         if normalized_query_mode not in {"legacy", "shadow", "optimized"}:
             raise ValueError("pgvector query_mode must be legacy, shadow, or optimized")
         self.query_mode = normalized_query_mode
+        self.use_city_membership = use_city_membership
+        self._city_membership_sql: str | None = None
         self._query_state = threading.local()
         self._pending_lock = threading.Lock()
         self._pending_filtered: dict[tuple, Future] = {}
@@ -83,9 +91,18 @@ class PgVectorCollection:
 
     @classmethod
     def drop_table(cls, config: PostgresRuntimeConfig, table: str) -> None:
-        with postgres_connection(config) as connection:
-            with connection.cursor() as cursor:
-                cursor.execute(f"DROP TABLE IF EXISTS {qualified_table(config, table)}")
+        table_sql = qualified_table(config, table)
+        membership_sql = city_membership_table(config, table)
+        with (
+            postgres_connection(config, dict_rows=True) as connection,
+            connection.transaction(),
+            connection.cursor() as cursor,
+        ):
+            has_membership = has_city_membership(cursor, table_sql, membership_sql)
+            cursor.execute(f"DROP TABLE IF EXISTS {table_sql}")
+            if has_membership:
+                cursor.execute(f"DROP TABLE {membership_sql}")
+                cursor.execute(f"DROP FUNCTION {membership_sql}()")
 
     def clone_to(self, table: str) -> PgVectorCollection:
         """Create and populate a second physical collection once.
@@ -125,6 +142,7 @@ class PgVectorCollection:
             hnsw_ef_construction=self.hnsw_ef_construction,
             hnsw_ef_search=self.hnsw_ef_search,
             query_mode=self.query_mode,
+            use_city_membership=self.use_city_membership,
             create=True,
         )
         with postgres_connection(self.config) as connection:
@@ -195,6 +213,10 @@ class PgVectorCollection:
                         f"pgvector table {self.config.schema}.{self.table} "
                         "does not exist. Run tenant ingestion first."
                     )
+                if self.use_city_membership:
+                    membership_sql = city_membership_table(self.config, self.table)
+                    if has_city_membership(cursor, self._qualified(), membership_sql):
+                        self._city_membership_sql = membership_sql
 
     def initialize(self) -> None:
         index_name = f"{self.table}_embedding_hnsw"
@@ -239,6 +261,9 @@ class PgVectorCollection:
                     """
                 )
         self.ensure_filter_indexes()
+        if self.use_city_membership:
+            ensure_city_membership(self.config, self.table)
+            self._city_membership_sql = city_membership_table(self.config, self.table)
 
     _metadata_key_literal = staticmethod(_metadata_key_literal)
 
@@ -585,6 +610,7 @@ class PgVectorCollection:
                 where=where,
                 exact_filter_max_rows=exact_filter_max_rows,
                 post_filter_n_results=post_filter_n_results,
+                city_membership_sql=self._city_membership_sql,
             )
 
         if self.query_mode != "optimized" or not filter_clause:

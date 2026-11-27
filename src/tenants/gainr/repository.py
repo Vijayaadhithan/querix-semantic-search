@@ -26,6 +26,7 @@ logger = logging.getLogger("uvicorn.error")
 
 _TRANSIENT_MYSQL_READ_ERROR_CODES = {2006, 2013}
 _BOOST_ADS_TABLE = quote_mysql_identifier("boost_ads")
+_CATALOG_CITY_PAGE_INDEX = "idx_ads_search_ready_10"
 
 
 def _transient_mysql_read_error_code(exc: Exception) -> int | None:
@@ -295,6 +296,14 @@ class GainrDatabaseRepository:
             order = f"CASE WHEN sr.id IN ({placeholders}) THEN 0 ELSE 1 END, {order}"
             boost_params = tuple(boosted_ids)
         offset = (page - 1) * page_size
+        categorical = resolved_filters.get("categorical", {})
+        city_with_category_name = (
+            self.config.search_table == "ads_search_ready"
+            and self.config.active_column == "is_search_active"
+            and categorical.keys() == {"city_id", "subcategory_name"}
+            and isinstance(categorical["city_id"], (int, str))
+            and isinstance(categorical["subcategory_name"], str)
+        )
 
         def fetch_search_ready_total(connection) -> int:
             with connection.cursor() as cursor:
@@ -309,13 +318,13 @@ class GainrDatabaseRepository:
                 return int(cursor.fetchone()["total"])
 
         def fetch_search_ready_rows(connection) -> list[dict]:
-            with connection.cursor() as cursor:
+            def fetch(cursor, index_hint: str) -> list[dict]:
                 cursor.execute(
                     f"""
                     SELECT sr.*,
                            sr.city_name AS __city_name,
                            sr.locality_name AS __locality_name
-                    FROM {self.search_table} AS sr
+                    FROM {self.search_table} AS sr {index_hint}
                     WHERE {where_clause}
                     ORDER BY {order}
                     LIMIT %s OFFSET %s
@@ -323,6 +332,20 @@ class GainrDatabaseRepository:
                     (*params, *boost_params, page_size, offset),
                 )
                 return list(cursor.fetchall())
+
+            with connection.cursor() as cursor:
+                # Name filters cannot use the numeric subcategory index.
+                # Preserve the better plans for numeric category filters.
+                if city_with_category_name:
+                    try:
+                        return fetch(
+                            cursor, f"FORCE INDEX ({_CATALOG_CITY_PAGE_INDEX})"
+                        )
+                    except require_pymysql().MySQLError as exc:
+                        if exc.args[0] != 1176:
+                            raise
+                        # Older search-ready schemas may lack the index.
+                return fetch(cursor, "")
 
         def run_with_connection(fetcher):
             with self.connection() as connection:

@@ -104,6 +104,14 @@ activation leaves the active generation unchanged. The first migration from a
 legacy single index performs a one-time copy of the existing pgvector and BM25
 indexes before applying incremental changes.
 
+Gainr can use a companion PostgreSQL table to look up city membership during
+broad city-only vector searches. Prepare both existing slots with the ingestion
+role by running `python scripts/optimize_pgvector_filters.py --company gainr
+--city-membership` in the ingestion service while its scheduled job is idle.
+The backfill and trigger installation run atomically for each slot. Searches
+retain the metadata-filter path until the lookup exists and the search role has
+read access. Ingestion maintains the lookup as listings and generations change.
+
 If a promoted generation later proves unsuitable, call
 `POST /api/v1/<tenant>/admin/rollback-index` with `X-Admin-Key`. The API opens
 and checks the recorded previous generation before atomically switching back;

@@ -3,6 +3,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 
+import pymysql
 import pytest
 
 from api import ProductSearchService
@@ -1010,9 +1011,17 @@ def test_search_ready_ranked_page_uses_one_query_and_embedded_card_relations(
     }
 
 
+@pytest.mark.parametrize(
+    "categorical,index_missing,expected_hint",
+    [
+        ({"subcategory_name": "Car"}, False, False),
+        ({"city_id": 129, "subcategory_name": "Car"}, False, True),
+        ({"city_id": 129, "subcategory_id": 42}, False, False),
+        ({"city_id": 129, "subcategory_name": "Car"}, True, True),
+    ],
+)
 def test_search_ready_catalog_counts_without_materializing_full_rows(
-    tmp_path,
-    monkeypatch,
+    tmp_path, monkeypatch, categorical, index_missing, expected_hint
 ):
     repository = GainrDatabaseRepository(
         profile(tmp_path, serves_cards_from_search_ready=True)
@@ -1028,6 +1037,8 @@ def test_search_ready_catalog_counts_without_materializing_full_rows(
 
         def execute(self, sql, params):
             executions.append((sql, tuple(params)))
+            if index_missing and "FORCE INDEX" in sql:
+                raise pymysql.err.OperationalError(1176, "Index does not exist")
 
         def fetchone(self):
             return {"total": 41}
@@ -1054,7 +1065,7 @@ def test_search_ready_catalog_counts_without_materializing_full_rows(
     monkeypatch.setattr(repository, "connection", connection)
 
     rows, total = repository.search_catalog(
-        {"categorical": {"subcategory_name": "Car"}},
+        {"categorical": categorical},
         GainrSearchFilter(),
         search_term="car",
         page=1,
@@ -1065,12 +1076,19 @@ def test_search_ready_catalog_counts_without_materializing_full_rows(
 
     assert total == 41
     assert [row["id"] for row in rows] == [2]
-    assert len(executions) == 2
-    assert "SELECT COUNT(*) AS total" in executions[0][0]
-    assert "COUNT(*) OVER" not in executions[1][0]
-    assert "ORDER BY sr.updated_at DESC, sr.id DESC" in executions[1][0]
-    assert executions[0][1] == ("Car", "1")
-    assert executions[1][1] == ("Car", "1", 20, 0)
+    assert len(executions) == (3 if index_missing else 2)
+    count_query, count_params = executions[0]
+    assert "SELECT COUNT(*) AS total" in count_query
+    assert "FORCE INDEX" not in count_query
+    assert count_params == (*categorical.values(), "1")
+    index_hint = "FORCE INDEX (idx_ads_search_ready_10)"
+    assert (index_hint in executions[1][0]) == expected_hint
+    page_query, page_params = executions[-1]
+    assert "COUNT(*) OVER" not in page_query
+    assert "ORDER BY sr.updated_at DESC, sr.id DESC" in page_query
+    assert page_params == (*count_params, 20, 0)
+    if index_missing:
+        assert "FORCE INDEX" not in page_query
 
 
 def test_search_ready_catalog_promotes_boosts_before_price_sort_and_paging(

@@ -476,6 +476,7 @@ def test_pgvector_profile_selects_pgvector_collection(
             hnsw_ef_construction=64,
             hnsw_ef_search=100,
             query_mode="legacy",
+            use_city_membership=False,
             create=False,
         ):
             captured.update(
@@ -486,6 +487,7 @@ def test_pgvector_profile_selects_pgvector_collection(
                 hnsw_ef_construction=hnsw_ef_construction,
                 hnsw_ef_search=hnsw_ef_search,
                 query_mode=query_mode,
+                use_city_membership=use_city_membership,
                 create=create,
             )
 

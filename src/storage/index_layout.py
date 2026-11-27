@@ -13,6 +13,14 @@ def shadow_vector_table(base: str) -> str:
     return f"{base[:51]}_{digest}_b"
 
 
+def city_membership_table_name(table: str) -> str:
+    name = f"{table}_city_membership"
+    if len(name.encode()) > 63:
+        digest = hashlib.sha256(name.encode()).hexdigest()
+        return f"vector_city_membership_{digest[:32]}"
+    return name
+
+
 def shadow_bm25_path(base: Path) -> Path:
     return base.parent / "generations" / "b" / base.name
 

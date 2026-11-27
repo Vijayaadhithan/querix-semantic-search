@@ -24,6 +24,7 @@ from core.tenant_models import (
     validate_tenant_id,
 )
 from storage.index_layout import (
+    city_membership_table_name,
     index_manifest_path,
     shadow_bm25_path,
     shadow_vector_table,
@@ -75,7 +76,9 @@ def validate_tenant_isolation(profiles: Iterable[TenantProfile]) -> None:
 
     def claim_table(key, company_id: str, resource: str) -> None:
         owner = source_owners.get(key)
-        if owner is not None and owner[0] != company_id:
+        if owner is not None and (
+            owner[0] != company_id or "city membership" in (owner[1], resource)
+        ):
             raise ValueError(
                 f"Tenants {owner[0]!r} and {company_id!r} "
                 f"share a company {resource} table ({owner[1]})."
@@ -127,6 +130,12 @@ def validate_tenant_isolation(profiles: Iterable[TenantProfile]) -> None:
             shadow_vector_table(profile.storage.pgvector_table),
         ):
             claim_table((*vector_prefix, table), profile.company_id, "pgvector")
+            if profile.storage.pgvector_city_membership:
+                claim_table(
+                    (*vector_prefix, city_membership_table_name(table)),
+                    profile.company_id,
+                    "city membership",
+                )
 
         base = profile.storage.bm25_path
         resources = [(index_manifest_path(base), "generation manifest")]

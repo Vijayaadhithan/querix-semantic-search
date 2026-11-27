@@ -8,6 +8,7 @@ import pytest
 from storage import pgvector as pgvector_store
 from storage.pgvector import PgVectorCollection
 from storage.postgres import PostgresRuntimeConfig
+from storage.vector_query import _optimized_query_rows
 
 
 def test_pgvector_prewarm_reads_hnsw_index(monkeypatch):
@@ -627,6 +628,48 @@ def test_pgvector_optimized_broad_filter_uses_iterative_hnsw(
     )
 
 
+@pytest.mark.parametrize(
+    "eligible,expected", [(101, "hnsw_city_membership"), (50, "exact_filtered")]
+)
+def test_city_membership_preserves_selective_city_ranking(eligible, expected):
+    statements = []
+
+    class Cursor:
+        def execute(self, query, params=None):
+            statements.append((" ".join(query.split()), params))
+
+        def fetchone(self):
+            return {"eligible_count": eligible}
+
+        def fetchall(self):
+            return [{"id": "candidate"}]
+
+    rows, strategy, count = _optimized_query_rows(
+        "vectors",
+        Cursor(),
+        vector_literal="[0.1,0.2]",
+        n_results=80,
+        where_clause="WHERE metadata ->> 'city_id' = %s",
+        filter_clause="metadata ->> 'city_id' = %s",
+        filter_params=["129"],
+        where={"city_id": 129},
+        exact_filter_max_rows=100,
+        post_filter_n_results=800,
+        city_membership_sql="membership",
+    )
+
+    assert (rows, strategy, count) == ([{"id": "candidate"}], expected, eligible)
+    count_query, count_params = statements[0]
+    assert "FROM membership WHERE city_id = %s" in count_query
+    assert count_params == ("129", 101)
+    if eligible > 100:
+        rank_query, rank_params = statements[1]
+        assert "FROM membership AS m WHERE m.city_id = %s AND m.id = v.id" in rank_query
+        assert rank_params == ("[0.1,0.2]", "129", "[0.1,0.2]", 80)
+    else:
+        assert "FROM vectors WHERE metadata ->> 'city_id' = %s" in statements[2][0]
+
+
 def test_pgvector_shadow_serves_legacy_and_records_equivalence(monkeypatch):
     class FakeCursor:
         rows = []
@@ -695,6 +738,7 @@ def test_pgvector_shadow_serves_legacy_and_records_equivalence(monkeypatch):
     collection.hnsw_ef_search = 100
     collection.query_mode = "shadow"
     collection._query_state = threading.local()
+    collection._city_membership_sql = None
 
     results = collection.query(
         query_embeddings=[[0.1, 0.2]],
@@ -768,6 +812,7 @@ def test_pgvector_shadow_optimization_failure_serves_legacy(monkeypatch):
     collection.hnsw_ef_search = 100
     collection.query_mode = "shadow"
     collection._query_state = threading.local()
+    collection._city_membership_sql = None
 
     results = collection.query(
         query_embeddings=[[0.1, 0.2]],

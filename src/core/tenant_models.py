@@ -49,6 +49,7 @@ class TenantStorageConfig:
     pgvector_hnsw_ef_construction: int = 64
     pgvector_hnsw_ef_search: int = 100
     pgvector_query_mode: str = "legacy"
+    pgvector_city_membership: bool = False
     pgvector_prewarm_on_startup: bool = False
     pgvector_prewarm_mode: str = "read"
 

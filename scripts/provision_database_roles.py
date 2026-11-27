@@ -18,6 +18,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from core.tenant_config import discover_tenant_profiles
 from scripts.render_service_env import MYSQL_WORKLOAD_CREDENTIAL_MODES
+from storage.index_layout import city_membership_table_name
 from storage.mysql import (
     MySQLRuntimeConfig,
     mysql_connection,
@@ -345,16 +346,21 @@ def provision_postgres(profiles) -> None:
                     candidates = _pgvector_table_candidates(
                         profile.storage.pgvector_table
                     )
+                    lookup_tables = (
+                        {city_membership_table_name(table) for table in candidates}
+                        if profile.storage.pgvector_city_membership
+                        else set()
+                    )
                     cursor.execute(
                         """
                         SELECT table_name
                         FROM information_schema.tables
                         WHERE table_schema = %s AND table_name = ANY(%s)
                         """,
-                        (config.schema, sorted(candidates)),
+                        (config.schema, sorted(candidates | lookup_tables)),
                     )
                     tables = [str(row[0]) for row in cursor.fetchall()]
-                    if not tables:
+                    if not candidates.intersection(tables):
                         raise RuntimeError(
                             f"No pgvector tables found for tenant {profile.company_id}"
                         )

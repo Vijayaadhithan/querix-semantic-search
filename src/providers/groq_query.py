@@ -1,6 +1,8 @@
 """Groq structured-query provider."""
 
 import contextlib
+import logging
+import re
 import time
 
 import requests
@@ -22,6 +24,14 @@ from providers.query_transport import (
     _structured_json_text,
     _timeout_reason,
 )
+
+LOGGER = logging.getLogger(__name__)
+
+
+def _error_label(value: object) -> str:
+    if isinstance(value, str) and re.fullmatch(r"[a-zA-Z0-9_.\[\]-]{1,80}", value):
+        return value
+    return "unknown"
 
 
 class GroqProvider(QueryProviderTransport):
@@ -147,6 +157,18 @@ class GroqProvider(QueryProviderTransport):
             )
         except requests.HTTPError as exc:
             metrics.update(_http_error_metrics(exc))
+            if metrics["http_status"] == 400:
+                # Keep provider diagnostics without logging the request,
+                # error message, or failed generation echoed by Groq.
+                LOGGER.warning(
+                    "Groq planner rejected request model=%s code=%s type=%s "
+                    "param=%s duration_ms=%.0f",
+                    model,
+                    _error_label(metrics.get("provider_error_code")),
+                    _error_label(metrics.get("provider_error_type")),
+                    _error_label(metrics.get("provider_error_param")),
+                    (time.perf_counter() - started) * 1000,
+                )
             error = _http_status_error(model, "groq", exc)
             raise error from exc
         except QueryModelUnavailableError:

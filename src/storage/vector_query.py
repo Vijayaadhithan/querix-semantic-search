@@ -133,6 +133,7 @@ def _optimized_query_rows(
     where: dict[str, Any] | None,
     exact_filter_max_rows: int | None,
     post_filter_n_results: int | None,
+    city_membership_sql: str | None = None,
 ) -> tuple[list[dict[str, Any]], str, int | None]:
     strategy = "hnsw"
     eligible_rows: int | None = None
@@ -143,10 +144,20 @@ def _optimized_query_rows(
         and _filter_uses_index(where)
     )
     if indexed_filter:
+        # The lookup was validated for a single city equality. Other
+        # predicates still use the original metadata filters and ranking.
+        use_membership = (
+            city_membership_sql is not None
+            and where is not None
+            and where.keys() == {"city_id"}
+            and not isinstance(where["city_id"], dict)
+        )
         # On broad cities a sequential scan detoasts thousands of metadata
         # values just to choose a ranking strategy. Scope the index preference
         # to this probe on the query's dedicated autocommit connection.
-        city_probe = _has_city_filter(where)
+        city_probe = not use_membership and _has_city_filter(where)
+        count_table = city_membership_sql if use_membership else table_sql
+        count_where = "WHERE city_id = %s" if use_membership else where_clause
         with cursor.connection.transaction() if city_probe else nullcontext():
             if city_probe:
                 cursor.execute("SET LOCAL enable_seqscan = off")
@@ -155,8 +166,8 @@ def _optimized_query_rows(
                 SELECT COUNT(*) AS eligible_count
                 FROM (
                     SELECT 1
-                    FROM {table_sql}
-                    {where_clause}
+                    FROM {count_table}
+                    {count_where}
                     LIMIT %s
                 ) AS eligible
                 """,
@@ -181,6 +192,25 @@ def _optimized_query_rows(
                 return cursor.fetchall(), strategy, eligible_rows
             finally:
                 cursor.execute("SET enable_indexscan = on")
+        if use_membership:
+            # OFFSET 0 keeps this as a correlated index lookup during HNSW
+            # traversal instead of letting the planner replace it with a join.
+            cursor.execute(
+                f"""
+                SELECT v.id, v.document, v.metadata,
+                       v.embedding <=> %s::vector AS distance
+                FROM {table_sql} AS v
+                WHERE EXISTS (
+                    SELECT 1 FROM {city_membership_sql} AS m
+                    WHERE m.city_id = %s AND m.id = v.id
+                    OFFSET 0
+                )
+                ORDER BY v.embedding <=> %s::vector
+                LIMIT %s
+                """,
+                (vector_literal, *filter_params, vector_literal, n_results),
+            )
+            return cursor.fetchall(), "hnsw_city_membership", eligible_rows
 
     if (
         indexed_filter

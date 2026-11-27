@@ -474,12 +474,19 @@ def test_google_provider_falls_back_for_empty_candidates(monkeypatch):
     assert caught.value.reason == "blocked_safety"
 
 
-def test_groq_http_400_advances_as_provider_fallback(monkeypatch):
+def test_groq_http_400_advances_as_provider_fallback(monkeypatch, caplog):
     monkeypatch.setattr(
         GroqProvider,
         "_post",
         lambda _self, *_args, **_kwargs: HttpErrorResponse(
-            {"error": {"type": "invalid_request_error", "code": "schema_error"}},
+            {
+                "error": {
+                    "type": "invalid_request_error",
+                    "code": "schema_error",
+                    "param": "private query echoed in the parameter",
+                    "message": "private provider message",
+                }
+            },
             400,
         ),
     )
@@ -498,6 +505,8 @@ def test_groq_http_400_advances_as_provider_fallback(monkeypatch):
         "invalid_request_error"
     )
     assert provider.last_chat_metrics["provider_error_code"] == "schema_error"
+    assert "code=schema_error type=invalid_request_error param=unknown" in caplog.text
+    assert "private" not in caplog.text
 
 
 def test_google_http_400_remains_a_permanent_provider_error(monkeypatch):

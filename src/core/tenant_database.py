@@ -284,6 +284,7 @@ def load_storage_config(
         pgvector_hnsw_ef_construction=pgvector_hnsw_ef_construction,
         pgvector_hnsw_ef_search=pgvector_hnsw_ef_search,
         pgvector_query_mode=pgvector_query_mode,
+        pgvector_city_membership=bool(pgvector.get("city_membership", False)),
         pgvector_prewarm_on_startup=pgvector_prewarm_on_startup,
         pgvector_prewarm_mode=pgvector_prewarm_mode,
     )
